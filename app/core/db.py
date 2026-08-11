@@ -1,14 +1,18 @@
-"""Database connection / query helpers (stub)."""
+"""Database connection / query helpers."""
 
 from typing import Generator, Optional
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
 
 _engine = None
 _SessionLocal: Optional[sessionmaker] = None
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 def get_engine():
@@ -29,3 +33,10 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def init_db() -> None:
+    """Import all ORM entities and create tables."""
+    import app.repositories.entities  # noqa: F401
+
+    Base.metadata.create_all(bind=get_engine())

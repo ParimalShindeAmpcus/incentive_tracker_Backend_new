@@ -1,0 +1,70 @@
+"""Incentive Pydantic DTOs."""
+
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict
+
+
+class IncentiveLineOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    cycle_id: int
+    candidate_id: Optional[int] = None
+    candidate_name: Optional[str] = None
+    role: str
+    person: str
+    incentive_type: str
+    rule_applied: Optional[str] = None
+    eligible: bool
+    base_incentive: Decimal
+    pro_rata_factor: Decimal
+    amount: Decimal
+    hours: Optional[Decimal] = None
+    margin: Optional[Decimal] = None
+    reason: Optional[str] = None
+    payment_status: str
+    created_at: Optional[datetime] = None
+
+
+class IncentiveSlabOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    division: str
+    slab_type: str
+    role: str
+    margin_min: Optional[Decimal] = None
+    margin_max: Optional[Decimal] = None
+    hours_min: Optional[Decimal] = None
+    hours_max: Optional[Decimal] = None
+    amount: Decimal
+    effective_from: date
+    effective_to: Optional[date] = None
+    is_active: bool
+    updated_by: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class PaymentCreate(BaseModel):
+    incentive_line_id: int
+    amount: Decimal
+    payment_reference: Optional[str] = None
+    notes: Optional[str] = None
+    status: str = "PAID"
+
+
+class PaymentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    incentive_line_id: int
+    amount: Decimal
+    payment_reference: Optional[str] = None
+    paid_by: Optional[int] = None
+    status: str
+    paid_at: Optional[datetime] = None
+    notes: Optional[str] = None

@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Empty/minimal settings stub — populate fields as features are added."""
+    """Application settings — env-backed with sensible defaults."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -36,8 +36,19 @@ class Settings(BaseSettings):
     # CORS — comma-separated origins
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
-    # Security placeholders
+    # Security / JWT
     secret_key: str = "change-me"
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_minutes: int = 10080
+
+    # Seed defaults
+    default_admin_email: str = "admin@example.com"
+    default_admin_password: str = "Admin@123"
+    seed_on_startup: bool = True
+
+    # API
+    api_v1_prefix: str = "/api/v1"
 
     @model_validator(mode="after")
     def assemble_database_url(self):

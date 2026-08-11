@@ -1,6 +1,6 @@
 # Incentive Tracker Backend
 
-Layered FastAPI scaffold. Controllers stay thin; business logic lives in services; SQL/persistence lives in repositories.
+Layered FastAPI backend: **controllers → services → repositories → DB**.
 
 ## Quick start
 
@@ -9,44 +9,31 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
+# Set DB_USER / DB_PASSWORD / DB_NAME
 
-# Create PostgreSQL database (tables/migrations later)
 python scripts/create_db.py
-
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Health check: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
+- Health: http://127.0.0.1:8000/health  
+- Docs: http://127.0.0.1:8000/api/v1/docs  
+- Admin (seeded): `admin@example.com` / `Admin@123`
 
 ## Structure
 
-See [docs/repo_overview.md](docs/repo_overview.md).
+| Layer | Path |
+|-------|------|
+| ORM tables | `app/repositories/entities/` (28 tables) |
+| Pydantic DTOs | `app/models/<feature>/schemas.py` |
+| Persistence | `app/repositories/<feature>/` |
+| Business logic | `app/services/<feature>/` |
+| HTTP routes | `app/controllers/<feature>/` |
 
-```text
-app/
-  main.py
-  config.py
-  controllers/<feature>/controller.py
-  services/<feature>/*_service.py
-  repositories/<feature>/*_repository.py
-  models/<feature>/schemas.py
-  core/
-  llm/
-  security/
-migrations/
-scripts/          # create_db.py
-tests/
-docs/
-```
+See [docs/repo_overview.md](docs/repo_overview.md) and [migrations/001_initial.md](migrations/001_initial.md).
 
-## Architecture rules
+## Features under `/api/v1`
 
-1. Request flow: controllers → services → repositories → DB  
-2. Controllers: no business logic, no raw SQL  
-3. Services: no HTTP; call repositories (+ llm/security as needed)  
-4. Repositories own all persistence  
-5. Models = Pydantic DTOs per feature  
-6. Config from environment only  
+auth · organization · candidates · recruiter-master · hours-data · hours-benchmarks · project-end · cycles · incentive-slabs · payments · audit · vlookup
 
 ## Docker
 

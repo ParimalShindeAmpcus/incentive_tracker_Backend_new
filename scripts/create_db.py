@@ -1,5 +1,5 @@
 """
-Create PostgreSQL database if missing (scaffold — no table migrations yet).
+Create PostgreSQL database if missing, then init tables + seed.
 
 Usage (from repo root):
 
@@ -94,11 +94,20 @@ def main() -> None:
     if args.reset:
         reset_schema(database_url)
 
+    from app.core.db import init_db
+    from app.services.common.seed import seed_database
+
+    print("Creating tables via SQLAlchemy metadata.create_all / init_db()...")
+    init_db()
+    print("Seeding default roles, admin, org/divisions, benchmarks, slabs...")
+    seed_database()
+    print("Schema + seed complete.")
+
     print("\nDone.")
-    print("Apply schema migrations from migrations/ when available.")
     print("Start API with:")
     print("  uvicorn app.main:app --reload --host 0.0.0.0 --port 8000")
     print("Health: http://127.0.0.1:8000/health")
+    print(f"Docs: http://127.0.0.1:8000{settings.api_v1_prefix}/docs")
 
 
 if __name__ == "__main__":

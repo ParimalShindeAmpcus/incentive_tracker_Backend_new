@@ -3,7 +3,7 @@
 Layered FastAPI backend. Request flow is always:
 
 ```text
-controllers → services → repositories → DB
+controllers → services → repositories → DB (entities)
 ```
 
 ## Packages
@@ -14,21 +14,22 @@ controllers → services → repositories → DB
 | `app/config.py` | Settings from environment only |
 | `app/controllers/<feature>/` | HTTP routes only (thin) |
 | `app/services/<feature>/` | Business logic / orchestration |
-| `app/services/common/` | Shared cross-feature helpers |
-| `app/repositories/<feature>/` | DB / persistence only |
+| `app/services/common/` | Shared deps, seed |
+| `app/repositories/<feature>/` | DB queries |
+| `app/repositories/entities/` | SQLAlchemy ORM table models (28 tables) |
 | `app/models/<feature>/schemas.py` | Pydantic request/response DTOs |
 | `app/core/` | Shared infra (db, logging, cache, json) |
 | `app/llm/` | Optional LLM provider abstraction |
-| `app/security/` | Optional guardrails / auth helpers |
-| `migrations/` | SQL schema migrations |
-| `scripts/` | One-off scripts (e.g. create DB) |
+| `app/security/` | JWT / password / guardrail stubs |
+| `migrations/` | Schema notes |
+| `scripts/` | `create_db.py` |
 | `tests/` | pytest unit + integration |
 | `docs/` | Architecture notes |
 
 ## Feature rule
 
-One feature = same folder name under `controllers/`, `services/`, `models/`, and `repositories/`.
+One feature = same folder name under `controllers/`, `services/`, `models/`, and `repositories/` (plus shared `entities/` for ORM).
 
-Example wired today: **health**
+## Domains wired
 
-- `GET /health` → `controllers/health` → `services/health` → `repositories/health`
+health · auth · organization · candidates · recruiters · hours · project_end · cycles · incentives · audit · vlookup · reports
