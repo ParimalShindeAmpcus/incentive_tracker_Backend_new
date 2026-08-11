@@ -1,37 +1,25 @@
+"""FastAPI application entrypoint."""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import api_router
-from app.core.config import get_settings
-from app.core.exceptions import register_exception_handlers
-from app.db.base import Base
-from app.db.init_db import init_db
-from app.db.session import SessionLocal, engine
+from app.config import get_settings
+from app.controllers.health.controller import router as health_router
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    settings = get_settings()
-    Base.metadata.create_all(bind=engine)
-    if settings.seed_on_startup:
-        db = SessionLocal()
-        try:
-            init_db(db)
-        finally:
-            db.close()
+    # Startup / shutdown hooks go here later
     yield
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
-        title="Incentive Tracker API",
-        version="1.0.0",
-        docs_url=f"{settings.api_v1_prefix}/docs",
-        redoc_url=f"{settings.api_v1_prefix}/redoc",
-        openapi_url=f"{settings.api_v1_prefix}/openapi.json",
+        title=settings.app_name,
+        version="0.1.0",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -41,12 +29,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    register_exception_handlers(app)
-    app.include_router(api_router, prefix=settings.api_v1_prefix)
 
-    @app.get("/health")
-    def health():
-        return {"status": "ok", "environment": settings.environment}
+    # Register feature routers (clear prefixes)
+    app.include_router(health_router, prefix="/health", tags=["health"])
 
     return app
 
