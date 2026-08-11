@@ -16,7 +16,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 - Health: http://127.0.0.1:8000/health  
-- Docs: http://127.0.0.1:8000/api/v1/docs  
+- Docs: http://127.0.0.1:8000/docs  
 - Admin (seeded): `admin@example.com` / `Admin@123`
 
 ## Structure

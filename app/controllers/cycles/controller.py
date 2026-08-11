@@ -28,13 +28,11 @@ router = APIRouter()
 
 
 @router.post("", response_model=CycleOut)
-@router.post("/", response_model=CycleOut)
 def create_cycle(payload: CycleCreate, db: DbSession, user: CurrentUser) -> CycleOut:
     return cycle_service.create_cycle(db, payload, created_by=user.id)
 
 
 @router.get("", response_model=List[CycleOut])
-@router.get("/", response_model=List[CycleOut])
 def list_cycles(
     db: DbSession,
     division: Optional[str] = Query(None),

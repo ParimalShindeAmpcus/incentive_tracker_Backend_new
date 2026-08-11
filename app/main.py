@@ -11,6 +11,7 @@ from app.controllers.audit.controller import router as audit_router
 from app.controllers.auth.controller import router as auth_router
 from app.controllers.candidates.controller import router as candidates_router
 from app.controllers.cycles.controller import router as cycles_router
+from app.controllers.dashboard.controller import router as dashboard_router
 from app.controllers.health.controller import router as health_router
 from app.controllers.hours.controller import benchmarks_router as hours_benchmarks_router
 from app.controllers.hours.controller import router as hours_router
@@ -46,9 +47,9 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version="0.1.0",
         lifespan=lifespan,
-        docs_url=f"{prefix}/docs",
-        redoc_url=f"{prefix}/redoc",
-        openapi_url=f"{prefix}/openapi.json",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
     )
     app.add_middleware(
         CORSMiddleware,
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix=f"{prefix}/health", tags=["health"])
 
     app.include_router(auth_router, prefix=f"{prefix}/auth", tags=["auth"])
+    app.include_router(dashboard_router, prefix=f"{prefix}/dashboard", tags=["dashboard"])
     app.include_router(organization_router, prefix=prefix, tags=["organization"])
     app.include_router(candidates_router, prefix=prefix, tags=["candidates"])
     app.include_router(recruiters_router, prefix=f"{prefix}/recruiter-master", tags=["recruiters"])

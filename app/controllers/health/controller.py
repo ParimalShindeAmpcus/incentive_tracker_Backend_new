@@ -9,7 +9,6 @@ router = APIRouter()
 
 
 @router.get("", response_model=HealthResponse)
-@router.get("/", response_model=HealthResponse)
 def get_health() -> HealthResponse:
     """GET /health — wired controller → service → repository."""
     return health_service.check_health()

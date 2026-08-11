@@ -17,10 +17,10 @@ from sqlalchemy.orm import sessionmaker
 
 
 DIVISIONS = [
-    ("nashik", "Nashik"),
-    ("sambhajiNagar", "Sambhaji Nagar"),
-    ("ampcusTechClient", "Ampcus Tech Client"),
-    ("ampcusTechInhouse", "Ampcus Tech Inhouse"),
+    ("nashik", "Nashik Division"),
+    ("sambhajiNagar", "Sambhaji Nagar Division"),
+    ("ampcusTechClient", "Ampcus Tech (Client)"),
+    ("ampcusTechInhouse", "Ampcus Tech In-House"),
 ]
 
 ROLE_DEFS = [
@@ -69,7 +69,7 @@ def _seed_roles_and_admin(db: Session) -> None:
             email=email,
             full_name="Default Admin",
             hashed_password=hash_password(settings.default_admin_password),
-            roles=[roles["ADMIN"]],
+            roles=[roles["ADMIN"], roles["ACCOUNTS"]],
             is_active=True,
         )
 

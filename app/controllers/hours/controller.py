@@ -38,7 +38,6 @@ def create_version(
 
 
 @benchmarks_router.get("", response_model=List[HoursBenchmarkOut])
-@benchmarks_router.get("/", response_model=List[HoursBenchmarkOut])
 def list_benchmarks(db: DbSession) -> List[HoursBenchmarkOut]:
     return hours_service.list_benchmarks(db)
 

@@ -107,7 +107,7 @@ def main() -> None:
     print("Start API with:")
     print("  uvicorn app.main:app --reload --host 0.0.0.0 --port 8000")
     print("Health: http://127.0.0.1:8000/health")
-    print(f"Docs: http://127.0.0.1:8000{settings.api_v1_prefix}/docs")
+    print("Docs: http://127.0.0.1:8000/docs")
 
 
 if __name__ == "__main__":
