@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import Counter
 from datetime import datetime
+from decimal import Decimal
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,9 +15,11 @@ from fastapi import HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.models.hours.schemas import CreateHoursVersionRequest, HoursRowIn
 from app.models.vlookup.schemas import (
     VLookupActionResponse,
     VLookupMatchesByStatusResponse,
+    VLookupPublishHoursResponse,
     VLookupRematchBody,
     VLookupReviewBody,
     VLookupStatsResponse,
@@ -30,6 +34,7 @@ from app.repositories.entities.vlookup import (
     VLookupWeeklyHours,
 )
 from app.repositories.vlookup import vlookup_repository as repo
+from app.services.hours import hours_service
 from app.services.vlookup.normalization import normalize_month_year, normalize_name
 from app.services.vlookup.parsers.client_hours import (
     aggregate_hours_by_candidate,
@@ -608,11 +613,12 @@ def rematch(
     )
 
 
-def download_matches(
+def _matched_hours_export_rows(
     db: Session,
     batch_id: Optional[str] = None,
     include_review_pending: bool = False,
-) -> StreamingResponse:
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Build the same matched rows used for the filled Hours Template download."""
     latest = repo.latest_batch_id(db, batch_id)
     if not latest:
         raise HTTPException(status_code=404, detail="No matches found")
@@ -622,7 +628,7 @@ def download_matches(
         statuses.append("needs_review")
 
     matches = repo.list_matches_for_download(db, latest, statuses)
-    data = []
+    data: List[Dict[str, Any]] = []
     for match in matches:
         if not match.template_candidate_id:
             continue
@@ -648,7 +654,18 @@ def download_matches(
                 "Hours Note": explanation.get("hours_note") or "",
             }
         )
+    return latest, data
 
+
+def download_matches(
+    db: Session,
+    batch_id: Optional[str] = None,
+    include_review_pending: bool = False,
+) -> StreamingResponse:
+    latest, data = _matched_hours_export_rows(
+        db, batch_id=batch_id, include_review_pending=include_review_pending
+    )
+    _ = latest
     df = pd.DataFrame(data)
     export_cols = [
         "Candidate ID",
@@ -681,6 +698,77 @@ def download_matches(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def publish_hours_from_batch(
+    db: Session,
+    *,
+    batch_id: Optional[str] = None,
+    division: Optional[str] = "nashik",
+    include_review_pending: bool = False,
+    uploaded_by: Optional[int] = None,
+) -> VLookupPublishHoursResponse:
+    """
+    Push the same matched rows as the filled Hours Template download into Hours & Benchmark
+    (`hours_data_versions` / `hours_rows`) so the Hours page can show them without re-upload.
+    """
+    latest, data = _matched_hours_export_rows(
+        db, batch_id=batch_id, include_review_pending=include_review_pending
+    )
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="No matched hours rows to publish. Accept matches first.",
+        )
+
+    rows: List[HoursRowIn] = []
+    month_keys: List[str] = []
+    for item in data:
+        external_id = str(item.get("Candidate ID") or "").strip()
+        if not external_id:
+            continue
+        month_raw = str(item.get("Month") or "").strip()
+        month_key = normalize_month_year(month_raw) or None
+        if month_key:
+            month_keys.append(month_key)
+        hours_raw = item.get("Hours Worked")
+        try:
+            hours_worked = Decimal(str(hours_raw if hours_raw is not None else 0))
+        except Exception:
+            hours_worked = Decimal("0")
+        rows.append(
+            HoursRowIn(
+                external_candidate_id=external_id,
+                hours_worked=hours_worked,
+                month_key=month_key,
+                client=str(item.get("Client Name") or "") or None,
+                raw_candidate_name=str(item.get("Candidate Name") or "") or None,
+            )
+        )
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="No valid Candidate IDs found to publish.")
+
+    primary_month = Counter(month_keys).most_common(1)[0][0] if month_keys else None
+    label_month = primary_month or "hours"
+    version_label = f"VLOOKUP {label_month} ({latest[:8]})"
+    payload = CreateHoursVersionRequest(
+        version_label=version_label,
+        division=division,
+        source_filename=f"vlookup_batch_{latest}.xlsx",
+        notes=f"Published from VLOOKUP batch {latest}",
+        rows=rows,
+    )
+    detail = hours_service.create_version(db, payload, uploaded_by=uploaded_by)
+    return VLookupPublishHoursResponse(
+        status="success",
+        batch_id=latest,
+        hours_version_id=detail.version.id,
+        row_count=len(detail.rows),
+        division=division,
+        month_key=primary_month,
+        version_label=detail.version.version_label,
     )
 
 

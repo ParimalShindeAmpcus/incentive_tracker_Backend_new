@@ -91,3 +91,7 @@ class HoursBenchmarkUpdate(BaseModel):
     benchmark_hours: Decimal
     description: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+class HoursRowHoursUpdate(BaseModel):
+    hours_worked: Decimal

@@ -9,6 +9,7 @@ from app.models.hours.schemas import (
     CreateHoursVersionRequest,
     HoursBenchmarkOut,
     HoursBenchmarkUpdate,
+    HoursRowHoursUpdate,
     HoursRowIn,
     HoursRowOut,
     HoursVersionDetail,
@@ -17,6 +18,7 @@ from app.models.hours.schemas import (
 from app.repositories.candidates import candidate_repository
 from app.repositories.entities.hours import HoursRow
 from app.repositories.hours import hours_repository
+from decimal import Decimal
 
 
 def list_versions(db: Session, division: Optional[str] = None) -> List[VersionMetaOut]:
@@ -105,6 +107,28 @@ def create_version(
     hours_repository.create_rows(db, version, resolved_rows)
     db.commit()
     return get_version_detail(db, version.id)
+
+
+def update_row_hours(
+    db: Session,
+    row_id: int,
+    payload: HoursRowHoursUpdate,
+) -> HoursRowOut:
+    row = hours_repository.get_row(db, row_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hours row not found")
+    hours_worked = payload.hours_worked
+    if hours_worked < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hours Worked must be greater than or equal to 0",
+        )
+    updated = hours_repository.update_row_hours(db, row, Decimal(hours_worked))
+    db.commit()
+    db.refresh(updated)
+    # Reload with candidate for enriched out
+    reloaded = hours_repository.get_row(db, updated.id)
+    return _row_out(reloaded or updated)
 
 
 def list_benchmarks(db: Session) -> List[HoursBenchmarkOut]:

@@ -68,6 +68,22 @@ def create_rows(db: Session, version: HoursDataVersion, rows: Sequence[dict]) ->
     return created
 
 
+def get_row(db: Session, row_id: int) -> Optional[HoursRow]:
+    return (
+        db.query(HoursRow)
+        .options(joinedload(HoursRow.candidate))
+        .filter(HoursRow.id == row_id)
+        .first()
+    )
+
+
+def update_row_hours(db: Session, row: HoursRow, hours_worked: Decimal) -> HoursRow:
+    row.hours_worked = hours_worked
+    db.add(row)
+    db.flush()
+    return row
+
+
 def list_benchmarks(db: Session) -> List[HoursBenchmark]:
     return db.query(HoursBenchmark).order_by(HoursBenchmark.division).all()
 

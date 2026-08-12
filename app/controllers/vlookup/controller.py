@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from app.models.vlookup.schemas import (
     VLookupActionResponse,
     VLookupMatchesByStatusResponse,
+    VLookupPublishHoursResponse,
     VLookupRematchBody,
     VLookupReviewBody,
     VLookupStatsResponse,
@@ -127,4 +128,22 @@ def download(
     _ = user
     return vlookup_service.download_matches(
         db, batch_id=batch_id, include_review_pending=include_review_pending
+    )
+
+
+@router.post("/publish-hours", response_model=VLookupPublishHoursResponse)
+def publish_hours(
+    db: DbSession,
+    user: CurrentUser,
+    batch_id: Optional[str] = Query(None),
+    division: Optional[str] = Query("nashik"),
+    include_review_pending: bool = Query(False),
+) -> VLookupPublishHoursResponse:
+    """Publish matched VLOOKUP rows into Hours & Benchmark (same data as filled template download)."""
+    return vlookup_service.publish_hours_from_batch(
+        db,
+        batch_id=batch_id,
+        division=division,
+        include_review_pending=include_review_pending,
+        uploaded_by=user.id,
     )

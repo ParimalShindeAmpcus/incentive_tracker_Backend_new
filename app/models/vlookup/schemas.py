@@ -112,3 +112,13 @@ class VLookupTemplateResponse(BaseModel):
         ]
     )
     message: str = "Upload Hours Template + client hours via POST /vlookup/upload"
+
+
+class VLookupPublishHoursResponse(BaseModel):
+    status: str = "success"
+    batch_id: str
+    hours_version_id: int
+    row_count: int
+    division: Optional[str] = None
+    month_key: Optional[str] = None
+    version_label: str = ""

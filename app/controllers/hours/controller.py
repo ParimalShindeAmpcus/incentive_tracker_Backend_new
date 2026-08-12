@@ -8,6 +8,8 @@ from app.models.hours.schemas import (
     CreateHoursVersionRequest,
     HoursBenchmarkOut,
     HoursBenchmarkUpdate,
+    HoursRowHoursUpdate,
+    HoursRowOut,
     HoursVersionDetail,
     VersionMetaOut,
 )
@@ -35,6 +37,17 @@ def create_version(
     user: CurrentUser,
 ) -> HoursVersionDetail:
     return hours_service.create_version(db, payload, uploaded_by=user.id)
+
+
+@router.patch("/rows/{row_id}", response_model=HoursRowOut)
+def patch_hours_row(
+    row_id: int,
+    payload: HoursRowHoursUpdate,
+    db: DbSession,
+    user: CurrentUser,
+) -> HoursRowOut:
+    _ = user
+    return hours_service.update_row_hours(db, row_id, payload)
 
 
 @benchmarks_router.get("", response_model=List[HoursBenchmarkOut])
