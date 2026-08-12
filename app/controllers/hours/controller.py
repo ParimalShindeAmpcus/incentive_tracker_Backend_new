@@ -47,6 +47,5 @@ def put_benchmark(
     division: str,
     payload: HoursBenchmarkUpdate,
     db: DbSession,
-    user: CurrentUser,
 ) -> HoursBenchmarkOut:
-    return hours_service.update_benchmark(db, division, payload, updated_by=user.id)
+    return hours_service.update_benchmark(db, division, payload, updated_by=None)

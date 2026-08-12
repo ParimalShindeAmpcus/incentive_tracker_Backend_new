@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class VersionMetaOut(BaseModel):
@@ -26,6 +26,8 @@ class HoursRowOut(BaseModel):
     id: int
     version_id: int
     candidate_id: int
+    external_candidate_id: Optional[str] = None
+    candidate_name: Optional[str] = None
     work_date: Optional[date] = None
     month_key: Optional[str] = None
     hours_worked: Decimal
@@ -43,12 +45,25 @@ class HoursVersionDetail(BaseModel):
 
 
 class HoursRowIn(BaseModel):
-    candidate_id: int
+    """Accept either DB candidate_id or Excel external_candidate_id (Candidate ID column)."""
+
+    candidate_id: Optional[int] = None
+    external_candidate_id: Optional[str] = None
     hours_worked: Decimal
     work_date: Optional[date] = None
     month_key: Optional[str] = None
     client: Optional[str] = None
     raw_candidate_name: Optional[str] = None
+    source_row: Optional[int] = None
+
+    @model_validator(mode="after")
+    def require_candidate_ref(self) -> "HoursRowIn":
+        external = (self.external_candidate_id or "").strip()
+        if self.candidate_id is None and not external:
+            raise ValueError("Either candidate_id or external_candidate_id is required")
+        if external:
+            self.external_candidate_id = external
+        return self
 
 
 class CreateHoursVersionRequest(BaseModel):

@@ -1,11 +1,14 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
+
+if TYPE_CHECKING:
+    from app.repositories.entities.candidate import Candidate
 
 
 class HoursDataVersion(Base):
@@ -43,6 +46,7 @@ class HoursRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     version: Mapped[HoursDataVersion] = relationship("HoursDataVersion", back_populates="rows")
+    candidate: Mapped["Candidate"] = relationship("Candidate", lazy="joined")
 
 
 class HoursBenchmark(Base):

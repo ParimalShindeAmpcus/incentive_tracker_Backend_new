@@ -26,6 +26,15 @@ def get_candidate(db: Session, candidate_id: int) -> Optional[Candidate]:
     return db.query(Candidate).filter(Candidate.id == candidate_id).first()
 
 
+def get_candidate_by_external_id(db: Session, external_candidate_id: str) -> Optional[Candidate]:
+    return (
+        db.query(Candidate)
+        .filter(Candidate.external_candidate_id == external_candidate_id)
+        .order_by(Candidate.id.desc())
+        .first()
+    )
+
+
 def update_candidate(db: Session, candidate: Candidate, data: dict) -> Candidate:
     for key, value in data.items():
         if value is not None or key in data:

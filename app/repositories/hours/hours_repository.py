@@ -18,7 +18,7 @@ def list_versions(db: Session, division: Optional[str] = None) -> List[HoursData
 def get_version(db: Session, version_id: int) -> Optional[HoursDataVersion]:
     return (
         db.query(HoursDataVersion)
-        .options(joinedload(HoursDataVersion.rows))
+        .options(joinedload(HoursDataVersion.rows).joinedload(HoursRow.candidate))
         .filter(HoursDataVersion.id == version_id)
         .first()
     )
@@ -56,7 +56,10 @@ def create_rows(db: Session, version: HoursDataVersion, rows: Sequence[dict]) ->
             work_date=row.get("work_date"),
             month_key=row.get("month_key"),
             client=row.get("client"),
+            source_row=row.get("source_row"),
             raw_candidate_name=row.get("raw_candidate_name"),
+            match_method=row.get("match_method"),
+            match_confidence=row.get("match_confidence"),
         )
         db.add(item)
         created.append(item)

@@ -42,12 +42,38 @@ def init_db() -> None:
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
 
-    # create_all does not alter existing tables. Repair databases that predate
-    # the approval timestamp used by the dashboard and cycle approval flow.
+    # create_all does not alter existing tables — add columns introduced after first create.
     inspector = inspect(engine)
-    if "incentive_cycles" in inspector.get_table_names():
-        columns = {column["name"] for column in inspector.get_columns("incentive_cycles")}
-        if "approved_at" not in columns:
-            column_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
-            with engine.begin() as connection:
-                connection.execute(text(f"ALTER TABLE incentive_cycles ADD COLUMN approved_at {column_type}"))
+    dialect = engine.dialect.name
+    is_pg = dialect == "postgresql"
+
+    def _add_missing(table: str, additions: dict[str, str]) -> None:
+        if table not in inspector.get_table_names():
+            return
+        existing = {column["name"] for column in inspector.get_columns(table)}
+        missing = {name: ddl for name, ddl in additions.items() if name not in existing}
+        if not missing:
+            return
+        with engine.begin() as connection:
+            for name, ddl in missing.items():
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+    ts = "TIMESTAMP WITH TIME ZONE" if is_pg else "DATETIME"
+    bool_type = "BOOLEAN" if is_pg else "BOOLEAN"
+    _add_missing(
+        "incentive_cycles",
+        {"approved_at": ts},
+    )
+    _add_missing(
+        "candidates",
+        {
+            "email": "VARCHAR(255)",
+            "end_client": "VARCHAR(255)",
+            "markup_percent": "NUMERIC(12, 4)",
+            "finders_fee": "NUMERIC(14, 2)",
+            "onboarding_coordinator": "VARCHAR(255)",
+            "placement_level": "VARCHAR(50)",
+            "incentive_active": f"{bool_type} DEFAULT TRUE NOT NULL",
+            "inactivation_reason": "VARCHAR(500)",
+        },
+    )
