@@ -69,6 +69,17 @@ def delete_cycle(db: Session, cycle_id: int) -> dict:
     cycle = cycle_repository.get_cycle(db, cycle_id)
     if cycle is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cycle not found")
+    status_val = cycle.status.value if hasattr(cycle.status, "value") else str(cycle.status)
+    protected = {
+        CycleStatus.APPROVED.value,
+        CycleStatus.PAID.value,
+        CycleStatus.CLOSED.value,
+    }
+    if status_val.upper() in protected:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Approved cycles cannot be deleted",
+        )
     cycle_repository.delete_cycle(db, cycle)
     db.commit()
     return {"message": "deleted", "id": cycle_id}
