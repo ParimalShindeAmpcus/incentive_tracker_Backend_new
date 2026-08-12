@@ -77,3 +77,10 @@ def init_db() -> None:
             "inactivation_reason": "VARCHAR(500)",
         },
     )
+    _add_missing(
+        "coordinator_records",
+        {
+            "start_date": "DATE",
+            "is_deleted": f"{bool_type} DEFAULT FALSE NOT NULL",
+        },
+    )

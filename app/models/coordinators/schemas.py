@@ -9,6 +9,7 @@ class CoordinatorInput(BaseModel):
     organization: str = Field(min_length=1, max_length=255)
     role_title: str = Field(min_length=1, max_length=255)
     employment_status: CoordinatorStatus = CoordinatorStatus.ACTIVE
+    start_date: Optional[date] = None
     exit_date: Optional[date] = None
     bank_name: Optional[str] = None
     account_number: Optional[str] = None
@@ -20,6 +21,7 @@ class CoordinatorUpdate(BaseModel):
     organization: Optional[str] = None
     role_title: Optional[str] = None
     employment_status: Optional[CoordinatorStatus] = None
+    start_date: Optional[date] = None
     exit_date: Optional[date] = None
     bank_name: Optional[str] = None
     account_number: Optional[str] = None
@@ -32,7 +34,7 @@ class CoordinatorStatusUpdate(BaseModel):
 class CoordinatorListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int; full_name: str; normalized_name: str; email: EmailStr; organization: str; role_title: str
-    employment_status: CoordinatorStatus; exit_date: Optional[date]; incentive_eligible: bool
+    employment_status: CoordinatorStatus; start_date: Optional[date]; exit_date: Optional[date]; incentive_eligible: bool
     created_at: Optional[datetime] = None; updated_at: Optional[datetime] = None
 
 class CoordinatorOut(CoordinatorListItem):
