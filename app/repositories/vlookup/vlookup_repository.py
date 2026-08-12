@@ -99,6 +99,18 @@ def count_by_status(db: Session, batch_id: str, status: str) -> int:
     )
 
 
+def count_unique_master_candidates(db: Session, batch_id: str) -> int:
+    """Distinct linked Hours Template candidates for a batch (excludes unmatched)."""
+    return (
+        db.execute(
+            select(func.count(func.distinct(VLookupMatchedRecord.template_candidate_id)))
+            .where(VLookupMatchedRecord.upload_batch_id == batch_id)
+            .where(VLookupMatchedRecord.template_candidate_id.isnot(None))
+        ).scalar()
+        or 0
+    )
+
+
 def list_matches_for_download(
     db: Session, batch_id: str, statuses: Sequence[str]
 ) -> List[VLookupMatchedRecord]:

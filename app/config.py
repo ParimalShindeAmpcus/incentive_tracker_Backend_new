@@ -54,11 +54,23 @@ class Settings(BaseSettings):
     # API
     api_v1_prefix: str = "/api/v1"
 
-    # VLOOKUP reconciliation thresholds
-    threshold_auto_match: float = 92.0
-    threshold_suggest: float = 85.0
-    threshold_review: float = 80.0
+    # VLOOKUP reconciliation thresholds (identity + client gated)
+    threshold_auto_match: float = 88.0
+    threshold_suggest: float = 80.0
+    threshold_review: float = 70.0
     hours_validation_cap: float = 160.0
+    # Configurable confidence weights (renormalized when a signal is absent)
+    vlookup_weight_name: float = 0.60
+    vlookup_weight_client: float = 0.30
+    vlookup_weight_month: float = 0.10
+    # Client compatibility bands used by the decision matrix
+    vlookup_client_compat_strong: float = 80.0
+    vlookup_client_compat_moderate: float = 55.0
+    vlookup_client_conflict_max: float = 40.0
+    vlookup_strong_name_score: float = 90.0
+    vlookup_moderate_name_score: float = 78.0
+    vlookup_min_identity_name_score: float = 70.0
+    vlookup_ambiguity_gap: float = 8.0
 
     @model_validator(mode="after")
     def assemble_database_url(self):

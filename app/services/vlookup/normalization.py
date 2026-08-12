@@ -132,17 +132,28 @@ def normalize_month_year(month_date_str: str) -> str:
 def normalize_client_name(client: Optional[str]) -> str:
     """
     Normalize client company name by casing/punctuation and generic legal suffixes.
+
+    Also strips common client-code suffixes such as ``Abbott:4215`` → ``abbott``.
     """
     if not client:
         return ""
 
-    name = normalize_name(client)
+    raw = str(client).strip()
+    # Client:identifier style (QuickBooks / ERP) — keep the company label only
+    if ":" in raw:
+        left = raw.split(":", 1)[0].strip()
+        if left:
+            raw = left
+
+    name = normalize_name(raw)
     # Drop trailing legal-entity tokens dynamically (token-based, not brand-specific)
     legal_tokens = {
         "inc", "incorporated", "ltd", "limited", "llc", "corp",
         "corporation", "co", "company", "plc", "lp", "llp",
     }
     parts = [p for p in name.split() if p not in legal_tokens]
+    # Drop pure numeric tokens (often leftover account/site codes)
+    parts = [p for p in parts if not p.isdigit()]
     return " ".join(parts).strip()
 
 

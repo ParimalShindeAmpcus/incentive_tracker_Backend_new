@@ -41,17 +41,27 @@ class SimilarityScorer:
     def client_similarity(client1: Optional[str], client2: Optional[str]) -> float:
         if not client1 or not client2:
             return 0.0
-        
+
         c1 = normalize_client_name(client1)
         c2 = normalize_client_name(client2)
-        
+
+        if not c1 or not c2:
+            return 0.0
+
         if c1 == c2:
             return 100.0
-        
-        # Use token-based matching for company names
-        score = fuzz.token_sort_ratio(c1, c2)
-        
-        return float(score)
+
+        # One normalized label contained in the other (e.g. Abbott vs Abbott 4215 leftovers)
+        if c1 in c2 or c2 in c1:
+            shorter, longer = (c1, c2) if len(c1) <= len(c2) else (c2, c1)
+            if len(shorter) >= 3 and longer.startswith(shorter):
+                return 95.0
+            return max(88.0, float(fuzz.token_set_ratio(c1, c2)))
+
+        # Token-based matching for company names
+        score = float(fuzz.token_sort_ratio(c1, c2))
+        set_score = float(fuzz.token_set_ratio(c1, c2))
+        return max(score, set_score)
     
     @staticmethod
     def exact_match(value1: Optional[str], value2: Optional[str], normalize_func=None) -> bool:

@@ -1,9 +1,10 @@
 """
-Identity-first candidate matching for Hours Template vs client hours.
+Candidate + client gated matching for Hours Template vs client hours.
 
 Design principles:
-- Name identity is the primary signal (not generic string similarity alone)
-- Alternatives only include identity-compatible reference candidates
+- Candidate name is necessary but not sufficient for automatic matches
+- Client identity is an independent validation signal that can block auto-match
+- Alternatives only include identity-compatible, non-conflicting reference candidates
 - Ambiguity is relative among plausible name variants
 - Hours/business validation is separate from identity status
 - No person/client-specific hardcoded cases
@@ -39,33 +40,53 @@ class ReconciliationMatcher:
         ambiguity_gap: float = None,
         hours_validation_cap: float = None,
     ):
-        # Prefer settings when present; callers may override.
+        settings = get_settings()
+
         self.AUTO_MATCH_THRESHOLD = float(
             auto_threshold if auto_threshold is not None
-            else getattr(get_settings(), "THRESHOLD_AUTO_MATCH", getattr(get_settings(), "threshold_auto_match", 92.0))
+            else getattr(settings, "THRESHOLD_AUTO_MATCH", getattr(settings, "threshold_auto_match", 88.0))
         )
-        # Settings historically used very high auto thresholds; for identity we
-        # interpret AUTO as strong identity confidence and REVIEW as minimum.
+        # Settings historically used very high auto thresholds; clamp legacy 99+ defaults.
         if self.AUTO_MATCH_THRESHOLD >= 99:
-            self.AUTO_MATCH_THRESHOLD = 92.0
+            self.AUTO_MATCH_THRESHOLD = 88.0
 
         self.REVIEW_THRESHOLD = float(
             review_threshold if review_threshold is not None
-            else getattr(get_settings(), "THRESHOLD_REVIEW", getattr(get_settings(), "threshold_review", 80.0))
+            else getattr(settings, "THRESHOLD_REVIEW", getattr(settings, "threshold_review", 70.0))
         )
         if self.REVIEW_THRESHOLD >= 95:
-            self.REVIEW_THRESHOLD = 78.0
+            self.REVIEW_THRESHOLD = 70.0
 
-        self.AMBIGUITY_GAP = float(ambiguity_gap if ambiguity_gap is not None else 8.0)
+        self.AMBIGUITY_GAP = float(
+            ambiguity_gap
+            if ambiguity_gap is not None
+            else getattr(settings, "vlookup_ambiguity_gap", 8.0)
+        )
         self.HOURS_VALIDATION_CAP = float(
             hours_validation_cap
             if hours_validation_cap is not None
-            else getattr(get_settings(), "HOURS_VALIDATION_CAP", getattr(get_settings(), "hours_validation_cap", 160.0))
+            else getattr(settings, "HOURS_VALIDATION_CAP", getattr(settings, "hours_validation_cap", 160.0))
         )
 
-        # Identity gates (relative/fuzzy, not person-specific)
-        self.MIN_IDENTITY_NAME_SCORE = 70.0
+        # Configurable signal weights (renormalized per pair when signals absent)
+        self.WEIGHT_NAME = float(getattr(settings, "vlookup_weight_name", 0.60))
+        self.WEIGHT_CLIENT = float(getattr(settings, "vlookup_weight_client", 0.30))
+        self.WEIGHT_MONTH = float(getattr(settings, "vlookup_weight_month", 0.10))
+
+        # Identity / client decision bands
+        self.MIN_IDENTITY_NAME_SCORE = float(
+            getattr(settings, "vlookup_min_identity_name_score", 70.0)
+        )
+        self.STRONG_NAME_SCORE = float(getattr(settings, "vlookup_strong_name_score", 90.0))
+        self.MODERATE_NAME_SCORE = float(getattr(settings, "vlookup_moderate_name_score", 78.0))
+        self.CLIENT_COMPAT_STRONG = float(getattr(settings, "vlookup_client_compat_strong", 80.0))
+        self.CLIENT_COMPAT_MODERATE = float(
+            getattr(settings, "vlookup_client_compat_moderate", 55.0)
+        )
+        self.CLIENT_CONFLICT_MAX = float(getattr(settings, "vlookup_client_conflict_max", 40.0))
+
         self.ALT_RELATIVE_FLOOR = 0.82  # alternative must be >= 82% of top name score
+        self.ALT_MIN_CLIENT_WHEN_TOP_HAS_CLIENT = 45.0
         self.LAST_NAME_FUZZY_MIN = 88.0
         self.FIRST_NAME_FUZZY_MIN = 85.0
 
@@ -134,7 +155,11 @@ class ReconciliationMatcher:
             )
             pending.append(record)
             tid = record.get("template_candidate_id")
-            if tid is not None and record["match_status"] in ("matched", "needs_review"):
+            if tid is not None and record["match_status"] in (
+                "matched",
+                "needs_review",
+                "potential_duplicate",
+            ):
                 assigned_template_ids.add(tid)
                 template_claims[tid].append(record["messy_name_original"])
 
@@ -174,40 +199,67 @@ class ReconciliationMatcher:
                 if record["match_status"] == "matched":
                     record["match_status"] = "potential_duplicate"
                     explanation["identity_summary"] = (
-                        f"Multiple client-side names map to the same reference candidate "
-                        f"({record.get('template_candidate_name')}). Confirm they are one person."
+                        "Multiple client-side identities appear to claim the same master "
+                        f"candidate ({record.get('template_candidate_name')}). Confirm they "
+                        "are the same person."
+                    )
+                    explanation["identity_headline"] = (
+                        f"Potential duplicate: {record.get('template_candidate_name')}"
                     )
                     explanation["audit"] = self._audit_block(
-                        headline=f"Duplicate claim: {record.get('template_candidate_name')}",
+                        headline=explanation["identity_headline"],
                         why=explanation["identity_summary"],
                         identity_status="potential_duplicate",
                         validation=validation,
+                        master_candidate=record.get("template_candidate_name"),
+                        master_client=(explanation.get("signals") or {}).get("template_client"),
+                        client_candidate=record.get("messy_name_original"),
+                        client_client=record.get("messy_client_name"),
+                        candidate_similarity=float(
+                            (explanation.get("signals") or {}).get("name_score") or 0
+                        ),
+                        client_similarity=float(
+                            (explanation.get("signals") or {}).get("client_score") or 0
+                        )
+                        if (explanation.get("signals") or {}).get("client_available")
+                        else None,
+                        final_confidence=float(record.get("confidence_score") or 0),
                     )
 
-            # Client conflict only when identity name is strong but clients clearly disagree
+            # Safety net: strong name + conflicting client must never remain matched
             signals = explanation.get("signals") or {}
             if (
                 record.get("template_candidate_id") is not None
                 and signals.get("identity_compatible")
                 and signals.get("client_available")
-                and float(signals.get("name_score") or 0) >= 90
-                and float(signals.get("client_score") or 0) <= 40
+                and float(signals.get("name_score") or 0) >= self.STRONG_NAME_SCORE
+                and float(signals.get("client_score") or 0) <= self.CLIENT_CONFLICT_MAX
+                and record["match_status"] in ("matched", "needs_review")
             ):
-                explanation.setdefault("identity_flags", []).append("client_mismatch_with_strong_name")
-                if record["match_status"] in ("matched", "needs_review"):
-                    record["match_status"] = "conflicting"
-                    explanation["identity_summary"] = (
-                        f"Name strongly resembles reference "
-                        f"'{record.get('template_candidate_name')}', but client "
-                        f"'{record.get('messy_client_name') or '-'}' does not align with "
-                        f"'{signals.get('template_client') or '-'}'. Possible different person."
-                    )
-                    explanation["audit"] = self._audit_block(
-                        headline=f"Conflict: {record.get('template_candidate_name')}",
-                        why=explanation["identity_summary"],
-                        identity_status="conflicting",
-                        validation=validation,
-                    )
+                explanation.setdefault("identity_flags", []).append(
+                    "client_mismatch_with_strong_name"
+                )
+                record["match_status"] = "conflicting"
+                explanation["identity_summary"] = (
+                    "Candidate identity is strong, but client identity conflicts with the "
+                    "master client."
+                )
+                explanation["identity_headline"] = (
+                    f"Conflict: {record.get('template_candidate_name')}"
+                )
+                explanation["audit"] = self._audit_block(
+                    headline=explanation["identity_headline"],
+                    why=explanation["identity_summary"],
+                    identity_status="conflicting",
+                    validation=validation,
+                    master_candidate=record.get("template_candidate_name"),
+                    master_client=signals.get("template_client"),
+                    client_candidate=record.get("messy_name_original"),
+                    client_client=record.get("messy_client_name"),
+                    candidate_similarity=float(signals.get("name_score") or 0),
+                    client_similarity=float(signals.get("client_score") or 0),
+                    final_confidence=float(record.get("confidence_score") or 0),
+                )
 
             # Ensure every record has a per-row audit block
             if "audit" not in explanation:
@@ -217,6 +269,17 @@ class ReconciliationMatcher:
                     identity_status=record.get("match_status"),
                     validation=validation,
                     alternatives=explanation.get("alternatives") or [],
+                    master_candidate=record.get("template_candidate_name"),
+                    master_client=signals.get("template_client"),
+                    client_candidate=record.get("messy_name_original"),
+                    client_client=record.get("messy_client_name"),
+                    candidate_similarity=float(signals.get("name_score") or 0)
+                    if signals
+                    else None,
+                    client_similarity=float(signals.get("client_score") or 0)
+                    if signals.get("client_available")
+                    else None,
+                    final_confidence=float(record.get("confidence_score") or 0),
                 )
 
             results[record["match_status"]].append(record)
@@ -372,7 +435,7 @@ class ReconciliationMatcher:
             client_score = float(
                 self.scorer.client_similarity(group.get("client_name"), template.get("client_name"))
             )
-            # Dynamic soft boost when one normalized client string contains the other
+            # Soft boost when one normalized client string contains the other
             c1 = normalize_client_name(group.get("client_name"))
             c2 = template.get("_norm_client") or ""
             if c1 and c2 and (c1 in c2 or c2 in c1):
@@ -385,16 +448,18 @@ class ReconciliationMatcher:
         month_available = bool(messy_month and template_month)
         month_score = 100.0 if month_available and messy_month == template_month else 0.0
 
-        # Identity-first confidence: name dominates; client/month only refine when identity holds
+        # Combined confidence: name + client + month. Client can pull a strong
+        # name match below auto-match when clients disagree. Never floor confidence
+        # back up to name-only evidence.
         if not identity_ok:
             confidence = min(name_score * 0.55, self.REVIEW_THRESHOLD - 1.0)
+            weights = {"name": 1.0, "client": 0.0, "month": 0.0}
         else:
-            weights = {"name": 0.75, "client": 0.0, "month": 0.0}
-            if client_available:
-                weights["client"] = 0.18
-            if month_available:
-                weights["month"] = 0.07
-            # Renormalize
+            weights = {
+                "name": self.WEIGHT_NAME,
+                "client": self.WEIGHT_CLIENT if client_available else 0.0,
+                "month": self.WEIGHT_MONTH if month_available else 0.0,
+            }
             total_w = sum(weights.values()) or 1.0
             for k in weights:
                 weights[k] /= total_w
@@ -403,8 +468,6 @@ class ReconciliationMatcher:
                 + client_score * weights["client"]
                 + month_score * weights["month"]
             )
-            # Keep confidence close to name evidence
-            confidence = max(confidence, name_score * 0.9)
 
         id_match = False
         messy_id = str(group.get("candidate_id") or "").strip().upper()
@@ -412,6 +475,9 @@ class ReconciliationMatcher:
             id_match = True
             confidence = min(100.0, confidence + 8.0)
             identity_ok = True
+
+        client_band = self._client_band(client_score, client_available)
+        name_band = self._name_band(name_score, identity_ok)
 
         return {
             "candidate": template,
@@ -428,12 +494,37 @@ class ReconciliationMatcher:
                 "client_available": client_available,
                 "month_available": month_available,
                 "id_match": id_match,
+                "client_band": client_band,
+                "name_band": name_band,
+                "weights": {k: round(v, 4) for k, v in weights.items()},
                 "messy_month": messy_month,
                 "template_month": template_month,
                 "messy_client": group.get("client_name"),
                 "template_client": template.get("client_name"),
+                "messy_candidate": messy_name,
+                "template_candidate": template_name,
             },
         }
+
+    def _client_band(self, client_score: float, client_available: bool) -> str:
+        if not client_available:
+            return "unavailable"
+        if client_score >= self.CLIENT_COMPAT_STRONG:
+            return "strong"
+        if client_score >= self.CLIENT_COMPAT_MODERATE:
+            return "moderate"
+        if client_score <= self.CLIENT_CONFLICT_MAX:
+            return "conflict"
+        return "weak"
+
+    def _name_band(self, name_score: float, identity_ok: bool) -> str:
+        if not identity_ok or name_score < self.MIN_IDENTITY_NAME_SCORE:
+            return "insufficient"
+        if name_score >= self.STRONG_NAME_SCORE:
+            return "strong"
+        if name_score >= self.MODERATE_NAME_SCORE:
+            return "moderate"
+        return "weak"
 
     def _name_identity(
         self,
@@ -636,11 +727,12 @@ class ReconciliationMatcher:
         best: Dict[str, Any],
         exclude_id: Any = None,
     ) -> List[Dict[str, Any]]:
-        """Only identity-compatible, near-top name variants — never unrelated people."""
+        """Only identity-compatible, near-top, non-conflicting alternatives."""
         if not best:
             return []
         top_name = float(best["signals"].get("name_score") or 0)
         floor = max(self.MIN_IDENTITY_NAME_SCORE, top_name * self.ALT_RELATIVE_FLOOR)
+        top_client_avail = bool(best["signals"].get("client_available"))
         alts = []
         for r in ranked:
             cand = r["candidate"]
@@ -651,17 +743,41 @@ class ReconciliationMatcher:
             name_score = float(r["signals"].get("name_score") or 0)
             if name_score < floor:
                 continue
+            client_score = float(r["signals"].get("client_score") or 0)
+            client_available = bool(r["signals"].get("client_available"))
+            # Do not surface alternatives whose client clearly conflicts when the
+            # top candidate also has client evidence available.
+            if top_client_avail and client_available and client_score <= self.CLIENT_CONFLICT_MAX:
+                continue
+            if (
+                top_client_avail
+                and client_available
+                and client_score < self.ALT_MIN_CLIENT_WHEN_TOP_HAS_CLIENT
+            ):
+                continue
+            why = r.get("why_suggested") or ""
+            client_band = r["signals"].get("client_band")
+            if client_available:
+                why = (
+                    f"{why}. Client similarity {client_score:.0f}% ({client_band})."
+                    if why
+                    else f"Client similarity {client_score:.0f}% ({client_band})."
+                )
             alts.append({
                 "candidate_id": cand.get("candidate_id"),
                 "candidate_name": cand.get("candidate_name"),
                 "client_name": cand.get("client_name"),
                 "confidence": r["confidence"],
                 "name_score": name_score,
+                "client_score": client_score,
+                "combined_score": r["confidence"],
                 "method": r["method"],
-                "why_suggested": r.get("why_suggested") or "",
+                "why_suggested": why,
+                "why": why,
                 "signals": {
                     "name_score": name_score,
-                    "client_score": r["signals"].get("client_score"),
+                    "client_score": client_score,
+                    "client_band": client_band,
                     "identity_evidence": r["signals"].get("identity_evidence"),
                 },
             })
@@ -704,6 +820,14 @@ class ReconciliationMatcher:
         identity_status: str,
         validation: Optional[Dict[str, Any]] = None,
         alternatives: Optional[List[Dict[str, Any]]] = None,
+        *,
+        master_candidate: Optional[str] = None,
+        master_client: Optional[str] = None,
+        client_candidate: Optional[str] = None,
+        client_client: Optional[str] = None,
+        candidate_similarity: Optional[float] = None,
+        client_similarity: Optional[float] = None,
+        final_confidence: Optional[float] = None,
     ) -> Dict[str, Any]:
         return {
             "what_happened": headline,
@@ -712,6 +836,230 @@ class ReconciliationMatcher:
             "validation_status": (validation or {}).get("status"),
             "validation_summary": (validation or {}).get("summary"),
             "has_alternatives": bool(alternatives),
+            "master_candidate": master_candidate,
+            "master_client": master_client,
+            "client_candidate": client_candidate,
+            "client_client": client_client,
+            "candidate_similarity": candidate_similarity,
+            "client_similarity": client_similarity,
+            "final_confidence": final_confidence,
+            "status": identity_status,
+            "reason": why,
+        }
+
+    def _decide_status(
+        self,
+        group: Dict[str, Any],
+        best: Dict[str, Any],
+        second: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Apply the candidate+client decision matrix.
+
+        Returns status, summary, headline, flags.
+        """
+        signals = best["signals"]
+        name_score = float(signals.get("name_score") or 0)
+        client_score = float(signals.get("client_score") or 0)
+        client_available = bool(signals.get("client_available"))
+        identity_ok = bool(best.get("identity_compatible"))
+        confidence = float(best.get("confidence") or 0)
+        id_match = bool(signals.get("id_match"))
+        name_band = signals.get("name_band") or self._name_band(name_score, identity_ok)
+        client_band = signals.get("client_band") or self._client_band(
+            client_score, client_available
+        )
+
+        cand = best["candidate"]
+        master_name = cand.get("candidate_name")
+        master_client = cand.get("client_name")
+        client_name = group.get("candidate_name")
+        client_client = group.get("client_name")
+
+        # Case F/G — weak / no candidate identity
+        if not identity_ok or name_score < self.MIN_IDENTITY_NAME_SCORE:
+            return {
+                "status": "unmatched",
+                "summary": "No sufficiently reliable candidate identity was found.",
+                "headline": "Unmatched",
+                "flags": ["weak_or_missing_candidate_identity"],
+            }
+
+        # Case D — strong candidate + strong conflicting client
+        if (
+            name_band == "strong"
+            and client_available
+            and client_band == "conflict"
+        ):
+            return {
+                "status": "conflicting",
+                "summary": (
+                    "Candidate identity is strong, but client identity conflicts with the "
+                    f"master client. Master client '{master_client or '—'}' vs client file "
+                    f"'{client_client or '—'}'."
+                ),
+                "headline": f"Conflict: {master_name}",
+                "flags": ["client_mismatch_with_strong_name"],
+            }
+
+        # Case E — close second candidate
+        ambiguous = bool(
+            second
+            and second.get("identity_compatible")
+            and (best["confidence"] - second["confidence"]) < self.AMBIGUITY_GAP
+            and float(second["signals"].get("name_score") or 0) >= self.MIN_IDENTITY_NAME_SCORE
+        )
+        if ambiguous and second:
+            other = second["candidate"].get("candidate_name")
+            other_client = second["candidate"].get("client_name")
+            other_client_band = second["signals"].get("client_band")
+            # Contradictory client evidence between top two → conflict
+            if (
+                client_available
+                and second["signals"].get("client_available")
+                and client_band in ("strong", "moderate")
+                and other_client_band in ("strong", "moderate")
+                and client_band != other_client_band
+            ) or (
+                client_available
+                and second["signals"].get("client_available")
+                and abs(client_score - float(second["signals"].get("client_score") or 0)) >= 35
+                and min(client_score, float(second["signals"].get("client_score") or 0))
+                <= self.CLIENT_COMPAT_MODERATE
+            ):
+                return {
+                    "status": "conflicting",
+                    "summary": (
+                        f"Multiple reference candidates are similarly plausible for "
+                        f"'{client_name}' with contradictory client evidence "
+                        f"('{master_name}' / '{master_client}' vs '{other}' / '{other_client}')."
+                    ),
+                    "headline": f"Conflict: ambiguous between {master_name} and {other}",
+                    "flags": ["ambiguous_top_candidates", "contradictory_client_evidence"],
+                }
+            return {
+                "status": "needs_review",
+                "summary": (
+                    f"Two reference candidates are highly similar to '{client_name}': "
+                    f"'{master_name}' ({best['confidence']}%) and "
+                    f"'{other}' ({second['confidence']}%). Confirm which person is correct."
+                ),
+                "headline": f"Needs review: ambiguous between {master_name} and {other}",
+                "flags": ["ambiguous_top_candidates"],
+            }
+
+        # Exact Candidate ID anchor (when present on both sides)
+        if id_match and not (client_available and client_band == "conflict"):
+            if (not client_available) or client_band in ("strong", "moderate"):
+                return {
+                    "status": "matched",
+                    "summary": (
+                        "Candidate ID matches exactly"
+                        + (
+                            " and client name is compatible."
+                            if client_available and client_band == "strong"
+                            else (
+                                " with moderate client evidence."
+                                if client_available
+                                else "; client evidence was incomplete but ID is authoritative."
+                            )
+                        )
+                    ),
+                    "headline": f"Matched: {master_name}",
+                    "flags": ["exact_candidate_id"],
+                }
+            return {
+                "status": "needs_review",
+                "summary": (
+                    "Candidate ID matches, but client evidence is weak. Confirm before accepting."
+                ),
+                "headline": f"Needs review: {master_name}",
+                "flags": ["exact_candidate_id", "weak_client_with_id"],
+            }
+
+        # Case A — strong candidate + strong compatible client
+        if name_band == "strong" and client_available and client_band == "strong":
+            return {
+                "status": "matched",
+                "summary": (
+                    "Candidate name strongly matches and client name is compatible."
+                ),
+                "headline": f"Matched: {master_name}",
+                "flags": [],
+            }
+
+        # Case B — strong candidate + moderate client
+        if name_band == "strong" and client_available and client_band == "moderate":
+            return {
+                "status": "needs_review",
+                "summary": (
+                    "Candidate name is strong, but client evidence is only moderately "
+                    "compatible. Confirm client identity before accepting."
+                ),
+                "headline": f"Needs review: {master_name}",
+                "flags": ["strong_name_moderate_client"],
+            }
+
+        # Case B/incomplete — strong name but client missing
+        if name_band == "strong" and not client_available:
+            return {
+                "status": "needs_review",
+                "summary": (
+                    "Candidate name is plausible but client evidence is insufficient "
+                    "for automatic confirmation."
+                ),
+                "headline": f"Needs review: {master_name}",
+                "flags": ["strong_name_missing_client"],
+            }
+
+        # Strong name + weak (non-conflict) client
+        if name_band == "strong" and client_available and client_band == "weak":
+            return {
+                "status": "needs_review",
+                "summary": (
+                    "Candidate name is strong, but client evidence is weak. "
+                    "Human confirmation required."
+                ),
+                "headline": f"Needs review: {master_name}",
+                "flags": ["strong_name_weak_client"],
+            }
+
+        # Case C — moderate candidate + strong compatible client
+        if name_band == "moderate" and client_available and client_band == "strong":
+            return {
+                "status": "needs_review",
+                "summary": (
+                    "Client name is strongly compatible, but candidate name evidence is "
+                    "only moderate. Confirm the person before accepting."
+                ),
+                "headline": f"Needs review: {master_name}",
+                "flags": ["moderate_name_strong_client"],
+            }
+
+        # Moderate + moderate / other mid-band → review if above review threshold
+        if (
+            identity_ok
+            and name_score >= self.MIN_IDENTITY_NAME_SCORE
+            and confidence >= self.REVIEW_THRESHOLD
+        ):
+            return {
+                "status": "needs_review",
+                "summary": (
+                    f"Possible match to '{master_name}' "
+                    f"({confidence}% combined confidence; name {name_score:.0f}%, "
+                    f"client {client_score:.0f}%{' unavailable' if not client_available else ''}). "
+                    f"{best.get('why_suggested') or 'Confirm before accepting.'}"
+                ),
+                "headline": f"Needs review: {master_name}",
+                "flags": ["medium_identity_confidence"],
+            }
+
+        # Below review floor → unmatched (do not force closest fuzzy result)
+        return {
+            "status": "unmatched",
+            "summary": "No sufficiently reliable candidate identity was found.",
+            "headline": "Unmatched",
+            "flags": ["below_review_threshold"],
         }
 
     def _build_match_record(
@@ -721,7 +1069,7 @@ class ReconciliationMatcher:
         assigned_template_ids: set,
         target_month: str,
     ) -> Dict[str, Any]:
-        # Prefer unassigned, identity-compatible candidates
+        # Prefer unassigned, identity-compatible candidates for auto-linking
         available = [
             r for r in ranked
             if r["candidate"]["id"] not in assigned_template_ids and r.get("identity_compatible")
@@ -730,8 +1078,12 @@ class ReconciliationMatcher:
         if not available:
             available = [r for r in ranked if r["candidate"]["id"] not in assigned_template_ids]
 
-        best = available[0] if available else None
-        # Ambiguity only among other identity-compatible competitors
+        best_unassigned = available[0] if available else None
+        # Overall best identity match (may already be claimed by another client identity)
+        overall_compatible = [r for r in ranked if r.get("identity_compatible")]
+        best_overall = overall_compatible[0] if overall_compatible else best_unassigned
+
+        # Ambiguity among unassigned identity-compatible competitors
         compatible_pool = [r for r in available if r.get("identity_compatible")]
         second = compatible_pool[1] if len(compatible_pool) > 1 else None
 
@@ -758,40 +1110,23 @@ class ReconciliationMatcher:
             "validation_status": validation["status"],
         }
 
-        # Unmatched: no identity-compatible candidate above review threshold
-        if (
-            not best
-            or not best.get("identity_compatible")
-            or best["confidence"] < self.REVIEW_THRESHOLD
-            or float(best["signals"].get("name_score") or 0) < self.MIN_IDENTITY_NAME_SCORE
-        ):
-            alts = self._plausible_alternatives(
-                [r for r in ranked if r.get("identity_compatible")],
-                best if best and best.get("identity_compatible") else (
-                    next((r for r in ranked if r.get("identity_compatible")), None)
-                ),
-            )
-            summary = (
-                "No sufficiently similar reference candidate was found in the Hours Template."
-            )
-            if alts:
-                summary = (
-                    "No single confident identity match; only weak/partial name variants exist. "
-                    "Manual mapping required."
-                )
+        if not best_overall and not best_unassigned:
+            summary = "No sufficiently reliable candidate identity was found."
             explanation = {
                 "identity_summary": summary,
                 "identity_headline": "Unmatched",
-                "signals": best["signals"] if best else {},
-                "alternatives": alts,
-                "identity_flags": [],
+                "signals": {},
+                "alternatives": [],
+                "identity_flags": ["no_candidates"],
                 "validation": validation,
                 "audit": self._audit_block(
                     headline="Unmatched",
                     why=summary,
                     identity_status="unmatched",
                     validation=validation,
-                    alternatives=alts,
+                    client_candidate=group.get("candidate_name"),
+                    client_client=group.get("client_name"),
+                    final_confidence=0.0,
                 ),
             }
             return {
@@ -800,82 +1135,154 @@ class ReconciliationMatcher:
                 "template_candidate_id": None,
                 "template_candidate_name": None,
                 "template_candidate_id_str": None,
-                "confidence_score": best["confidence"] if best and best.get("identity_compatible") else 0.0,
-                "match_method": best["method"] if best and best.get("identity_compatible") else "none",
+                "confidence_score": 0.0,
+                "match_method": "none",
                 "match_status": "unmatched",
                 "match_explanation": explanation,
-                "alternatives": alts,
+                "alternatives": [],
             }
 
-        ambiguous = bool(
-            second
-            and second.get("identity_compatible")
-            and (best["confidence"] - second["confidence"]) < self.AMBIGUITY_GAP
-            and float(second["signals"].get("name_score") or 0) >= self.MIN_IDENTITY_NAME_SCORE
-        )
+        # If the only strong identity is already claimed, classify against that
+        # overall match (conflict / duplicate / review) instead of forcing unmatched.
+        best = best_unassigned
+        already_claimed = False
+        if (
+            best_overall
+            and best_overall.get("identity_compatible")
+            and (
+                not best_unassigned
+                or not best_unassigned.get("identity_compatible")
+                or float(best_unassigned["signals"].get("name_score") or 0)
+                < float(best_overall["signals"].get("name_score") or 0) - 5
+            )
+            and best_overall["candidate"]["id"] in assigned_template_ids
+        ):
+            best = best_overall
+            already_claimed = True
+            second = None
+
+        if not best:
+            best = best_overall
+
+        decision = self._decide_status(group, best, second)
+        status = decision["status"]
+        summary = decision["summary"]
+        headline = decision["headline"]
+        flags = list(decision["flags"])
+
+        if already_claimed and status in ("matched", "needs_review"):
+            # Another client-side identity already owns this master candidate.
+            if status == "matched" or (
+                best["signals"].get("name_band") == "strong"
+                and best["signals"].get("client_band") == "strong"
+            ):
+                status = "potential_duplicate"
+                summary = (
+                    "Multiple client-side identities appear to claim the same master "
+                    f"candidate. '{best['candidate'].get('candidate_name')}' is already "
+                    "linked to another client-side identity."
+                )
+                headline = f"Potential duplicate: {best['candidate'].get('candidate_name')}"
+                flags.append("template_already_claimed")
+            else:
+                flags.append("template_already_claimed")
+                summary = (
+                    f"{summary} Another client-side identity already claims this master "
+                    "candidate."
+                )
+
+        # Strong name + conflicting client against an already-claimed master still conflicts
+        if (
+            already_claimed
+            and best.get("identity_compatible")
+            and float(best["signals"].get("name_score") or 0) >= self.STRONG_NAME_SCORE
+            and best["signals"].get("client_available")
+            and float(best["signals"].get("client_score") or 0) <= self.CLIENT_CONFLICT_MAX
+        ):
+            status = "conflicting"
+            summary = (
+                "Candidate identity is strong, but client identity conflicts with the "
+                "master client."
+            )
+            headline = f"Conflict: {best['candidate'].get('candidate_name')}"
+            flags = ["client_mismatch_with_strong_name", "template_already_claimed"]
 
         cand = best["candidate"]
-        alts = self._plausible_alternatives(compatible_pool, best, exclude_id=cand.get("id"))
+        alts = self._plausible_alternatives(
+            compatible_pool if compatible_pool else overall_compatible,
+            best,
+            exclude_id=cand.get("id"),
+        )
 
-        if ambiguous:
-            status = "needs_review"
-            other = second["candidate"].get("candidate_name")
-            summary = (
-                f"Two reference candidates are highly similar to '{group.get('candidate_name')}': "
-                f"'{cand.get('candidate_name')}' ({best['confidence']}%) and "
-                f"'{other}' ({second['confidence']}%). Confirm which person is correct."
+        # Unmatched: do not keep a linked template
+        if status == "unmatched":
+            linked = None
+            alts = self._plausible_alternatives(
+                overall_compatible,
+                best if best.get("identity_compatible") else (
+                    next((r for r in overall_compatible), best)
+                ),
             )
-            headline = f"Needs review: ambiguous between {cand.get('candidate_name')} and {other}"
-            flags = ["ambiguous_top_candidates"]
-        elif best["confidence"] >= self.AUTO_MATCH_THRESHOLD:
-            status = "matched"
-            summary = (
-                f"Matched to '{cand.get('candidate_name')}' because {best.get('why_suggested')}"
-            )
-            headline = f"Matched: {cand.get('candidate_name')}"
-            flags = []
         else:
-            status = "needs_review"
-            summary = (
-                f"Possible match to '{cand.get('candidate_name')}' "
-                f"({best['confidence']}% identity confidence). "
-                f"{best.get('why_suggested')}. Confirm before accepting."
-            )
-            headline = f"Needs review: {cand.get('candidate_name')}"
-            flags = ["medium_identity_confidence"]
+            linked = cand
+
+        signals = dict(best["signals"])
+        audit = self._audit_block(
+            headline=headline,
+            why=summary,
+            identity_status=status,
+            validation=validation,
+            alternatives=alts,
+            master_candidate=(linked or cand).get("candidate_name"),
+            master_client=(linked or cand).get("client_name"),
+            client_candidate=group.get("candidate_name"),
+            client_client=group.get("client_name"),
+            candidate_similarity=float(signals.get("name_score") or 0),
+            client_similarity=float(signals.get("client_score") or 0)
+            if signals.get("client_available")
+            else None,
+            final_confidence=float(best["confidence"]),
+        )
 
         explanation = {
             "identity_summary": summary,
             "identity_headline": headline,
-            "signals": best["signals"],
+            "signals": signals,
             "alternatives": alts,
             "identity_flags": flags,
+            "decision": {
+                "name_band": signals.get("name_band"),
+                "client_band": signals.get("client_band"),
+                "status": status,
+                "reason": summary,
+                "already_claimed": already_claimed,
+            },
             "chosen": {
-                "candidate_id": cand.get("candidate_id"),
-                "candidate_name": cand.get("candidate_name"),
-                "client_name": cand.get("client_name"),
+                "candidate_id": (linked or {}).get("candidate_id") if linked else None,
+                "candidate_name": (linked or {}).get("candidate_name") if linked else None,
+                "client_name": (linked or {}).get("client_name") if linked else None,
                 "confidence": best["confidence"],
                 "method": best["method"],
                 "why": best.get("why_suggested"),
-            },
+            }
+            if linked
+            else None,
             "validation": validation,
-            "audit": self._audit_block(
-                headline=headline,
-                why=summary,
-                identity_status=status,
-                validation=validation,
-                alternatives=alts,
-            ),
+            "audit": audit,
         }
 
         return {
             **base_fields,
-            "template_candidate": cand,
-            "template_candidate_id": cand.get("id"),
-            "template_candidate_name": cand.get("candidate_name"),
-            "template_candidate_id_str": cand.get("candidate_id"),
-            "confidence_score": best["confidence"],
-            "match_method": best["method"],
+            "template_candidate": linked,
+            "template_candidate_id": linked.get("id") if linked else None,
+            "template_candidate_name": linked.get("candidate_name") if linked else None,
+            "template_candidate_id_str": linked.get("candidate_id") if linked else None,
+            "confidence_score": best["confidence"]
+            if linked or best.get("identity_compatible")
+            else 0.0,
+            "match_method": best["method"]
+            if linked or best.get("identity_compatible")
+            else "none",
             "match_status": status,
             "match_explanation": explanation,
             "alternatives": alts,

@@ -35,6 +35,7 @@ class VLookupStatsResponse(BaseModel):
     duplicate_count: int = 0
     conflicting_count: int = 0
     total_records: int = 0
+    unique_master_candidates: int = 0
     target_month: Optional[str] = None
     client_file_format: Optional[str] = None
     parser_warnings: List[Any] = Field(default_factory=list)

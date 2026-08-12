@@ -366,6 +366,7 @@ def get_stats(db: Session, batch_id: Optional[str] = None) -> VLookupStatsRespon
         duplicate_count=counts["potential_duplicate"],
         conflicting_count=counts["conflicting"],
         total_records=sum(counts.values()),
+        unique_master_candidates=repo.count_unique_master_candidates(db, latest),
         target_month=batch.target_month if batch else None,
         client_file_format=batch.client_file_format if batch else None,
         parser_warnings=list(batch.parser_warnings or []) if batch else [],
