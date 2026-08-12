@@ -2,7 +2,7 @@
 
 from typing import Generator, Optional
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -39,4 +39,15 @@ def init_db() -> None:
     """Import all ORM entities and create tables."""
     import app.repositories.entities  # noqa: F401
 
-    Base.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+
+    # create_all does not alter existing tables. Repair databases that predate
+    # the approval timestamp used by the dashboard and cycle approval flow.
+    inspector = inspect(engine)
+    if "incentive_cycles" in inspector.get_table_names():
+        columns = {column["name"] for column in inspector.get_columns("incentive_cycles")}
+        if "approved_at" not in columns:
+            column_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
+            with engine.begin() as connection:
+                connection.execute(text(f"ALTER TABLE incentive_cycles ADD COLUMN approved_at {column_type}"))

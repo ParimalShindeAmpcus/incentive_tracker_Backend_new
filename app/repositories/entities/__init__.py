@@ -1,6 +1,7 @@
 """SQLAlchemy ORM entities — import side-effects register tables on Base.metadata."""
 
 from app.repositories.entities.audit import AuditAction, AuditLog
+from app.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
 from app.repositories.entities.candidate import Candidate, CandidateDataVersion
 from app.repositories.entities.cycle import (
     CycleChecklistItem,

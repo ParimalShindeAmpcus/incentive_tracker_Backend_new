@@ -18,7 +18,7 @@ from app.controllers.hours.controller import router as hours_router
 from app.controllers.incentives.controller import router as incentives_router
 from app.controllers.organization.controller import router as organization_router
 from app.controllers.project_end.controller import router as project_end_router
-from app.controllers.recruiters.controller import router as recruiters_router
+from app.controllers.coordinators.controller import router as coordinators_router
 from app.controllers.reports.controller import router as reports_router
 from app.controllers.vlookup.controller import router as vlookup_router
 from app.core.db import init_db
@@ -67,7 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router, prefix=f"{prefix}/dashboard", tags=["dashboard"])
     app.include_router(organization_router, prefix=prefix, tags=["organization"])
     app.include_router(candidates_router, prefix=prefix, tags=["candidates"])
-    app.include_router(recruiters_router, prefix=f"{prefix}/recruiter-master", tags=["recruiters"])
+    app.include_router(coordinators_router, prefix=f"{prefix}/coordinators", tags=["coordinators"])
     app.include_router(hours_router, prefix=f"{prefix}/hours-data", tags=["hours"])
     app.include_router(hours_benchmarks_router, prefix=f"{prefix}/hours-benchmarks", tags=["hours-benchmarks"])
     app.include_router(project_end_router, prefix=f"{prefix}/project-end", tags=["project-end"])

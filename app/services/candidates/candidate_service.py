@@ -49,6 +49,16 @@ def update_candidate(db: Session, candidate_id: int, payload: CandidateUpdate) -
     data = payload.model_dump(exclude_unset=True)
     if "candidate_name" in data and data["candidate_name"]:
         data["normalized_name"] = data["candidate_name"].strip().lower()
+
+    # A candidate who has been marked Left must retain that employment status
+    # in the master table, not only in a client-side dataset version.
+    requested_status = str(data.get("status") or "").strip().upper()
+    if requested_status in {"LEFT", "MARKED LEFT"}:
+        data["status"] = "LEFT"
+        data["is_active"] = False
+        data["incentive_active"] = False
+        data.setdefault("inactivation_reason", "Marked Left")
+
     updated = candidate_repository.update_candidate(db, row, data)
     db.commit()
     db.refresh(updated)
