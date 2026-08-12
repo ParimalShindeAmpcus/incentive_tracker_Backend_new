@@ -62,12 +62,12 @@ def main() -> None:
                     external_candidate_id, candidate_name, normalized_name,
                     contract_type, margin, start_date, recruiter, team_lead, crm,
                     candidate_source, organization, division,
-                    source_version_id, last_touched_version_id, is_active
+                    source_version_id, last_touched_version_id, is_active, incentive_active
                 ) VALUES (
                     'AMSUB24-2495', 'Aisha Mayes', 'aisha mayes',
                     'C2C', 12, '2023-10-10', 'Amit William Ohol', 'Nitin Giri', 'Majid Khan',
                     'Ampcus Inc', 'Ampcus Inc', 'nashik',
-                    :vid, :vid, true
+                    :vid, :vid, true, true
                 ) RETURNING id
                 """
             ),
@@ -81,12 +81,12 @@ def main() -> None:
                     external_candidate_id, candidate_name, normalized_name,
                     contract_type, margin, start_date, recruiter, team_lead, crm,
                     candidate_source, organization, division,
-                    source_version_id, last_touched_version_id, is_active
+                    source_version_id, last_touched_version_id, is_active, incentive_active
                 ) VALUES (
                     'BraW22026-1984', 'Jackeline Reveles', 'jackeline reveles',
                     'C2C', 4.23, '2026-01-27', 'Demo Recruiter', 'Avinash Kumar', 'Avinash Kumar',
                     'Bravens Inc', 'Bravens Inc', 'nashik',
-                    :vid, :vid, true
+                    :vid, :vid, true, true
                 ) RETURNING id
                 """
             ),
