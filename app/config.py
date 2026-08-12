@@ -33,8 +33,12 @@ class Settings(BaseSettings):
     db_name: Optional[str] = None
     database_url: Optional[str] = None
 
-    # CORS — comma-separated origins
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    # CORS — comma-separated origins (include both localhost and 127.0.0.1)
+    cors_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:8080,http://127.0.0.1:8080"
+    )
 
     # Security / JWT
     secret_key: str = "change-me"
@@ -49,6 +53,12 @@ class Settings(BaseSettings):
 
     # API
     api_v1_prefix: str = "/api/v1"
+
+    # VLOOKUP reconciliation thresholds
+    threshold_auto_match: float = 92.0
+    threshold_suggest: float = 85.0
+    threshold_review: float = 80.0
+    hours_validation_cap: float = 160.0
 
     @model_validator(mode="after")
     def assemble_database_url(self):

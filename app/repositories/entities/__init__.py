@@ -30,6 +30,12 @@ from app.repositories.entities.recruiter import (
     RecruiterStatusEnum,
 )
 from app.repositories.entities.user import Role, User, user_roles
+from app.repositories.entities.vlookup import (
+    VLookupMatchedRecord,
+    VLookupTemplateCandidate,
+    VLookupUploadBatch,
+    VLookupWeeklyHours,
+)
 
 __all__ = [
     "AuditAction",
@@ -64,4 +70,8 @@ __all__ = [
     "Role",
     "User",
     "user_roles",
+    "VLookupMatchedRecord",
+    "VLookupTemplateCandidate",
+    "VLookupUploadBatch",
+    "VLookupWeeklyHours",
 ]
