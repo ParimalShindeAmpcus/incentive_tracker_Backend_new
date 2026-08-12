@@ -55,7 +55,7 @@ def bulk_upload(db, content: bytes, filename: str):
     issues=[]; created=0
     for index,row in enumerate(_rows(content, filename), 2):
         try:
-            payload=CoordinatorInput(full_name=row.get("Coordinator Name") or row.get("Full Name") or "", email=row.get("Email") or "", organization=row.get("Organization") or "", role_title=row.get("Role") or row.get("Role / Title") or "", employment_status=row.get("Employment Status") or "ACTIVE", start_date=row.get("Start Date") or None, bank_name=row.get("Bank Name") or None, account_number=row.get("Account Number") or None, ifsc_code=row.get("IFSC Code") or None)
+            payload=CoordinatorInput(full_name=row.get("Coordinator Name") or row.get("Full Name") or "", email=row.get("Email") or "", organization=row.get("Organization") or "", role_title=row.get("Role") or row.get("Role / Title") or "", employment_status=row.get("Employment Status") or "ACTIVE", exit_date=row.get("Exit Date") or None, bank_name=row.get("Bank Name") or None, account_number=row.get("Account Number") or None, ifsc_code=row.get("IFSC Code") or None)
             create(db,payload); created+=1
         except (ValidationError, HTTPException) as exc: issues.append({"source_row":index,"identifier":row.get("Email") or row.get("Coordinator Name") or f"Row {index}","reason":str(getattr(exc,"detail",exc))})
     return {"created_count":created,"issues":issues}
