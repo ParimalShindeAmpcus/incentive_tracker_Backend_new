@@ -12,30 +12,53 @@ class CandidateOut(BaseModel):
 
     id: int
     external_candidate_id: str
+    activity_id: Optional[str] = None
     start_id: Optional[str] = None
     candidate_name: str
     normalized_name: str
     email: Optional[str] = None
+    contact: Optional[str] = None
     client: Optional[str] = None
     end_client: Optional[str] = None
+    job_title: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    is_project_ended: Optional[bool] = None
+    req_id: Optional[str] = None
     contract_type: Optional[str] = None
+    subcontractor: Optional[str] = None
+    subcontractor_email: Optional[str] = None
+    subcontractor_contact: Optional[str] = None
+    job_level: Optional[str] = None
+    salary: Optional[Decimal] = None
     pay_rate: Optional[Decimal] = None
+    taxes: Optional[Decimal] = None
+    benefits: Optional[Decimal] = None
+    referral_fee: Optional[Decimal] = None
+    finders_fee: Optional[Decimal] = None
     bill_rate: Optional[Decimal] = None
+    msp_fee: Optional[Decimal] = None
     margin: Optional[Decimal] = None
     markup_percent: Optional[Decimal] = None
-    finders_fee: Optional[Decimal] = None
-    start_date: Optional[date] = None
-    recruiter: Optional[str] = None
+    remote: Optional[str] = None
+    work_location: Optional[str] = None
+    candidate_location: Optional[str] = None
+    work_authorization: Optional[str] = None
+    candidate_source: Optional[str] = None
     team_lead: Optional[str] = None
-    manager: Optional[str] = None
-    senior_manager: Optional[str] = None
     crm: Optional[str] = None
+    manager: Optional[str] = None
+    head_of_department: Optional[str] = None
+    senior_manager: Optional[str] = None
     associate_director: Optional[str] = None
+    director: Optional[str] = None
     center_head: Optional[str] = None
     avp: Optional[str] = None
     onboarding_coordinator: Optional[str] = None
     organization: Optional[str] = None
-    candidate_source: Optional[str] = None
+    user_email: Optional[str] = None
+    recruiter_location: Optional[str] = None
+    recruiter: Optional[str] = None
     status: Optional[str] = None
     placement_level: Optional[str] = None
     division: Optional[str] = None
@@ -49,19 +72,52 @@ class CandidateOut(BaseModel):
 
 
 class CandidateUpdate(BaseModel):
+    activity_id: Optional[str] = None
+    start_id: Optional[str] = None
     candidate_name: Optional[str] = None
     email: Optional[str] = None
+    contact: Optional[str] = None
     client: Optional[str] = None
     end_client: Optional[str] = None
+    job_title: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    req_id: Optional[str] = None
     contract_type: Optional[str] = None
+    subcontractor: Optional[str] = None
+    subcontractor_email: Optional[str] = None
+    subcontractor_contact: Optional[str] = None
+    job_level: Optional[str] = None
+    salary: Optional[Decimal] = None
     pay_rate: Optional[Decimal] = None
+    taxes: Optional[Decimal] = None
+    benefits: Optional[Decimal] = None
+    referral_fee: Optional[Decimal] = None
+    finders_fee: Optional[Decimal] = None
     bill_rate: Optional[Decimal] = None
+    msp_fee: Optional[Decimal] = None
     margin: Optional[Decimal] = None
+    remote: Optional[str] = None
+    work_location: Optional[str] = None
+    candidate_location: Optional[str] = None
+    work_authorization: Optional[str] = None
+    candidate_source: Optional[str] = None
+    team_lead: Optional[str] = None
+    crm: Optional[str] = None
+    manager: Optional[str] = None
+    head_of_department: Optional[str] = None
+    senior_manager: Optional[str] = None
+    associate_director: Optional[str] = None
+    director: Optional[str] = None
+    center_head: Optional[str] = None
+    avp: Optional[str] = None
+    onboarding_coordinator: Optional[str] = None
+    organization: Optional[str] = None
+    user_email: Optional[str] = None
+    recruiter_location: Optional[str] = None
+    recruiter: Optional[str] = None
     status: Optional[str] = None
     division: Optional[str] = None
-    recruiter: Optional[str] = None
-    team_lead: Optional[str] = None
-    manager: Optional[str] = None
     is_active: Optional[bool] = None
     incentive_active: Optional[bool] = None
     inactivation_reason: Optional[str] = None
@@ -82,17 +138,55 @@ class CandidateVersionOut(BaseModel):
 
 class CandidateRowIn(BaseModel):
     external_candidate_id: str
+    activity_id: Optional[str] = None
+    start_id: Optional[str] = None
     candidate_name: str
     email: Optional[str] = None
+    contact: Optional[str] = None
     client: Optional[str] = None
-    division: Optional[str] = None
-    start_id: Optional[str] = None
-    status: Optional[str] = None
-    recruiter: Optional[str] = None
-    pay_rate: Optional[Decimal] = None
-    bill_rate: Optional[Decimal] = None
-    margin: Optional[Decimal] = None
+    end_client: Optional[str] = None
+    job_title: Optional[str] = None
     start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    req_id: Optional[str] = None
+    contract_type: Optional[str] = None
+    subcontractor: Optional[str] = None
+    subcontractor_email: Optional[str] = None
+    subcontractor_contact: Optional[str] = None
+    job_level: Optional[str] = None
+    salary: Optional[Decimal] = None
+    pay_rate: Optional[Decimal] = None
+    taxes: Optional[Decimal] = None
+    benefits: Optional[Decimal] = None
+    referral_fee: Optional[Decimal] = None
+    finders_fee: Optional[Decimal] = None
+    bill_rate: Optional[Decimal] = None
+    gross_bill_rate: Optional[Decimal] = None
+    msp_fee: Optional[Decimal] = None
+    margin: Optional[Decimal] = None
+    remote: Optional[str] = None
+    work_location: Optional[str] = None
+    candidate_location: Optional[str] = None
+    work_authorization: Optional[str] = None
+    candidate_source: Optional[str] = None
+    resume_source: Optional[str] = None
+    team_lead: Optional[str] = None
+    crm: Optional[str] = None
+    manager: Optional[str] = None
+    head_of_department: Optional[str] = None
+    senior_manager: Optional[str] = None
+    associate_director: Optional[str] = None
+    director: Optional[str] = None
+    center_head: Optional[str] = None
+    avp: Optional[str] = None
+    onboarding_coordinator: Optional[str] = None
+    organization: Optional[str] = None
+    user_email: Optional[str] = None
+    recruiter_location: Optional[str] = None
+    recruiter: Optional[str] = None
+    status: Optional[str] = None
+    placement_level: Optional[str] = None
+    division: Optional[str] = None
 
 
 class CreateVersionRequest(BaseModel):

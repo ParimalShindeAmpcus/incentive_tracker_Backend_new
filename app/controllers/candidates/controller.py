@@ -18,14 +18,18 @@ from app.services.common.deps import CurrentUser, DbSession
 router = APIRouter()
 
 
+
 @router.get("/candidates", response_model=PaginatedCandidates)
 def list_candidates(
     db: DbSession,
     division: Optional[str] = Query(None),
+    project_status: Optional[str] = Query(None, description="Filter by ACTIVE or ENDED project status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
 ) -> PaginatedCandidates:
-    return candidate_service.list_candidates(db, division=division, page=page, page_size=page_size)
+    return candidate_service.list_candidates(
+        db, division=division, project_status=project_status, page=page, page_size=page_size
+    )
 
 
 @router.get("/candidates/{candidate_id}", response_model=CandidateOut)
@@ -55,3 +59,4 @@ def create_version(
     user: CurrentUser,
 ) -> CandidateVersionCreateResponse:
     return candidate_service.create_version(db, payload, uploaded_by=user.id)
+

@@ -1,13 +1,11 @@
-"""Example integration test for GET /health (stub)."""
-
-from fastapi.testclient import TestClient
-
+import pytest
+from httpx import ASGITransport, AsyncClient
 from app.main import app
 
-client = TestClient(app)
+@pytest.mark.asyncio
+async def test_health_endpoint():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
 
-
-def test_health_endpoint():
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
