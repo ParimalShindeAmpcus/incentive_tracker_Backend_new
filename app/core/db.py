@@ -84,3 +84,56 @@ def init_db() -> None:
             "is_deleted": f"{bool_type} DEFAULT FALSE NOT NULL",
         },
     )
+    # AuditLog model gained title / user_display / username / metadata after the table was first created.
+    json_type = "JSONB" if is_pg else "JSON"
+    _add_missing(
+        "audit_logs",
+        {
+            "title": "VARCHAR(255) NOT NULL DEFAULT ''",
+            "user_display": "VARCHAR(255) NOT NULL DEFAULT ''",
+            "username": "VARCHAR(255) NOT NULL DEFAULT ''",
+            "metadata": json_type,
+        },
+    )
+    # Model uses native_enum=False (VARCHAR(50)); older DBs used PG enum audit_action_enum.
+    if is_pg and "audit_logs" in inspector.get_table_names():
+        with engine.begin() as connection:
+            action_meta = connection.execute(
+                text(
+                    """
+                    SELECT data_type, udt_name, character_maximum_length
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'audit_logs'
+                      AND column_name = 'action'
+                    """
+                )
+            ).mappings().first()
+            if action_meta is not None:
+                data_type = action_meta["data_type"]
+                udt_name = action_meta["udt_name"]
+                max_len = action_meta["character_maximum_length"]
+                if data_type == "USER-DEFINED" or udt_name == "audit_action_enum":
+                    connection.execute(
+                        text(
+                            "ALTER TABLE audit_logs "
+                            "ALTER COLUMN action TYPE VARCHAR(50) USING action::text"
+                        )
+                    )
+                    # Drop orphaned enum type when nothing else depends on it.
+                    still_used = connection.execute(
+                        text(
+                            """
+                            SELECT 1
+                            FROM information_schema.columns
+                            WHERE udt_name = 'audit_action_enum'
+                            LIMIT 1
+                            """
+                        )
+                    ).first()
+                    if still_used is None:
+                        connection.execute(text("DROP TYPE IF EXISTS audit_action_enum"))
+                elif max_len is not None and int(max_len) < 50:
+                    connection.execute(
+                        text("ALTER TABLE audit_logs ALTER COLUMN action TYPE VARCHAR(50)")
+                    )
