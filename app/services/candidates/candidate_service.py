@@ -59,6 +59,8 @@ def update_candidate(db: Session, candidate_id: int, payload: CandidateUpdate) -
     data = payload.model_dump(exclude_unset=True)
     if "candidate_name" in data and data["candidate_name"]:
         data["normalized_name"] = data["candidate_name"].strip().lower()
+    if "client" in data and data["client"]:
+        data["normalized_client"] = data["client"].strip().lower()
 
     # If end_date is set and has passed or is today, automatically inactivate/exclude candidate
     if "end_date" in data and data["end_date"]:
@@ -75,11 +77,17 @@ def update_candidate(db: Session, candidate_id: int, payload: CandidateUpdate) -
                 data["status"] = "Inactive (Excluded)"
             data.setdefault("inactivation_reason", f"Project ended on {end_val}")
 
-    updated = candidate_repository.update_candidate(db, row, data)
-
-    db.commit()
-    db.refresh(updated)
-    return _to_candidate_out(updated)
+    try:
+        updated = candidate_repository.update_candidate(db, row, data)
+        db.commit()
+        db.refresh(updated)
+        return _to_candidate_out(updated)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to update candidate record: {str(e)}",
+        )
 
 
 def list_versions(db: Session, division: Optional[str] = None) -> List[CandidateVersionOut]:
@@ -99,20 +107,29 @@ def create_version(
     payload: CreateVersionRequest,
     uploaded_by: Optional[int] = None,
 ) -> CandidateVersionCreateResponse:
-    version = candidate_repository.create_version(
-        db,
-        version_label=payload.version_label,
-        division=payload.division,
-        source_filename=payload.source_filename,
-        notes=payload.notes,
-        uploaded_by=uploaded_by,
-        row_count=0,
-    )
-    row_dicts = [r.model_dump() for r in payload.rows]
-    created = candidate_repository.create_candidates(db, version, row_dicts)
-    db.commit()
-    db.refresh(version)
-    return CandidateVersionCreateResponse(
-        version=CandidateVersionOut.model_validate(version),
-        created_count=len(created),
-    )
+    try:
+        version = candidate_repository.create_version(
+            db,
+            version_label=payload.version_label,
+            division=payload.division,
+            source_filename=payload.source_filename,
+            notes=payload.notes,
+            uploaded_by=uploaded_by,
+            row_count=len(payload.rows),
+        )
+        row_dicts = [r.model_dump() for r in payload.rows]
+        created = candidate_repository.create_candidates(db, version, row_dicts)
+        version.row_count = len(created)
+        db.commit()
+        db.refresh(version)
+        return CandidateVersionCreateResponse(
+            version=CandidateVersionOut.model_validate(version),
+            created_count=len(created),
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to create candidate version: {str(e)}",
+        )
+

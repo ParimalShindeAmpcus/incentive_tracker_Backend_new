@@ -67,6 +67,8 @@ def init_db() -> None:
     _add_missing(
         "candidates",
         {
+            "activity_id": "VARCHAR(100)",
+            "start_id": "VARCHAR(100)",
             "email": "VARCHAR(255)",
             "end_client": "VARCHAR(255)",
             "markup_percent": "NUMERIC(12, 4)",
@@ -77,6 +79,10 @@ def init_db() -> None:
             "inactivation_reason": "VARCHAR(500)",
         },
     )
+    if "candidates" in inspector.get_table_names():
+        with engine.begin() as connection:
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_activity_id ON candidates (activity_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_start_id ON candidates (start_id)"))
     _add_missing(
         "coordinator_records",
         {
