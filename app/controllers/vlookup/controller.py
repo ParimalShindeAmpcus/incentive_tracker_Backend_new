@@ -136,10 +136,10 @@ def publish_hours(
     db: DbSession,
     user: CurrentUser,
     batch_id: Optional[str] = Query(None),
-    division: Optional[str] = Query("nashik"),
+    division: Optional[str] = Query(None),
     include_review_pending: bool = Query(False),
 ) -> VLookupPublishHoursResponse:
-    """Publish matched VLOOKUP rows into Hours & Benchmark (same data as filled template download)."""
+    """Persist matched VLOOKUP rows into hours_data_versions / hours_rows (DB source of truth)."""
     return vlookup_service.publish_hours_from_batch(
         db,
         batch_id=batch_id,

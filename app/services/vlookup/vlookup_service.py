@@ -623,6 +623,9 @@ def _matched_hours_export_rows(
     if not latest:
         raise HTTPException(status_code=404, detail="No matches found")
 
+    batch = repo.get_batch(db, latest)
+    batch_month = normalize_month_year(str(getattr(batch, "target_month", None) or ""))
+
     statuses = ["matched"]
     if include_review_pending:
         statuses.append("needs_review")
@@ -633,9 +636,11 @@ def _matched_hours_export_rows(
         if not match.template_candidate_id:
             continue
         template = repo.get_template_by_id(db, match.template_candidate_id)
+        # Prefer messy/target month (already often YYYY-MM); normalize template labels like August-2026.
         month_value = (
-            (template.month if template and template.month else None)
-            or match.messy_month
+            normalize_month_year(str(match.messy_month or ""))
+            or normalize_month_year(str(template.month if template and template.month else ""))
+            or batch_month
             or ""
         )
         explanation = match.match_explanation or {}
@@ -705,13 +710,13 @@ def publish_hours_from_batch(
     db: Session,
     *,
     batch_id: Optional[str] = None,
-    division: Optional[str] = "nashik",
+    division: Optional[str] = None,
     include_review_pending: bool = False,
     uploaded_by: Optional[int] = None,
 ) -> VLookupPublishHoursResponse:
     """
-    Push the same matched rows as the filled Hours Template download into Hours & Benchmark
-    (`hours_data_versions` / `hours_rows`) so the Hours page can show them without re-upload.
+    Persist matched VLOOKUP rows into Hours & Benchmark tables
+    (`hours_data_versions` / `hours_rows`). This is the DB source of truth for Hours Worked.
     """
     latest, data = _matched_hours_export_rows(
         db, batch_id=batch_id, include_review_pending=include_review_pending
@@ -722,37 +727,47 @@ def publish_hours_from_batch(
             detail="No matched hours rows to publish. Accept matches first.",
         )
 
-    rows: List[HoursRowIn] = []
+    rows_by_key: Dict[str, HoursRowIn] = {}
     month_keys: List[str] = []
+    skipped_no_month: List[str] = []
     for item in data:
         external_id = str(item.get("Candidate ID") or "").strip()
         if not external_id:
             continue
         month_raw = str(item.get("Month") or "").strip()
-        month_key = normalize_month_year(month_raw) or None
-        if month_key:
-            month_keys.append(month_key)
+        month_key = normalize_month_year(month_raw)
+        if not month_key:
+            skipped_no_month.append(external_id)
+            continue
+        month_keys.append(month_key)
         hours_raw = item.get("Hours Worked")
         try:
             hours_worked = Decimal(str(hours_raw if hours_raw is not None else 0))
         except Exception:
             hours_worked = Decimal("0")
-        rows.append(
-            HoursRowIn(
-                external_candidate_id=external_id,
-                hours_worked=hours_worked,
-                month_key=month_key,
-                client=str(item.get("Client Name") or "") or None,
-                raw_candidate_name=str(item.get("Candidate Name") or "") or None,
-            )
+        client = str(item.get("Client Name") or "").strip() or None
+        # Latest matched row wins for Candidate ID + Client + Month
+        dedupe_key = f"{external_id.lower()}::{(client or '').lower()}::{month_key}"
+        rows_by_key[dedupe_key] = HoursRowIn(
+            external_candidate_id=external_id,
+            hours_worked=hours_worked,
+            month_key=month_key,
+            client=client,
+            raw_candidate_name=str(item.get("Candidate Name") or "") or None,
         )
 
+    rows = list(rows_by_key.values())
     if not rows:
-        raise HTTPException(status_code=400, detail="No valid Candidate IDs found to publish.")
+        detail_parts = ["No valid Candidate ID + Month rows to publish."]
+        if skipped_no_month:
+            detail_parts.append(
+                "Missing/invalid month for Candidate ID(s): "
+                + ", ".join(sorted(set(skipped_no_month))[:20])
+            )
+        raise HTTPException(status_code=400, detail=" ".join(detail_parts))
 
-    primary_month = Counter(month_keys).most_common(1)[0][0] if month_keys else None
-    label_month = primary_month or "hours"
-    version_label = f"VLOOKUP {label_month} ({latest[:8]})"
+    primary_month = Counter(month_keys).most_common(1)[0][0]
+    version_label = f"VLOOKUP {primary_month} ({latest[:8]})"
     payload = CreateHoursVersionRequest(
         version_label=version_label,
         division=division,

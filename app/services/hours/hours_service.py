@@ -1,5 +1,6 @@
 """Hours service."""
 
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import HTTPException, status
@@ -13,17 +14,52 @@ from app.models.hours.schemas import (
     HoursRowIn,
     HoursRowOut,
     HoursVersionDetail,
+    PublishedHoursOut,
     VersionMetaOut,
 )
 from app.repositories.candidates import candidate_repository
 from app.repositories.entities.hours import HoursRow
 from app.repositories.hours import hours_repository
-from decimal import Decimal
+from app.services.vlookup.normalization import normalize_month_year
 
 
 def list_versions(db: Session, division: Optional[str] = None) -> List[VersionMetaOut]:
     rows = hours_repository.list_versions(db, division=division)
     return [VersionMetaOut.model_validate(r) for r in rows]
+
+
+def get_published_for_month(db: Session, month: str) -> PublishedHoursOut:
+    """
+    Return hours_rows from the latest published hours_data_versions that contains
+    rows for the given Incentive Month (YYYY-MM). Does not combine multiple versions.
+    """
+    month_key = normalize_month_year(month) or (month or "").strip()
+    if not month_key or len(month_key) != 7:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="month must be a valid YYYY-MM value (e.g. 2026-08)",
+        )
+    version_id = hours_repository.get_latest_version_id_for_month(db, month_key)
+    if version_id is None:
+        return PublishedHoursOut(month_key=month_key, version=None, rows=[])
+    version = hours_repository.get_version(db, version_id)
+    rows = hours_repository.list_rows_for_version_month(db, version_id, month_key)
+    # Deduplicate by external candidate id + client (latest row id wins)
+    by_key: dict[str, HoursRow] = {}
+    for row in rows:
+        ext = ""
+        if row.candidate is not None:
+            ext = (row.candidate.external_candidate_id or "").strip().lower()
+        client = (row.client or "").strip().lower()
+        key = f"{ext}::{client}" if client else ext
+        existing = by_key.get(key)
+        if existing is None or row.id >= existing.id:
+            by_key[key] = row
+    return PublishedHoursOut(
+        month_key=month_key,
+        version=VersionMetaOut.model_validate(version) if version else None,
+        rows=[_row_out(r) for r in by_key.values()],
+    )
 
 
 def _row_out(row: HoursRow) -> HoursRowOut:
@@ -95,17 +131,55 @@ def create_version(
     payload: CreateHoursVersionRequest,
     uploaded_by: Optional[int] = None,
 ) -> HoursVersionDetail:
-    resolved_rows = [_resolve_row_payload(db, r) for r in payload.rows]
-    version = hours_repository.create_version(
-        db,
-        version_label=payload.version_label,
-        division=payload.division,
-        source_filename=payload.source_filename,
-        notes=payload.notes,
-        uploaded_by=uploaded_by,
-    )
-    hours_repository.create_rows(db, version, resolved_rows)
-    db.commit()
+    # Normalize month keys before persist so Hours & Benchmark can query by YYYY-MM.
+    normalized_rows: List[HoursRowIn] = []
+    for row in payload.rows:
+        month_key = normalize_month_year(row.month_key or "") if row.month_key else None
+        if row.month_key and not month_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid month_key for Candidate ID {row.external_candidate_id or row.candidate_id}: {row.month_key}",
+            )
+        data = row.model_dump()
+        data["month_key"] = month_key
+        normalized_rows.append(HoursRowIn(**data))
+
+    # Validate all candidates first — fail closed (no partial publish).
+    unknown: List[str] = []
+    resolved_rows = []
+    for row in normalized_rows:
+        try:
+            resolved_rows.append(_resolve_row_payload(db, row))
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_400_BAD_REQUEST:
+                unknown.append(str(row.external_candidate_id or row.candidate_id or "?"))
+            else:
+                raise
+    if unknown:
+        uniq = sorted({u for u in unknown if u})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Unknown Candidate ID(s) — upload candidates first before publishing hours: "
+                + ", ".join(uniq[:25])
+                + ("…" if len(uniq) > 25 else "")
+            ),
+        )
+
+    try:
+        version = hours_repository.create_version(
+            db,
+            version_label=payload.version_label,
+            division=payload.division,
+            source_filename=payload.source_filename,
+            notes=payload.notes,
+            uploaded_by=uploaded_by,
+        )
+        hours_repository.create_rows(db, version, resolved_rows)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return get_version_detail(db, version.id)
 
 

@@ -94,39 +94,108 @@ def normalize_phone(phone: Optional[str]) -> str:
     return digits.ljust(10, "0")[:10]
 
 
+_MONTH_NAME_TO_NUM = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+
 def normalize_month_year(month_date_str: str) -> str:
     """
     Convert various date formats to YYYY-MM string.
 
-    Input examples: "5/2026", "2026-05", "May 2026", "05/2026"
-    Output: "2026-05"
+    Input examples: "5/2026", "2026-05", "May 2026", "August-2026", "05/2026"
+    Output: "2026-05" (empty string when unparseable)
     """
     if not month_date_str:
         return ""
 
-    month_date_str = str(month_date_str).strip()
+    text = str(month_date_str).strip()
+    if not text or text.lower() == "nan":
+        return ""
 
-    if "/" in month_date_str:
-        parts = month_date_str.split("/")
+    # Already YYYY-MM
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})", text)
+    if m:
+        year = int(m.group(1))
+        month = int(m.group(2))
+        if 1 <= month <= 12:
+            return f"{year:04d}-{month:02d}"
+        return ""
+
+    # M/YYYY or MM/YYYY
+    if "/" in text:
+        parts = text.split("/")
         if len(parts) == 2:
             try:
-                month = int(parts[0])
-                year = int(parts[1])
-                return f"{year:04d}-{month:02d}"
+                a = int(parts[0])
+                b = int(parts[1])
+                if a > 31 and 1 <= b <= 12:
+                    year, month = a, b
+                else:
+                    month, year = a, b
+                if 1 <= month <= 12 and year > 31:
+                    return f"{year:04d}-{month:02d}"
             except ValueError:
                 pass
 
-    if "-" in month_date_str:
-        parts = month_date_str.split("-")
-        if len(parts) == 2:
-            try:
-                year = int(parts[0])
-                month = int(parts[1])
-                return f"{year:04d}-{month:02d}"
-            except ValueError:
-                pass
+    # Month-YYYY / Month YYYY / Mon-YYYY
+    m = re.fullmatch(r"([A-Za-z]+)\s*[-/ ]\s*(\d{4})", text)
+    if m:
+        month = _MONTH_NAME_TO_NUM.get(m.group(1).lower())
+        if month:
+            return f"{int(m.group(2)):04d}-{month:02d}"
 
-    return month_date_str
+    # YYYY Month
+    m = re.fullmatch(r"(\d{4})\s+([A-Za-z]+)", text)
+    if m:
+        month = _MONTH_NAME_TO_NUM.get(m.group(2).lower())
+        if month:
+            return f"{int(m.group(1)):04d}-{month:02d}"
+
+    # Legacy: "YYYY-MonthName" was previously returned unchanged — reject non YYYY-MM
+    if "-" in text:
+        parts = text.split("-")
+        if len(parts) == 2:
+            left, right = parts[0].strip(), parts[1].strip()
+            if left.isdigit() and right.isdigit():
+                try:
+                    year = int(left)
+                    month = int(right)
+                    if 1 <= month <= 12:
+                        return f"{year:04d}-{month:02d}"
+                except ValueError:
+                    pass
+            month = _MONTH_NAME_TO_NUM.get(left.lower())
+            if month and right.isdigit():
+                return f"{int(right):04d}-{month:02d}"
+            month = _MONTH_NAME_TO_NUM.get(right.lower())
+            if month and left.isdigit():
+                return f"{int(left):04d}-{month:02d}"
+
+    return ""
 
 
 def normalize_client_name(client: Optional[str]) -> str:

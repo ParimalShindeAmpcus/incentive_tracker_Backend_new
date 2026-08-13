@@ -24,6 +24,30 @@ def get_version(db: Session, version_id: int) -> Optional[HoursDataVersion]:
     )
 
 
+def get_latest_version_id_for_month(db: Session, month_key: str) -> Optional[int]:
+    """Newest hours_data_versions.id that has at least one hours_rows row for month_key."""
+    row = (
+        db.query(HoursDataVersion.id)
+        .join(HoursRow, HoursRow.version_id == HoursDataVersion.id)
+        .filter(HoursRow.month_key == month_key)
+        .order_by(HoursDataVersion.id.desc())
+        .first()
+    )
+    return int(row[0]) if row else None
+
+
+def list_rows_for_version_month(
+    db: Session, version_id: int, month_key: str
+) -> List[HoursRow]:
+    return (
+        db.query(HoursRow)
+        .options(joinedload(HoursRow.candidate))
+        .filter(HoursRow.version_id == version_id, HoursRow.month_key == month_key)
+        .order_by(HoursRow.id.asc())
+        .all()
+    )
+
+
 def create_version(
     db: Session,
     *,

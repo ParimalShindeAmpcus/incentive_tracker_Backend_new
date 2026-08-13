@@ -35,9 +35,21 @@ def get_candidate(db: Session, candidate_id: int) -> Optional[Candidate]:
 
 
 def get_candidate_by_external_id(db: Session, external_candidate_id: str) -> Optional[Candidate]:
+    ext = (external_candidate_id or "").strip()
+    if not ext:
+        return None
+    row = (
+        db.query(Candidate)
+        .filter(Candidate.external_candidate_id == ext)
+        .order_by(Candidate.id.desc())
+        .first()
+    )
+    if row is not None:
+        return row
+    # Case-insensitive / whitespace-tolerant fallback (VLOOKUP template IDs)
     return (
         db.query(Candidate)
-        .filter(Candidate.external_candidate_id == external_candidate_id)
+        .filter(func.lower(Candidate.external_candidate_id) == ext.lower())
         .order_by(Candidate.id.desc())
         .first()
     )

@@ -11,6 +11,7 @@ from app.models.hours.schemas import (
     HoursRowHoursUpdate,
     HoursRowOut,
     HoursVersionDetail,
+    PublishedHoursOut,
     VersionMetaOut,
 )
 from app.services.common.deps import CurrentUser, DbSession
@@ -23,6 +24,15 @@ benchmarks_router = APIRouter()
 @router.get("/versions", response_model=List[VersionMetaOut])
 def list_versions(db: DbSession, division: Optional[str] = Query(None)) -> List[VersionMetaOut]:
     return hours_service.list_versions(db, division=division)
+
+
+@router.get("/published", response_model=PublishedHoursOut)
+def get_published_hours(
+    db: DbSession,
+    month: str = Query(..., description="Incentive month as YYYY-MM (e.g. 2026-08)"),
+) -> PublishedHoursOut:
+    """Latest published hours_rows for the selected Incentive Month (DB source of truth)."""
+    return hours_service.get_published_for_month(db, month)
 
 
 @router.get("/versions/{version_id}", response_model=HoursVersionDetail)

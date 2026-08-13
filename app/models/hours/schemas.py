@@ -44,6 +44,14 @@ class HoursVersionDetail(BaseModel):
     rows: List[HoursRowOut]
 
 
+class PublishedHoursOut(BaseModel):
+    """Latest published hours_rows for a given Incentive Month (YYYY-MM)."""
+
+    month_key: str
+    version: Optional[VersionMetaOut] = None
+    rows: List[HoursRowOut] = Field(default_factory=list)
+
+
 class HoursRowIn(BaseModel):
     """Accept either DB candidate_id or Excel external_candidate_id (Candidate ID column)."""
 
