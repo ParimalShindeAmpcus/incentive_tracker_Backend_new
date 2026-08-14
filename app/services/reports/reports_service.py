@@ -126,7 +126,7 @@ def get_report(
     for item in raw:
         mapped = _to_row(item)
         if team and team != "ALL":
-            if mapped.team.strip() != team.strip() and mapped.coordinator_name.strip() != team.strip():
+            if mapped.team.strip() != team.strip():
                 continue
         rows.append(mapped)
 
@@ -154,6 +154,4 @@ def list_teams(
     for r in report.rows:
         if r.team and r.team.strip():
             names.add(r.team.strip())
-        if r.coordinator_name and r.coordinator_name.strip():
-            names.add(r.coordinator_name.strip())
     return ReportTeamsResponse(teams=sorted(names, key=lambda s: s.lower()))
