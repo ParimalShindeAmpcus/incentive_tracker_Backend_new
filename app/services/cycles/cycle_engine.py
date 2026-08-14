@@ -1,0 +1,270 @@
+"""End-to-end cycle calculation: hours rows → name-first match → Candidate Master → IncentiveLines."""
+
+from __future__ import annotations
+
+import json
+from collections import defaultdict
+from decimal import Decimal
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from sqlalchemy.orm import Session
+
+from app.repositories.candidates import candidate_repository
+from app.repositories.cycles import cycle_repository
+from app.repositories.entities.candidate import Candidate
+from app.repositories.entities.cycle import MatchResult
+from app.repositories.incentives import incentive_repository
+from app.services.cycles.hours_name_matcher import (
+    ID_FALLBACK,
+    NAME_AND_ID,
+    NAME_ID_MISMATCH,
+    UNMATCHED,
+    HoursMatchRow,
+    MasterCandidate,
+    build_id_index,
+    build_name_index,
+    match_hours_row,
+)
+from app.services.incentives.nashik_calculator import (
+    CycleWindow,
+    LineDraft,
+    PlacementInput,
+    calculate_nashik_placement,
+)
+from app.services.incentives.nashik_rules import is_nashik_division
+
+
+def _to_master(cand: Candidate) -> MasterCandidate:
+    return MasterCandidate(
+        pk=cand.id,
+        name=cand.candidate_name or "",
+        external_id=cand.external_candidate_id or "",
+        start_id=cand.start_id or "",
+        activity_id=cand.activity_id or "",
+    )
+
+
+def _placement(cand: Candidate, hours: Decimal, window: CycleWindow) -> PlacementInput:
+    end_date = cand.end_date
+    return PlacementInput(
+        candidate_pk=cand.id,
+        external_id=cand.external_candidate_id or cand.start_id or "",
+        name=cand.candidate_name,
+        contract_type=cand.contract_type,
+        candidate_source=cand.candidate_source,
+        organization=cand.organization,
+        recruiter_location=cand.recruiter_location,
+        start_date=cand.start_date,
+        end_date=end_date,
+        margin=cand.margin,
+        hours=hours,
+        recruiter=cand.recruiter,
+        team_lead=cand.team_lead,
+        crm=cand.crm,
+        manager=cand.manager,
+        senior_manager=cand.senior_manager,
+        associate_director=cand.associate_director,
+        center_head=cand.center_head,
+        avp=cand.avp,
+        incentive_active=bool(cand.incentive_active),
+        project_ended=end_date is not None and end_date <= window.end,
+    )
+
+
+def _ineligible_line(
+    *,
+    candidate_pk: Optional[int],
+    name: str,
+    hours: Decimal,
+    reason: str,
+    rule: str,
+) -> LineDraft:
+    return LineDraft(
+        candidate_id=candidate_pk,
+        candidate_name=name,
+        role="Recruiter",
+        person="—",
+        incentive_type="RECURRING",
+        rule_applied=rule,
+        eligible=False,
+        base_incentive=Decimal("0"),
+        pro_rata_factor=Decimal("0"),
+        amount=Decimal("0"),
+        hours=hours,
+        margin=None,
+        reason=reason,
+        explanation=[reason],
+    )
+
+
+def run_cycle_calculation(
+    db: Session,
+    cycle,
+    hours_rows: Sequence[HoursMatchRow],
+    window: CycleWindow,
+) -> Tuple[List[LineDraft], dict, List[dict], List[dict]]:
+    masters = candidate_repository.list_all_candidates(db)
+    if cycle.division:
+        division_masters = [c for c in masters if (c.division or "") == cycle.division]
+        if division_masters:
+            masters = division_masters
+    master_objs = [_to_master(c) for c in masters]
+    by_pk = {c.id: c for c in masters}
+    by_name = build_name_index(master_objs)
+    by_id = build_id_index(master_objs)
+
+    stats = {
+        "total_hours_rows": len(hours_rows),
+        "matched_name_and_id": 0,
+        "matched_id_fallback": 0,
+        "name_id_mismatch": 0,
+        "unmatched": 0,
+        "inactive": 0,
+        "already_paid": 0,
+    }
+    match_rows: List[dict] = []
+    hours_by_pk: Dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
+    matched_pks: Dict[int, str] = {}
+    ineligible: List[LineDraft] = []
+
+    for row in hours_rows:
+        decision = match_hours_row(row, by_name, by_id)
+        hours = Decimal(str(row.hours or 0))
+        method = decision.status
+        accepted = decision.matched
+        result = MatchResult.MATCHED if accepted else (
+            MatchResult.UNMATCHED if decision.status == UNMATCHED else MatchResult.REJECTED
+        )
+        if decision.status == NAME_AND_ID:
+            stats["matched_name_and_id"] += 1
+        elif decision.status == ID_FALLBACK:
+            stats["matched_id_fallback"] += 1
+        elif decision.status == NAME_ID_MISMATCH:
+            stats["name_id_mismatch"] += 1
+        else:
+            stats["unmatched"] += 1
+
+        match_rows.append(
+            {
+                "source_row_ref": str(row.source_row),
+                "source_candidate_name": row.uploaded_name,
+                "source_candidate_id": row.uploaded_id,
+                "source_client": row.client,
+                "hours_worked": hours,
+                "candidate_id": decision.master.pk if decision.master else None,
+                "match_method": method,
+                "match_result": result,
+                "confidence": "HIGH" if method == NAME_AND_ID else ("MEDIUM" if method == ID_FALLBACK else "LOW"),
+                "accepted": accepted,
+                "notes": decision.warning or decision.reason,
+            }
+        )
+
+        if not accepted:
+            ineligible.append(
+                _ineligible_line(
+                    candidate_pk=decision.master.pk if decision.master else None,
+                    name=row.uploaded_name or row.uploaded_id or "Unknown",
+                    hours=hours,
+                    reason=decision.reason,
+                    rule=decision.status,
+                )
+            )
+            continue
+
+        hours_by_pk[decision.master.pk] += hours
+        matched_pks[decision.master.pk] = decision.status
+
+    paid_keys = incentive_repository.paid_one_time_keys(db, cycle.id)
+    lines: List[LineDraft] = list(ineligible)
+    for pk, hours in hours_by_pk.items():
+        cand = by_pk[pk]
+        if cand.incentive_active is False:
+            stats["inactive"] += 1
+            lines.append(
+                _ineligible_line(
+                    candidate_pk=pk,
+                    name=cand.candidate_name,
+                    hours=hours,
+                    reason="Inactive Candidate",
+                    rule="INELIGIBLE",
+                )
+            )
+            continue
+        if not is_nashik_division(cycle.division):
+            lines.append(
+                _ineligible_line(
+                    candidate_pk=pk,
+                    name=cand.candidate_name,
+                    hours=hours,
+                    reason=f"Division {cycle.division} calculation is not implemented in this engine",
+                    rule="UNSUPPORTED_DIVISION",
+                )
+            )
+            continue
+        drafts = calculate_nashik_placement(_placement(cand, hours, window), window, paid_keys)
+        for draft in drafts:
+            payload = {
+                "division": "Nashik",
+                "contract_type": cand.contract_type,
+                "start_date": cand.start_date.isoformat() if cand.start_date else None,
+                "candidate_id": cand.start_id or cand.external_candidate_id,
+                "external_candidate_id": cand.external_candidate_id,
+                "candidate_name": cand.candidate_name,
+                "candidate_source": cand.candidate_source or cand.organization,
+                "role": draft.role,
+                "person": draft.person,
+                "margin_per_hour": float(cand.margin) if cand.margin is not None else None,
+                "hours": float(hours),
+                "benchmark_hours": 160,
+                "base_incentive": float(draft.base_incentive),
+                "pro_rata_factor": float(draft.pro_rata_factor),
+                "final_amount": float(draft.amount),
+                "eligible": draft.eligible,
+                "rule": draft.rule_applied,
+                "match_method": matched_pks.get(pk),
+                "notes": draft.explanation,
+            }
+            draft.explanation = [json.dumps(payload)]
+            if (not draft.eligible) and "already paid" in (draft.reason or "").lower():
+                stats["already_paid"] += 1
+            lines.append(draft)
+
+    validations = [
+        {
+            "check_key": "matched_name_and_id",
+            "severity": "GREEN",
+            "message": "Matched by Candidate Name + Candidate ID",
+            "count": stats["matched_name_and_id"],
+            "details_json": None,
+        },
+        {
+            "check_key": "matched_id_fallback",
+            "severity": "YELLOW" if stats["matched_id_fallback"] else "GREEN",
+            "message": "Matched by Candidate ID because Candidate Name did not match",
+            "count": stats["matched_id_fallback"],
+            "details_json": None,
+        },
+        {
+            "check_key": "name_id_mismatch",
+            "severity": "RED" if stats["name_id_mismatch"] else "GREEN",
+            "message": "Candidate Name matched but Candidate ID does not match Candidate Master",
+            "count": stats["name_id_mismatch"],
+            "details_json": None,
+        },
+        {
+            "check_key": "unmatched",
+            "severity": "RED" if stats["unmatched"] else "GREEN",
+            "message": "Candidate Name and Candidate ID could not be matched with Candidate Master",
+            "count": stats["unmatched"],
+            "details_json": None,
+        },
+        {
+            "check_key": "inactive",
+            "severity": "YELLOW" if stats["inactive"] else "GREEN",
+            "message": "Inactive Candidate",
+            "count": stats["inactive"],
+            "details_json": None,
+        },
+    ]
+    return lines, stats, match_rows, validations

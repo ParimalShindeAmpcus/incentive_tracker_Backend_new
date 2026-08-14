@@ -199,6 +199,34 @@ def list_lines(db: Session, cycle_id: int) -> List[IncentiveLine]:
     )
 
 
+def replace_matches(db: Session, cycle_id: int, rows: List[dict]) -> List[CycleHoursMatch]:
+    db.query(CycleHoursMatch).filter(CycleHoursMatch.cycle_id == cycle_id).delete(synchronize_session=False)
+    created: List[CycleHoursMatch] = []
+    for data in rows:
+        payload = dict(data)
+        raw_result = payload.get("match_result")
+        if isinstance(raw_result, str):
+            payload["match_result"] = MatchResult(raw_result)
+        row = CycleHoursMatch(cycle_id=cycle_id, **payload)
+        db.add(row)
+        created.append(row)
+    db.flush()
+    return created
+
+
+def replace_validations(db: Session, cycle_id: int, rows: List[dict]) -> List[CycleValidationResult]:
+    db.query(CycleValidationResult).filter(CycleValidationResult.cycle_id == cycle_id).delete(
+        synchronize_session=False
+    )
+    created: List[CycleValidationResult] = []
+    for data in rows:
+        row = CycleValidationResult(cycle_id=cycle_id, **data)
+        db.add(row)
+        created.append(row)
+    db.flush()
+    return created
+
+
 def summary_counts(db: Session, cycle_id: int) -> dict:
     match_count = db.query(func.count(CycleHoursMatch.id)).filter(CycleHoursMatch.cycle_id == cycle_id).scalar() or 0
     validation_count = (

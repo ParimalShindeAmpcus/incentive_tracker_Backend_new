@@ -30,6 +30,27 @@ def list_candidates(
     return rows, total
 
 
+def list_all_candidates(db: Session, *, division: Optional[str] = None) -> List[Candidate]:
+    q = db.query(Candidate)
+    if division:
+        q = q.filter(Candidate.division == division)
+    return q.order_by(Candidate.id).all()
+
+
+def list_candidates_for_cycle(
+    db: Session,
+    *,
+    division: Optional[str] = None,
+    version_id: Optional[int] = None,
+) -> List[Candidate]:
+    q = db.query(Candidate)
+    if version_id:
+        q = q.filter(Candidate.source_version_id == version_id)
+    elif division:
+        q = q.filter(Candidate.division == division)
+    return q.order_by(Candidate.id).all()
+
+
 def get_candidate(db: Session, candidate_id: int) -> Optional[Candidate]:
     return db.query(Candidate).filter(Candidate.id == candidate_id).first()
 
@@ -172,6 +193,8 @@ def create_candidates(
                 existing.end_client = row.get("end_client")
             if row.get("job_title"):
                 existing.job_title = row.get("job_title")
+            if row.get("start_date"):
+                existing.start_date = row.get("start_date")
             if row.get("end_date"):
                 end_d = row.get("end_date")
                 existing.end_date = end_d

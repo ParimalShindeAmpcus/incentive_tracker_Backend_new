@@ -108,44 +108,86 @@ def _seed_nashik_slabs(db: Session) -> None:
     existing = incentive_repository.list_slabs(db, division="nashik")
     if existing:
         return
-    samples = [
+    from decimal import Decimal as D
+
+    recruiter = [
+        (D("1.00"), D("2.00"), D("500")),
+        (D("2.01"), D("4.00"), D("1000")),
+        (D("4.01"), D("6.00"), D("1500")),
+        (D("6.01"), D("8.00"), D("2000")),
+        (D("8.01"), D("10.00"), D("2500")),
+        (D("10.01"), D("15.00"), D("3500")),
+        (D("15.01"), D("20.00"), D("4000")),
+        (D("20.01"), D("30.00"), D("4500")),
+        (D("30.01"), D("40.00"), D("7000")),
+        (D("40.01"), D("50.00"), D("10000")),
+    ]
+    samples = []
+    for lo, hi, amount in recruiter:
+        samples.append(
+            {
+                "division": "nashik",
+                "slab_type": "MARGIN",
+                "role": "RECRUITER",
+                "margin_min": lo,
+                "margin_max": hi,
+                "hours_min": None,
+                "hours_max": None,
+                "amount": amount,
+                "effective_from": date(2024, 1, 1),
+                "is_active": True,
+            }
+        )
+    samples.append(
         {
             "division": "nashik",
-            "slab_type": "MARGIN",
+            "slab_type": "LOW_MARGIN_ONE_TIME",
             "role": "RECRUITER",
-            "margin_min": Decimal("10"),
-            "margin_max": Decimal("20"),
+            "margin_min": D("0"),
+            "margin_max": D("0.99"),
             "hours_min": None,
             "hours_max": None,
-            "amount": Decimal("5000"),
+            "amount": D("2000"),
             "effective_from": date(2024, 1, 1),
             "is_active": True,
-        },
+        }
+    )
+    samples.append(
         {
             "division": "nashik",
-            "slab_type": "MARGIN",
-            "role": "RECRUITER",
-            "margin_min": Decimal("20"),
-            "margin_max": Decimal("30"),
-            "hours_min": None,
-            "hours_max": None,
-            "amount": Decimal("8000"),
-            "effective_from": date(2024, 1, 1),
-            "is_active": True,
-        },
-        {
-            "division": "nashik",
-            "slab_type": "HOURS",
+            "slab_type": "RECURRING",
             "role": "TEAM_LEAD",
             "margin_min": None,
             "margin_max": None,
-            "hours_min": Decimal("160"),
+            "hours_min": D("0"),
             "hours_max": None,
-            "amount": Decimal("3000"),
+            "amount": D("250"),
             "effective_from": date(2024, 1, 1),
             "is_active": True,
-        },
-    ]
+        }
+    )
+    for role, amount in [
+        ("CRM", D("1000")),
+        ("MANAGER", D("1500")),
+        ("SENIOR_MANAGER", D("1500")),
+        ("ASSOCIATE_DIRECTOR", D("1750")),
+        ("CENTER_HEAD", D("1500")),
+        ("AVP", D("2300")),
+    ]:
+        samples.append(
+            {
+                "division": "nashik",
+                "slab_type": "LEADERSHIP_ONE_TIME",
+                "role": role,
+                "margin_min": None,
+                "margin_max": None,
+                "hours_min": D("160"),
+                "hours_max": None,
+                "amount": amount,
+                "effective_from": date(2024, 1, 1),
+                "is_active": True,
+            }
+        )
     for data in samples:
         incentive_repository.create_slab(db, data)
 

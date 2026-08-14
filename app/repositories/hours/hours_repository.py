@@ -36,6 +36,16 @@ def get_latest_version_id_for_month(db: Session, month_key: str) -> Optional[int
     return int(row[0]) if row else None
 
 
+def list_rows_for_version(db: Session, version_id: int) -> List[HoursRow]:
+    return (
+        db.query(HoursRow)
+        .options(joinedload(HoursRow.candidate))
+        .filter(HoursRow.version_id == version_id)
+        .order_by(HoursRow.id.asc())
+        .all()
+    )
+
+
 def list_rows_for_version_month(
     db: Session, version_id: int, month_key: str
 ) -> List[HoursRow]:

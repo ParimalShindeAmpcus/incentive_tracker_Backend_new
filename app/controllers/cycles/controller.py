@@ -2,18 +2,20 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Query, UploadFile
 
 from app.models.cycles.schemas import (
     AdjustmentCreate,
     AdjustmentOut,
     ApproveRequest,
+    CalculateResult,
     ChecklistOut,
     ChecklistUpdate,
     CycleCreate,
     CycleOut,
     CycleSummary,
     CycleUpdate,
+    HoursUploadOut,
     MatchOut,
     MatchUpdate,
     PaymentStatusOut,
@@ -128,16 +130,29 @@ def post_adjustment(
     return cycle_service.create_adjustment(db, cycle_id, payload, created_by=user.id)
 
 
+@router.post("/{cycle_id}/hours-upload", response_model=HoursUploadOut)
+async def upload_hours(
+    cycle_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> HoursUploadOut:
+    _ = user
+    content = await file.read()
+    return cycle_service.upload_hours_file(db, cycle_id, file.filename or "hours.xlsx", content)
+
+
 @router.post("/{cycle_id}/approve", response_model=CycleOut)
 def approve(cycle_id: int, payload: ApproveRequest, db: DbSession, user: CurrentUser) -> CycleOut:
     return cycle_service.approve_cycle(db, cycle_id, payload, user_id=user.id)
 
 
-@router.post("/{cycle_id}/calculate", response_model=CycleOut)
-def calculate(cycle_id: int, db: DbSession, user: CurrentUser) -> CycleOut:
+@router.post("/{cycle_id}/calculate", response_model=CalculateResult)
+def calculate(cycle_id: int, db: DbSession, user: CurrentUser) -> CalculateResult:
+    _ = user
     return cycle_service.calculate_cycle(db, cycle_id)
 
 
 @router.get("/{cycle_id}/export")
-def export_cycle(cycle_id: int, db: DbSession) -> dict:
-    return cycle_service.export_cycle_stub(db, cycle_id)
+def export_cycle(cycle_id: int, db: DbSession):
+    return cycle_service.export_cycle(db, cycle_id)

@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.repositories.entities.cycle import CycleStatus, IncentiveCycle
 from app.repositories.entities.incentive import IncentiveLine, IncentivePayment, IncentiveSlab
 
 
@@ -39,6 +40,37 @@ def create_payment(db: Session, data: dict) -> IncentivePayment:
     db.add(row)
     db.flush()
     return row
+
+
+def replace_cycle_lines(db: Session, cycle_id: int, rows: List[dict]) -> List[IncentiveLine]:
+    db.query(IncentiveLine).filter(IncentiveLine.cycle_id == cycle_id).delete(synchronize_session=False)
+    created: List[IncentiveLine] = []
+    for data in rows:
+        line = IncentiveLine(cycle_id=cycle_id, **data)
+        db.add(line)
+        created.append(line)
+    db.flush()
+    return created
+
+
+def paid_one_time_keys(db: Session, exclude_cycle_id: int) -> set[str]:
+    rows = (
+        db.query(IncentiveLine)
+        .join(IncentiveCycle, IncentiveCycle.id == IncentiveLine.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            IncentiveLine.eligible.is_(True),
+            IncentiveLine.incentive_type.in_(["ONE_TIME", "SPECIAL", "FULL_TIME", "INHOUSE"]),
+            IncentiveLine.amount > 0,
+        )
+        .all()
+    )
+    keys: set[str] = set()
+    for row in rows:
+        person = (row.person or "").strip().lower()
+        keys.add(f"{row.candidate_id}|{row.incentive_type}|{row.role}|{person}")
+    return keys
 
 
 def list_payments(db: Session, line_id: Optional[int] = None) -> List[IncentivePayment]:

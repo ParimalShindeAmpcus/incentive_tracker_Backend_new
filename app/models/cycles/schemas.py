@@ -6,6 +6,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from app.models.incentives.schemas import IncentiveLineOut
+
 
 class CycleCreate(BaseModel):
     name: str
@@ -178,3 +180,29 @@ class ApproveRequest(BaseModel):
 
 class CalculateRequest(BaseModel):
     force: bool = False
+
+
+class MatchStatsOut(BaseModel):
+    total_hours_rows: int = 0
+    matched_name_and_id: int = 0
+    matched_id_fallback: int = 0
+    name_id_mismatch: int = 0
+    unmatched: int = 0
+    inactive: int = 0
+    already_paid: int = 0
+
+
+class CalculateResult(BaseModel):
+    cycle: CycleOut
+    stats: MatchStatsOut
+    line_count: int
+    eligible_line_count: int
+    total_amount: Decimal
+    lines: List[IncentiveLineOut]
+    validations: List[ValidationOut]
+
+
+class HoursUploadOut(BaseModel):
+    cycle_id: int
+    row_count: int
+    message: str

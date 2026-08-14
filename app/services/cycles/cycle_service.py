@@ -1,30 +1,46 @@
 """Cycle service — orchestration."""
 
-from datetime import datetime, timezone
-from typing import List, Optional
+import calendar
+import io
+import json
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Any, List, Optional
 
 from fastapi import HTTPException, status
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from sqlalchemy.orm import Session
 
 from app.models.cycles.schemas import (
     AdjustmentCreate,
     AdjustmentOut,
     ApproveRequest,
+    CalculateResult,
     ChecklistOut,
     ChecklistUpdate,
     CycleCreate,
     CycleOut,
     CycleSummary,
     CycleUpdate,
+    HoursUploadOut,
     MatchOut,
+    MatchStatsOut,
     MatchUpdate,
     PaymentStatusOut,
     PaymentStatusUpdate,
     ValidationOut,
 )
 from app.models.incentives.schemas import IncentiveLineOut
+from app.repositories.candidates import candidate_repository
 from app.repositories.cycles import cycle_repository
 from app.repositories.entities.cycle import CycleStatus
+from app.repositories.hours import hours_repository
+from app.repositories.incentives import incentive_repository
+from app.services.cycles.cycle_engine import run_cycle_calculation
+from app.services.cycles.hours_name_matcher import HoursMatchRow
+from app.services.cycles.hours_template_parser import parse_hours_template
+from app.services.incentives.nashik_calculator import CycleWindow
 
 
 def create_cycle(db: Session, payload: CycleCreate, created_by: Optional[int] = None) -> CycleOut:
@@ -215,19 +231,269 @@ def approve_cycle(
     return CycleOut.model_validate(cycle)
 
 
-def calculate_cycle(db: Session, cycle_id: int) -> CycleOut:
-    """Stub: flip status to CALCULATED without running the full engine."""
+def upload_hours_file(db: Session, cycle_id: int, filename: str, content: bytes) -> HoursUploadOut:
     cycle = _require_cycle(db, cycle_id)
+    rows = parse_hours_template(content, filename)
+    cycle_repository.replace_matches(
+        db,
+        cycle.id,
+        [
+            {
+                "source_row_ref": str(row.source_row),
+                "source_candidate_name": row.uploaded_name,
+                "source_candidate_id": row.uploaded_id,
+                "source_client": row.client,
+                "hours_worked": Decimal(str(row.hours or 0)),
+                "candidate_id": None,
+                "match_method": None,
+                "match_result": "UNMATCHED",
+                "confidence": None,
+                "accepted": False,
+                "notes": None,
+            }
+            for row in rows
+        ],
+    )
+    db.commit()
+    return HoursUploadOut(
+        cycle_id=cycle.id,
+        row_count=len(rows),
+        message=f"Stored {len(rows)} hours rows for name-first Candidate Master matching",
+    )
+
+
+def calculate_cycle(db: Session, cycle_id: int) -> CalculateResult:
+    cycle = _require_cycle(db, cycle_id)
+    status_val = cycle.status.value if hasattr(cycle.status, "value") else str(cycle.status)
+    if status_val.upper() in {CycleStatus.APPROVED.value, CycleStatus.PAID.value, CycleStatus.CLOSED.value}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Approved cycles cannot be recalculated",
+        )
+    hours_rows = _hours_rows_for_cycle(db, cycle)
+    if not hours_rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload the filled hours template before calculating",
+        )
+    window = _month_window(cycle)
+    drafts, stats, match_rows, validations = run_cycle_calculation(db, cycle, hours_rows, window)
+    cycle_repository.replace_matches(db, cycle.id, match_rows)
+    cycle_repository.replace_validations(db, cycle.id, validations)
+    incentive_repository.replace_cycle_lines(
+        db,
+        cycle.id,
+        [
+            {
+                "candidate_id": line.candidate_id,
+                "candidate_name": line.candidate_name,
+                "role": line.role,
+                "person": line.person,
+                "incentive_type": line.incentive_type,
+                "rule_applied": line.rule_applied,
+                "eligible": line.eligible,
+                "base_incentive": line.base_incentive,
+                "pro_rata_factor": line.pro_rata_factor,
+                "amount": line.amount,
+                "hours": line.hours,
+                "margin": line.margin,
+                "reason": line.reason,
+                "explanation_json": line.explanation_json(),
+                "payment_status": "UNPAID",
+            }
+            for line in drafts
+        ],
+    )
     cycle.status = CycleStatus.CALCULATED
     db.add(cycle)
     db.commit()
     db.refresh(cycle)
-    return CycleOut.model_validate(cycle)
+    persisted = cycle_repository.list_lines(db, cycle.id)
+    eligible = [line for line in persisted if line.eligible and Decimal(str(line.amount or 0)) > 0]
+    total = sum((Decimal(str(line.amount or 0)) for line in eligible), Decimal("0"))
+    return CalculateResult(
+        cycle=CycleOut.model_validate(cycle),
+        stats=MatchStatsOut(**stats),
+        line_count=len(persisted),
+        eligible_line_count=len(eligible),
+        total_amount=total,
+        lines=[IncentiveLineOut.model_validate(line) for line in persisted],
+        validations=[ValidationOut.model_validate(row) for row in cycle_repository.list_validations(db, cycle.id)],
+    )
 
 
-def export_cycle_stub(db: Session, cycle_id: int) -> dict:
-    _require_cycle(db, cycle_id)
-    return {"message": "not implemented", "cycle_id": cycle_id}
+def _hours_rows_for_cycle(db: Session, cycle) -> List[HoursMatchRow]:
+    matches = cycle_repository.list_matches(db, cycle.id)
+    if matches:
+        return [
+            HoursMatchRow(
+                uploaded_name=row.source_candidate_name or "",
+                uploaded_id=row.source_candidate_id or "",
+                client=row.source_client or "",
+                hours=float(row.hours_worked or 0),
+                month=cycle.incentive_month,
+                source_row=int(row.source_row_ref) if str(row.source_row_ref or "").isdigit() else 0,
+            )
+            for row in matches
+        ]
+    version_id = cycle.hours_version_id
+    if not version_id:
+        return []
+    rows = hours_repository.list_rows_for_version_month(db, version_id, cycle.incentive_month)
+    if not rows:
+        rows = hours_repository.list_rows_for_version(db, version_id)
+    out: List[HoursMatchRow] = []
+    for row in rows:
+        cand = row.candidate
+        out.append(
+            HoursMatchRow(
+                uploaded_name=row.raw_candidate_name or (cand.candidate_name if cand else ""),
+                uploaded_id=(cand.start_id or cand.external_candidate_id) if cand else "",
+                client=row.client or "",
+                hours=float(row.hours_worked or 0),
+                month=row.month_key or cycle.incentive_month,
+                source_row=row.source_row or 0,
+            )
+        )
+    return out
+
+
+def _month_window(cycle) -> CycleWindow:
+    if cycle.cycle_start_date and cycle.cycle_end_date:
+        return CycleWindow(start=cycle.cycle_start_date, end=cycle.cycle_end_date)
+    year_s, month_s = (cycle.incentive_month or "1970-01").split("-")[:2]
+    year, month = int(year_s), int(month_s)
+    last = calendar.monthrange(year, month)[1]
+    return CycleWindow(start=date(year, month, 1), end=date(year, month, last))
+
+
+def _parse_explanation(raw: Optional[str]) -> dict:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list) and parsed:
+        first = parsed[0]
+        if isinstance(first, dict):
+            return first
+        if isinstance(first, str) and first.lstrip().startswith("{"):
+            try:
+                nested = json.loads(first)
+                return nested if isinstance(nested, dict) else {}
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+
+def _format_start_date(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    text = str(value).strip()
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    return text
+
+
+def _export_row(cycle, line, cand) -> list:
+    meta = _parse_explanation(getattr(line, "explanation_json", None))
+    role = line.role or ""
+    coord_type = "Crm" if role == "CRM" else ("Asso Director" if role == "Associate Director" else role)
+    incentive_type = "Recurring" if line.incentive_type == "RECURRING" else "One-time"
+    start = ""
+    if cand and cand.start_date:
+        start = cand.start_date.isoformat()
+    elif meta.get("start_date"):
+        start = _format_start_date(meta.get("start_date"))
+    contract = ""
+    if cand and cand.contract_type:
+        contract = cand.contract_type
+    elif meta.get("contract_type"):
+        contract = str(meta.get("contract_type"))
+    margin_val: Any = None
+    if line.margin is not None:
+        margin_val = float(line.margin)
+    elif cand is not None and cand.margin is not None:
+        margin_val = float(cand.margin)
+    elif meta.get("margin_per_hour") is not None:
+        margin_val = float(meta.get("margin_per_hour"))
+    ext_id = ""
+    if cand:
+        ext_id = cand.start_id or cand.external_candidate_id or ""
+    if not ext_id:
+        ext_id = str(meta.get("candidate_id") or meta.get("external_candidate_id") or "")
+    source = ""
+    if cand:
+        source = cand.candidate_source or cand.organization or ""
+    if not source:
+        source = str(meta.get("candidate_source") or "")
+    team = ""
+    if cand:
+        team = cand.crm or cand.center_head or cand.associate_director or cand.manager or cand.team_lead or ""
+    month = f"{cycle.incentive_month}-01" if cycle.incentive_month else ""
+    return [
+        line.person,
+        coord_type,
+        ext_id,
+        line.candidate_name,
+        start,
+        month,
+        contract,
+        margin_val if margin_val is not None else "",
+        float(line.hours or 0),
+        int(round(float(line.amount or 0))),
+        incentive_type,
+        source,
+        team,
+    ]
+
+
+def export_cycle(db: Session, cycle_id: int) -> StreamingResponse:
+    cycle = _require_cycle(db, cycle_id)
+    lines = cycle_repository.list_lines(db, cycle_id)
+    candidates = {
+        cand.id: cand
+        for cand in candidate_repository.list_all_candidates(db)
+    }
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    headers = [
+        "Coordinator Name",
+        "Coordinator Type",
+        "Candidate ID",
+        "Candidate Name",
+        "Start Date",
+        "Month",
+        "Contract Type",
+        "Margin/Finder Fees",
+        "Hours/Placements",
+        "Incentive Amount (INR)",
+        "Incentive Type",
+        "Candidate Source",
+        "Team",
+    ]
+    sheet.append(headers)
+    for line in lines:
+        if not line.eligible or Decimal(str(line.amount or 0)) <= 0:
+            continue
+        cand = candidates.get(line.candidate_id) if line.candidate_id else None
+        sheet.append(_export_row(cycle, line, cand))
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    filename = f"approved-cycle-{cycle.incentive_month}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _require_cycle(db: Session, cycle_id: int):

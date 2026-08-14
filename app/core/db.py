@@ -70,6 +70,8 @@ def init_db() -> None:
             "activity_id": "VARCHAR(100)",
             "start_id": "VARCHAR(100)",
             "email": "VARCHAR(255)",
+            "contact": "VARCHAR(50)",
+            "subcontractor_contact": "VARCHAR(50)",
             "end_client": "VARCHAR(255)",
             "markup_percent": "NUMERIC(12, 4)",
             "finders_fee": "NUMERIC(14, 2)",

@@ -25,6 +25,7 @@ class IncentiveLineOut(BaseModel):
     hours: Optional[Decimal] = None
     margin: Optional[Decimal] = None
     reason: Optional[str] = None
+    explanation_json: Optional[str] = None
     payment_status: str
     created_at: Optional[datetime] = None
 
