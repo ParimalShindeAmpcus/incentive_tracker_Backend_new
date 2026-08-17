@@ -22,6 +22,8 @@ class VLookupUploadResponse(BaseModel):
     unmatched_count: int = 0
     duplicate_count: int = 0
     conflicting_count: int = 0
+    accepted_count: int = 0
+    rejected_count: int = 0
     parser_warnings: List[str] = Field(default_factory=list)
     month_note: Optional[str] = None
     total_records: int = 0
@@ -34,11 +36,15 @@ class VLookupStatsResponse(BaseModel):
     unmatched_count: int = 0
     duplicate_count: int = 0
     conflicting_count: int = 0
+    accepted_count: int = 0
+    rejected_count: int = 0
     total_records: int = 0
     unique_master_candidates: int = 0
+    hours_template_count: int = 0
     target_month: Optional[str] = None
     client_file_format: Optional[str] = None
     parser_warnings: List[Any] = Field(default_factory=list)
+    months_in_client_file: List[str] = Field(default_factory=list)
 
 
 class VLookupReviewBody(BaseModel):
@@ -76,6 +82,18 @@ class VLookupTemplateCandidateOut(BaseModel):
     why_suggested: str = ""
     identity_compatible: bool = False
     confidence: float = 0
+
+
+class VLookupHoursTemplateListResponse(BaseModel):
+    batch_id: Optional[str] = None
+    count: int = 0
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class VLookupMessyFileListResponse(BaseModel):
+    batch_id: Optional[str] = None
+    count: int = 0
+    identities: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class VLookupTemplateSearchResponse(BaseModel):

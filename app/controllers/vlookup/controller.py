@@ -7,7 +7,9 @@ from fastapi.responses import StreamingResponse
 
 from app.models.vlookup.schemas import (
     VLookupActionResponse,
+    VLookupHoursTemplateListResponse,
     VLookupMatchesByStatusResponse,
+    VLookupMessyFileListResponse,
     VLookupPublishHoursResponse,
     VLookupRematchBody,
     VLookupReviewBody,
@@ -80,6 +82,28 @@ def template_candidates(
     )
 
 
+@router.get("/hours-template", response_model=VLookupHoursTemplateListResponse)
+def hours_template(
+    db: DbSession,
+    user: CurrentUser,
+    batch_id: Optional[str] = Query(None),
+) -> VLookupHoursTemplateListResponse:
+    _ = user
+    payload = vlookup_service.list_hours_template(db, batch_id=batch_id)
+    return VLookupHoursTemplateListResponse(**payload)
+
+
+@router.get("/messy-file", response_model=VLookupMessyFileListResponse)
+def messy_file(
+    db: DbSession,
+    user: CurrentUser,
+    batch_id: Optional[str] = Query(None),
+) -> VLookupMessyFileListResponse:
+    _ = user
+    payload = vlookup_service.list_messy_file(db, batch_id=batch_id)
+    return VLookupMessyFileListResponse(**payload)
+
+
 @router.post("/matches/{match_id}/accept", response_model=VLookupActionResponse)
 def accept_match(
     match_id: int,
@@ -106,6 +130,19 @@ def reject_match(
     return vlookup_service.reject_match(db, match_id, payload)
 
 
+@router.post("/matches/{match_id}/restore", response_model=VLookupActionResponse)
+def restore_match(
+    match_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    body: Optional[VLookupReviewBody] = None,
+) -> VLookupActionResponse:
+    payload = body or VLookupReviewBody()
+    if not payload.reviewed_by:
+        payload.reviewed_by = getattr(user, "email", None) or str(user.id)
+    return vlookup_service.restore_match(db, match_id, payload)
+
+
 @router.post("/matches/{match_id}/rematch", response_model=VLookupActionResponse)
 def rematch(
     match_id: int,
@@ -124,10 +161,14 @@ def download(
     user: CurrentUser,
     batch_id: Optional[str] = Query(None),
     include_review_pending: bool = Query(False),
+    month: Optional[str] = Query(None, description="YYYY-MM month to export hours for"),
 ) -> StreamingResponse:
     _ = user
     return vlookup_service.download_matches(
-        db, batch_id=batch_id, include_review_pending=include_review_pending
+        db,
+        batch_id=batch_id,
+        include_review_pending=include_review_pending,
+        month_key=month,
     )
 
 
@@ -138,6 +179,7 @@ def publish_hours(
     batch_id: Optional[str] = Query(None),
     division: Optional[str] = Query(None),
     include_review_pending: bool = Query(False),
+    month: Optional[str] = Query(None, description="YYYY-MM month to publish hours for"),
 ) -> VLookupPublishHoursResponse:
     """Persist matched VLOOKUP rows into hours_data_versions / hours_rows (DB source of truth)."""
     return vlookup_service.publish_hours_from_batch(
@@ -145,5 +187,6 @@ def publish_hours(
         batch_id=batch_id,
         division=division,
         include_review_pending=include_review_pending,
+        month_key=month,
         uploaded_by=user.id,
     )

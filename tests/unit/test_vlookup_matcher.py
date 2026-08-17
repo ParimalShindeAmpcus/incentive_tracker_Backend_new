@@ -46,12 +46,29 @@ def _status_of(results: dict, messy_name: str) -> str:
     raise AssertionError(f"No result for {messy_name!r}")
 
 
+def _status_of_template(results: dict, template_name: str) -> str:
+    for status, rows in results.items():
+        for row in rows:
+            if row.get("template_candidate_name") == template_name:
+                return status
+    raise AssertionError(f"No template result for {template_name!r}")
+
+
 def _row(results: dict, messy_name: str) -> dict:
     for rows in results.values():
         for row in rows:
             if row.get("messy_name_original") == messy_name:
                 return row
     raise AssertionError(f"No result for {messy_name!r}")
+
+
+def _all_messy_names(results: dict) -> set[str]:
+    names = set()
+    for rows in results.values():
+        for row in rows:
+            if row.get("messy_name_original"):
+                names.add(row["messy_name_original"])
+    return names
 
 
 @pytest.fixture
@@ -123,7 +140,22 @@ class TestDecisionMatrix:
             [_group("Robert Patel", "Microsoft")],
             "2025-08",
         )
-        assert _status_of(results, "Robert Patel") == "unmatched"
+        assert _status_of_template(results, "John Smith") == "unmatched"
+        assert "Robert Patel" not in _all_messy_names(results)
+
+    def test_extra_client_people_are_ignored(self, matcher: ReconciliationMatcher):
+        results = matcher.match(
+            [_tpl(1, "John Smith", "Microsoft")],
+            [
+                _group("John Smith", "Microsoft"),
+                _group("Someone Else", "Abbott"),
+                _group("Not Ours", "Capital One"),
+            ],
+            "2025-08",
+        )
+        assert _status_of(results, "John Smith") == "matched"
+        assert _all_messy_names(results) == {"John Smith"}
+        assert sum(len(rows) for rows in results.values()) == 1
 
     def test_missing_client_goes_to_review_not_auto(self, matcher: ReconciliationMatcher):
         results = matcher.match(
@@ -139,8 +171,8 @@ class TestDecisionMatrix:
             [_group("Ram Patel", "Abbott")],
             "2025-08",
         )
-        assert _status_of(results, "Ram Patel") in ("unmatched", "needs_review")
-        assert _status_of(results, "Ram Patel") != "matched"
+        assert _status_of_template(results, "Ram Bahal") in ("unmatched", "needs_review")
+        assert _status_of_template(results, "Ram Bahal") != "matched"
 
     def test_weekly_aggregation_preserved(self, matcher: ReconciliationMatcher):
         group = {
@@ -172,13 +204,14 @@ class TestDecisionMatrix:
             _group("J Smith", "Microsoft", hours=32),
         ]
         results = matcher.match(templates, groups, "2025-08")
-        statuses = {
-            _status_of(results, "John Smith"),
-            _status_of(results, "J Smith"),
-        }
-        # One may match; the second claim of the same template should become duplicate or review
-        assert "potential_duplicate" in statuses or "needs_review" in statuses or "matched" in statuses
-        # At least one claim path should not silently leave both as matched against same ID
+        # Template-master: exactly one Hours Template row is produced.
+        assert sum(len(rows) for rows in results.values()) == 1
+        assert _status_of_template(results, "John Smith") in (
+            "matched",
+            "needs_review",
+            "potential_duplicate",
+        )
+        assert "Someone" not in _all_messy_names(results)
         matched_same = [
             r
             for rows in results.values()
@@ -193,7 +226,8 @@ class TestDecisionMatrix:
             [_group("Robert Patel", "Microsoft", hours=999)],
             "2025-08",
         )
-        assert _status_of(results, "Robert Patel") == "unmatched"
+        assert _status_of_template(results, "John Smith") == "unmatched"
+        assert "Robert Patel" not in _all_messy_names(results)
 
     def test_alternatives_exclude_client_conflicts(self, matcher: ReconciliationMatcher):
         templates = [
@@ -235,3 +269,30 @@ class TestDecisionMatrix:
         assert audit.get("candidate_similarity") is not None
         assert audit.get("final_confidence") is not None
         assert audit.get("reason") or audit.get("why")
+
+    def test_invoice_prefix_does_not_match_unrelated_people(self, matcher: ReconciliationMatcher):
+        results = matcher.match(
+            [_tpl(1, "John Smith", "Microsoft")],
+            [_group("Robert Patel", "Microsoft", invoice_prefixes=["SMIT"])],
+            "2025-08",
+        )
+        assert _status_of_template(results, "John Smith") == "unmatched"
+
+    def test_multi_month_hours_stay_on_one_identity(self, matcher: ReconciliationMatcher):
+        groups = [
+            _group("John Smith", "Microsoft", month="2025-06", hours=40),
+            _group("John Smith", "Microsoft", month="2025-07", hours=80),
+            _group("John Smith", "Microsoft", month="2025-08", hours=32),
+        ]
+        results = matcher.match(
+            [_tpl(1, "John Smith", "Microsoft", month="2025-08")],
+            groups,
+            "2025-08",
+        )
+        assert sum(len(rows) for rows in results.values()) == 1
+        row = _row(results, "John Smith")
+        assert row["match_status"] == "matched"
+        monthly = row.get("monthly_hours") or {}
+        assert monthly.get("2025-06") == 40
+        assert monthly.get("2025-07") == 80
+        assert monthly.get("2025-08") == 32

@@ -15,6 +15,9 @@ _ROLE_SUFFIX_RE = re.compile(
 )
 _MULTI_SPACE_RE = re.compile(r"\s+")
 _NON_ALNUM_RE = re.compile(r"[^\w\s]")
+# Generational markers are not surnames. Do not treat "Jr"/"Sr"/"III" as last name.
+# Exclude single-letter "i"/"v" so they are not confused with initials.
+_GENERATIONAL_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "junior", "senior"})
 
 
 def normalize_name(name: Optional[str]) -> str:
@@ -51,33 +54,52 @@ def parse_name_tokens(name: Optional[str]) -> Dict[str, object]:
     """
     normalized = normalize_name(name)
     tokens = [t for t in normalized.split() if t]
+    empty = {
+        "normalized": "",
+        "tokens": [],
+        "first": "",
+        "last": "",
+        "middle": [],
+        "initials": [],
+        "sorted_tokens": [],
+        "compact": "",
+        "initials_str": "",
+        "suffix": "",
+    }
     if not tokens:
-        return {
-            "normalized": "",
-            "tokens": [],
-            "first": "",
-            "last": "",
-            "middle": [],
-            "initials": [],
-        }
+        return empty
 
-    if len(tokens) == 1:
+    core = list(tokens)
+    suffixes: List[str] = []
+    while len(core) > 1 and core[-1] in _GENERATIONAL_SUFFIXES:
+        suffixes.insert(0, core.pop())
+    suffix = " ".join(suffixes)
+
+    if len(core) == 1:
         return {
             "normalized": normalized,
             "tokens": tokens,
-            "first": tokens[0],
-            "last": tokens[0],
+            "first": core[0],
+            "last": core[0],
             "middle": [],
-            "initials": [tokens[0]] if len(tokens[0]) == 1 else [],
+            "initials": [core[0]] if len(core[0]) == 1 else [],
+            "sorted_tokens": sorted(tokens),
+            "compact": "".join(tokens),
+            "initials_str": core[0][0] if core[0] else "",
+            "suffix": suffix,
         }
 
     return {
         "normalized": normalized,
         "tokens": tokens,
-        "first": tokens[0],
-        "last": tokens[-1],
-        "middle": tokens[1:-1],
-        "initials": [t for t in tokens if len(t) == 1],
+        "first": core[0],
+        "last": core[-1],
+        "middle": core[1:-1],
+        "initials": [t for t in core if len(t) == 1],
+        "sorted_tokens": sorted(tokens),
+        "compact": "".join(tokens),
+        "initials_str": "".join(t[0] for t in core if t),
+        "suffix": suffix,
     }
 
 
@@ -228,3 +250,45 @@ def normalize_client_name(client: Optional[str]) -> str:
 
 def token_sort_key(tokens: List[str]) -> str:
     return " ".join(sorted(tokens))
+
+
+_MEMO_CUT_MARKERS = (
+    " FOR THE WEEK",
+    " FOR THE MONTH",
+    " FOR THE PERIOD",
+    " FOR WEEK",
+    " WEEK ENDING",
+    " WEEK-ENDING",
+    " W/E ",
+    " WE ",
+)
+
+_TRAILING_DATE_RE = re.compile(
+    r"[\s:\-]+(?:of[-\s:]*)?(?:\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{4}-\d{2}-\d{2})\s*$",
+    re.I,
+)
+_PAREN_RE = re.compile(r"\([^)]*\)")
+
+
+def extract_person_name(raw: Optional[str]) -> str:
+    """
+    Isolate a person name from noisy invoice/memo text.
+
+    Format-driven (week-ending phrases, dates, punctuation) — not person-specific.
+    """
+    if not raw:
+        return ""
+    text = str(raw).strip().strip('"').strip("'")
+    if not text:
+        return ""
+    before_paren = _PAREN_RE.split(text, maxsplit=1)[0].strip()
+    text = before_paren or text
+    upper = text.upper()
+    for marker in _MEMO_CUT_MARKERS:
+        idx = upper.find(marker)
+        if idx > 0:
+            text = text[:idx]
+            break
+    text = _TRAILING_DATE_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip(" -,:;")
+    return text

@@ -15,6 +15,7 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from rapidfuzz import fuzz
+from rapidfuzz.distance import JaroWinkler
 
 from app.config import get_settings
 
@@ -22,12 +23,13 @@ def _settings():
     return get_settings()
 
 from app.services.vlookup.normalization import (
+    extract_person_name,
     normalize_client_name,
     normalize_month_year,
     normalize_name,
     parse_name_tokens,
 )
-from app.services.vlookup.similarity import SimilarityScorer
+from app.services.vlookup.similarity import SimilarityScorer, name_feature_scores
 
 
 class ReconciliationMatcher:
@@ -98,44 +100,71 @@ class ReconciliationMatcher:
         client_groups: List[Dict[str, Any]],
         target_month: Optional[str] = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Hours Template is the master list.
+
+        Each template candidate is matched once against client-file identities.
+        Extra people in the messy file who are not on the Hours Template are
+        ignored (they are not our candidates and must not appear as unmatched).
+        """
         target = normalize_month_year(target_month) if target_month else ""
+        identity_groups = self._collapse_client_identities(client_groups)
 
         templates = []
-        by_norm: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        by_last: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        name_to_templates: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for t in template_candidates:
             parsed = parse_name_tokens(t.get("candidate_name"))
-            enriched = {
+            templates.append({
                 **t,
                 "_norm_name": parsed["normalized"],
                 "_name_parts": parsed,
                 "_norm_client": normalize_client_name(t.get("client_name")),
                 "_month": normalize_month_year(str(t.get("month") or target or "")),
                 "_candidate_id": str(t.get("candidate_id") or "").strip().upper(),
-            }
-            templates.append(enriched)
-            if enriched["_norm_name"]:
-                by_norm[enriched["_norm_name"]].append(enriched)
-                name_to_templates[enriched["_norm_name"]].append(enriched)
+            })
+        name_counts: Dict[str, int] = defaultdict(int)
+        name_client_counts: Dict[Tuple[str, str], int] = defaultdict(int)
+        for t in templates:
+            name_counts[t["_norm_name"]] += 1
+            name_client_counts[(t["_norm_name"], t["_norm_client"])] += 1
+        for t in templates:
+            t["_homonym_count"] = name_counts[t["_norm_name"]]
+            t["_homonym_same_client"] = name_client_counts[(t["_norm_name"], t["_norm_client"])]
+
+        by_norm: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        by_last: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        by_compact: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        name_to_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for g in identity_groups:
+            extracted = extract_person_name(g.get("candidate_name")) or g.get("candidate_name")
+            parsed = parse_name_tokens(extracted)
+            g["_norm_name"] = parsed["normalized"]
+            g["_name_parts"] = parsed
+            g["_norm_client"] = normalize_client_name(g.get("client_name"))
+            g["_messy_key"] = (g["_norm_name"], g["_norm_client"])
+            if g["_norm_name"]:
+                by_norm[g["_norm_name"]].append(g)
+                name_to_groups[g["_norm_name"]].append(g)
             last = parsed.get("last") or ""
             if last:
-                by_last[last].append(enriched)
-
-        name_choices = list(name_to_templates.keys())
+                by_last[last].append(g)
+            compact = str(parsed.get("compact") or "")
+            if compact:
+                by_compact[compact].append(g)
+        name_choices = list(name_to_groups.keys())
 
         scored_pairs = []
-        for group in client_groups:
-            ranked = self._rank_templates(
-                group,
-                templates,
+        for template in templates:
+            ranked = self._rank_groups_for_template(
+                template,
+                identity_groups,
                 target,
                 by_norm=by_norm,
                 by_last=by_last,
+                by_compact=by_compact,
                 name_choices=name_choices,
-                name_to_templates=name_to_templates,
+                name_to_groups=name_to_groups,
             )
-            scored_pairs.append({"group": group, "candidates": ranked})
+            scored_pairs.append({"template": template, "candidates": ranked})
 
         scored_pairs.sort(
             key=lambda p: (
@@ -145,23 +174,16 @@ class ReconciliationMatcher:
             reverse=True,
         )
 
-        assigned_template_ids = set()
-        template_claims: Dict[Any, List[str]] = defaultdict(list)
+        assigned_messy_keys = set()
         pending = []
-
         for pair in scored_pairs:
-            record = self._build_match_record(
-                pair["group"], pair["candidates"], assigned_template_ids, target
+            record = self._build_template_match_record(
+                pair["template"], pair["candidates"], assigned_messy_keys, target
             )
             pending.append(record)
-            tid = record.get("template_candidate_id")
-            if tid is not None and record["match_status"] in (
-                "matched",
-                "needs_review",
-                "potential_duplicate",
-            ):
-                assigned_template_ids.add(tid)
-                template_claims[tid].append(record["messy_name_original"])
+            messy_key = record.get("_messy_key")
+            if messy_key and record["match_status"] != "unmatched":
+                assigned_messy_keys.add(messy_key)
 
         results = {
             "matched": [],
@@ -169,19 +191,21 @@ class ReconciliationMatcher:
             "unmatched": [],
             "potential_duplicate": [],
             "conflicting": [],
+            "accepted": [],
+            "rejected": [],
         }
 
         for record in pending:
+            record.pop("_messy_key", None)
             explanation = record.setdefault("match_explanation", {})
             hours = float(record.get("total_hours") or 0)
             cumulative = float(record.get("cumulative_hours") or hours)
 
-            # Hours metadata — NEVER changes identity match_status
             explanation["cumulative_hours"] = cumulative
             explanation["monthly_hours"] = record.get("monthly_hours") or {}
             explanation["weekly_by_month"] = record.get("weekly_by_month") or {}
             explanation["hours_note"] = record.get("hours_note") or ""
-            if hours > 0:
+            if hours > 0 or explanation["monthly_hours"]:
                 explanation["hours_source"] = (
                     "Hours Worked filled from client weekly rows (template started at 0)"
                 )
@@ -190,51 +214,16 @@ class ReconciliationMatcher:
             record["validation_status"] = validation["status"]
             explanation["validation"] = validation
 
-            tid = record.get("template_candidate_id")
-            if tid is not None and len(template_claims.get(tid, [])) > 1:
-                # Identity ambiguity across multiple messy names claiming one template
-                explanation.setdefault("identity_flags", []).append(
-                    "multiple_client_rows_claim_same_template"
-                )
-                if record["match_status"] == "matched":
-                    record["match_status"] = "potential_duplicate"
-                    explanation["identity_summary"] = (
-                        "Multiple client-side identities appear to claim the same master "
-                        f"candidate ({record.get('template_candidate_name')}). Confirm they "
-                        "are the same person."
-                    )
-                    explanation["identity_headline"] = (
-                        f"Potential duplicate: {record.get('template_candidate_name')}"
-                    )
-                    explanation["audit"] = self._audit_block(
-                        headline=explanation["identity_headline"],
-                        why=explanation["identity_summary"],
-                        identity_status="potential_duplicate",
-                        validation=validation,
-                        master_candidate=record.get("template_candidate_name"),
-                        master_client=(explanation.get("signals") or {}).get("template_client"),
-                        client_candidate=record.get("messy_name_original"),
-                        client_client=record.get("messy_client_name"),
-                        candidate_similarity=float(
-                            (explanation.get("signals") or {}).get("name_score") or 0
-                        ),
-                        client_similarity=float(
-                            (explanation.get("signals") or {}).get("client_score") or 0
-                        )
-                        if (explanation.get("signals") or {}).get("client_available")
-                        else None,
-                        final_confidence=float(record.get("confidence_score") or 0),
-                    )
-
-            # Safety net: strong name + conflicting client must never remain matched
             signals = explanation.get("signals") or {}
+            flags = explanation.get("identity_flags") or []
             if (
-                record.get("template_candidate_id") is not None
+                record.get("messy_name_original")
                 and signals.get("identity_compatible")
                 and signals.get("client_available")
                 and float(signals.get("name_score") or 0) >= self.STRONG_NAME_SCORE
                 and float(signals.get("client_score") or 0) <= self.CLIENT_CONFLICT_MAX
                 and record["match_status"] in ("matched", "needs_review")
+                and "identity_already_assigned" not in flags
             ):
                 explanation.setdefault("identity_flags", []).append(
                     "client_mismatch_with_strong_name"
@@ -261,7 +250,6 @@ class ReconciliationMatcher:
                     final_confidence=float(record.get("confidence_score") or 0),
                 )
 
-            # Ensure every record has a per-row audit block
             if "audit" not in explanation:
                 explanation["audit"] = self._audit_block(
                     headline=explanation.get("identity_headline") or record.get("match_status"),
@@ -282,9 +270,428 @@ class ReconciliationMatcher:
                     final_confidence=float(record.get("confidence_score") or 0),
                 )
 
-            results[record["match_status"]].append(record)
+            results.setdefault(record["match_status"], []).append(record)
 
         return results
+
+    def _collapse_client_identities(self, groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge month-split client groups into one identity (name + client)."""
+        merged: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for group in groups:
+            name = group.get("candidate_name") or ""
+            client = group.get("client_name") or ""
+            key = (normalize_name(name), normalize_client_name(client))
+            if key not in merged:
+                monthly = dict(group.get("monthly_hours") or {})
+                if group.get("month") and group.get("total_hours") and group["month"] not in monthly:
+                    monthly[str(group["month"])] = float(group.get("total_hours") or 0)
+                weekly_by_month = dict(group.get("weekly_by_month") or {})
+                if group.get("month") and group.get("weekly_breakdown") and group["month"] not in weekly_by_month:
+                    weekly_by_month[str(group["month"])] = dict(group.get("weekly_breakdown") or {})
+                prefixes = set(group.get("invoice_prefixes") or [])
+                merged[key] = {
+                    **group,
+                    "monthly_hours": monthly,
+                    "weekly_by_month": weekly_by_month,
+                    "invoice_prefixes": sorted(prefixes),
+                    "total_hours": float(group.get("total_hours") or 0),
+                    "cumulative_hours": float(
+                        group.get("cumulative_hours") or group.get("total_hours") or 0
+                    ),
+                }
+                continue
+
+            dest = merged[key]
+            dest["total_hours"] = float(dest.get("total_hours") or 0) + float(group.get("total_hours") or 0)
+            dest["cumulative_hours"] = max(
+                float(dest.get("cumulative_hours") or 0),
+                float(group.get("cumulative_hours") or 0),
+                dest["total_hours"],
+            )
+            for month, hours in (group.get("monthly_hours") or {}).items():
+                dest["monthly_hours"][month] = float(dest["monthly_hours"].get(month, 0)) + float(hours)
+            month = str(group.get("month") or "")
+            if month and month not in dest["monthly_hours"] and group.get("total_hours"):
+                dest["monthly_hours"][month] = float(
+                    dest["monthly_hours"].get(month, 0)
+                ) + float(group.get("total_hours") or 0)
+            for month, weeks in (group.get("weekly_by_month") or {}).items():
+                dest["weekly_by_month"].setdefault(month, {})
+                for week, hours in (weeks or {}).items():
+                    dest["weekly_by_month"][month][week] = float(
+                        dest["weekly_by_month"][month].get(week, 0)
+                    ) + float(hours)
+            if month and group.get("weekly_breakdown") and month not in (group.get("weekly_by_month") or {}):
+                dest["weekly_by_month"].setdefault(month, {})
+                for week, hours in (group.get("weekly_breakdown") or {}).items():
+                    dest["weekly_by_month"][month][week] = float(
+                        dest["weekly_by_month"][month].get(week, 0)
+                    ) + float(hours)
+            dest_prefixes = set(dest.get("invoice_prefixes") or [])
+            dest_prefixes.update(group.get("invoice_prefixes") or [])
+            dest["invoice_prefixes"] = sorted(dest_prefixes)
+            if len(str(name)) > len(str(dest.get("candidate_name") or "")):
+                dest["candidate_name"] = name
+            dest["source_rows"] = (dest.get("source_rows") or []) + (group.get("source_rows") or [])
+        return list(merged.values())
+
+    def _rank_groups_for_template(
+        self,
+        template: Dict[str, Any],
+        groups: List[Dict[str, Any]],
+        target_month: str,
+        *,
+        by_norm: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        by_last: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        by_compact: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        name_choices: Optional[List[str]] = None,
+        name_to_groups: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Rank messy-file identities for one Hours Template candidate."""
+        t_norm = template.get("_norm_name") or ""
+        t_parts = template.get("_name_parts") or parse_name_tokens(template.get("candidate_name"))
+        pool: Dict[Any, Dict[str, Any]] = {}
+
+        def _add(rows: List[Dict[str, Any]]) -> None:
+            for g in rows:
+                key = g.get("_messy_key") or id(g)
+                pool[key] = g
+
+        if by_norm and t_norm:
+            _add(by_norm.get(t_norm, []))
+
+        last = t_parts.get("last") or ""
+        if by_last and last:
+            _add(by_last.get(last, []))
+
+        compact = str(t_parts.get("compact") or "")
+        if by_compact and compact:
+            _add(by_compact.get(compact, []))
+
+        if name_choices is not None and name_to_groups is not None and len(pool) < 25 and t_norm:
+            from rapidfuzz import process
+
+            hits = process.extract(
+                t_norm,
+                name_choices,
+                scorer=fuzz.token_set_ratio,
+                limit=40,
+                score_cutoff=65,
+            )
+            for choice, _score, _idx in hits:
+                _add(name_to_groups.get(choice, []))
+
+        candidates = list(pool.values()) if pool else groups
+        if len(candidates) > 80 and name_choices is not None and name_to_groups is not None:
+            from rapidfuzz import process
+
+            hits = process.extract(
+                t_norm,
+                name_choices,
+                scorer=fuzz.WRatio,
+                limit=80,
+                score_cutoff=55,
+            )
+            trimmed: Dict[Any, Dict[str, Any]] = {}
+            for choice, _score, _idx in hits:
+                for g in name_to_groups.get(choice, []):
+                    trimmed[g.get("_messy_key", id(g))] = g
+            if trimmed:
+                candidates = list(trimmed.values())
+
+        ranked = []
+        for group in candidates:
+            scored = self._score_pair(group, template, target_month, messy_parts=group.get("_name_parts"))
+            scored["group"] = group
+            scored["messy_key"] = group.get("_messy_key") or (
+                normalize_name(group.get("candidate_name")),
+                normalize_client_name(group.get("client_name")),
+            )
+            ranked.append(scored)
+        ranked.sort(
+            key=lambda x: (x["identity_compatible"], x["confidence"], x["signals"]["name_score"]),
+            reverse=True,
+        )
+        return ranked
+
+    def _build_template_match_record(
+        self,
+        template: Dict[str, Any],
+        ranked: List[Dict[str, Any]],
+        assigned_messy_keys: set,
+        target_month: str,
+    ) -> Dict[str, Any]:
+        available = [
+            r for r in ranked
+            if r.get("messy_key") not in assigned_messy_keys
+        ]
+        compatible = [r for r in available if r.get("identity_compatible")]
+        claimed_compatible = [
+            r for r in ranked
+            if r.get("identity_compatible") and r.get("messy_key") in assigned_messy_keys
+        ]
+        identity_already_assigned = False
+        best = compatible[0] if compatible else (available[0] if available else None)
+        second = compatible[1] if len(compatible) > 1 else None
+        # Same person exists in the client file, but another Hours Template row
+        # already claimed that identity. Do not hide it as "not in client file".
+        if not compatible and claimed_compatible:
+            best = claimed_compatible[0]
+            second = None
+            identity_already_assigned = True
+
+        group = (best or {}).get("group") or {}
+        monthly_hours = dict(group.get("monthly_hours") or {})
+        weekly_by_month = dict(group.get("weekly_by_month") or {})
+        if target_month and monthly_hours.get(target_month) is not None:
+            hours_out = int(round(float(monthly_hours.get(target_month) or 0)))
+            weekly = dict((weekly_by_month.get(target_month) or group.get("weekly_breakdown") or {}))
+        else:
+            hours_out = int(round(float(group.get("total_hours") or 0)))
+            weekly = dict(group.get("weekly_breakdown") or {})
+        cumulative_hours = float(group.get("cumulative_hours") or hours_out)
+        hours_note = group.get("hours_note") or ""
+        validation = self._hours_validation(hours_out)
+
+        base_fields = {
+            "template_candidate": template,
+            "template_candidate_id": template.get("id"),
+            "template_candidate_name": template.get("candidate_name"),
+            "template_candidate_id_str": template.get("candidate_id"),
+            "messy_name_original": group.get("candidate_name") if best else None,
+            "messy_client_name": group.get("client_name") if best else None,
+            "messy_month": (group.get("month") or target_month) if best else (target_month or template.get("_month")),
+            "weekly_records": group.get("source_rows") or [],
+            "weekly_breakdown": weekly,
+            "total_hours": hours_out,
+            "cumulative_hours": cumulative_hours,
+            "monthly_hours": monthly_hours,
+            "weekly_by_month": weekly_by_month,
+            "hours_note": hours_note,
+            "validation_status": validation["status"],
+        }
+
+        if not best:
+            summary = (
+                "This Hours Template candidate was not found in the client hours file."
+            )
+            explanation = {
+                "identity_summary": summary,
+                "identity_headline": "Unmatched",
+                "signals": {},
+                "alternatives": [],
+                "identity_flags": ["not_in_client_file"],
+                "validation": validation,
+                "audit": self._audit_block(
+                    headline="Unmatched",
+                    why=summary,
+                    identity_status="unmatched",
+                    validation=validation,
+                    master_candidate=template.get("candidate_name"),
+                    master_client=template.get("client_name"),
+                    final_confidence=0.0,
+                ),
+            }
+            return {
+                **base_fields,
+                "messy_name_original": None,
+                "messy_client_name": None,
+                "confidence_score": 0.0,
+                "match_method": "none",
+                "match_status": "unmatched",
+                "match_explanation": explanation,
+                "alternatives": [],
+                "_messy_key": None,
+            }
+
+        decision = self._decide_status(group, best, None)
+        status = decision["status"]
+        summary = decision["summary"]
+        headline = decision["headline"]
+        flags = list(decision["flags"])
+
+        if (
+            status in ("matched", "needs_review")
+            and second
+            and second.get("identity_compatible")
+            and (best["confidence"] - second["confidence"]) < self.AMBIGUITY_GAP
+            and float(second["signals"].get("name_score") or 0) >= self.MIN_IDENTITY_NAME_SCORE
+        ):
+            other = (second.get("group") or {}).get("candidate_name")
+            status = "potential_duplicate"
+            summary = (
+                f"Two client-file identities appear to claim "
+                f"'{template.get('candidate_name')}': '{group.get('candidate_name')}' "
+                f"and '{other}'. Confirm which hours belong to this Hours Template candidate."
+            )
+            headline = f"Potential duplicate: {template.get('candidate_name')}"
+            flags.append("ambiguous_client_identities")
+
+        if (
+            status == "matched"
+            and int(template.get("_homonym_same_client") or 1) > 1
+        ):
+            status = "needs_review"
+            flags.append("master_name_not_unique")
+            summary = (
+                f"Normalized name is shared by {template.get('_homonym_same_client')} "
+                "Hours Template candidates at the same client. Confirm which person is correct."
+            )
+            headline = f"Needs review: {template.get('candidate_name')}"
+
+        if identity_already_assigned:
+            claimed_group = (best.get("group") or {}) if best else {}
+            claimed_client = claimed_group.get("client_name") or "the client file"
+            flags.append("identity_already_assigned")
+            if int(template.get("_homonym_count") or 1) > 1:
+                flags.append("master_name_not_unique")
+            status = "needs_review"
+            summary = (
+                f"This name exists in the client hours file, but those hours are already "
+                f"linked to another Hours Template row so they are not counted twice. "
+                f"Client-file identity '{claimed_group.get('candidate_name')}' / "
+                f"'{claimed_client}'. Confirm which Candidate ID is correct."
+            )
+            headline = f"Needs review: {template.get('candidate_name')}"
+
+        if status == "unmatched":
+            summary = (
+                "This Hours Template candidate was not found in the client hours file "
+                "with a sufficiently reliable identity match."
+            )
+            headline = "Unmatched"
+            linked_group = None
+            messy_key = None
+            alts = self._plausible_alternatives_from_groups(compatible, best)
+        elif identity_already_assigned:
+            linked_group = group
+            messy_key = None
+            alts = self._plausible_alternatives_from_groups(claimed_compatible, best)
+        else:
+            linked_group = group
+            messy_key = best.get("messy_key")
+            alts = self._plausible_alternatives_from_groups(compatible, best)
+
+        signals = dict(best["signals"])
+        margin = None
+        if second:
+            margin = round(float(best["confidence"]) - float(second["confidence"]), 2)
+        signals["top2_margin"] = margin
+        audit = self._audit_block(
+            headline=headline,
+            why=summary,
+            identity_status=status,
+            validation=validation,
+            alternatives=alts,
+            master_candidate=template.get("candidate_name"),
+            master_client=template.get("client_name"),
+            client_candidate=(linked_group or {}).get("candidate_name"),
+            client_client=(linked_group or {}).get("client_name"),
+            candidate_similarity=float(signals.get("name_score") or 0),
+            client_similarity=float(signals.get("client_score") or 0)
+            if signals.get("client_available")
+            else None,
+            final_confidence=float(best["confidence"]),
+        )
+        explanation = {
+            "identity_summary": summary,
+            "identity_headline": headline,
+            "signals": signals,
+            "alternatives": alts,
+            "identity_flags": flags,
+            "match_breakdown": {
+                "name_features": signals.get("name_features") or {},
+                "client_score": signals.get("client_score"),
+                "month_score": signals.get("month_score"),
+                "top2_margin": margin,
+                "homonym_count": template.get("_homonym_count"),
+                "homonym_same_client": template.get("_homonym_same_client"),
+            },
+            "decision": {
+                "name_band": signals.get("name_band"),
+                "client_band": signals.get("client_band"),
+                "status": status,
+                "reason": summary,
+            },
+            "chosen": {
+                "candidate_id": template.get("candidate_id"),
+                "candidate_name": template.get("candidate_name"),
+                "client_name": template.get("client_name"),
+                "confidence": best["confidence"],
+                "method": best["method"],
+                "why": best.get("why_suggested"),
+                "source_name": (linked_group or {}).get("candidate_name"),
+            }
+            if linked_group is not None
+            else None,
+            "validation": validation,
+            "audit": audit,
+        }
+
+        if status == "unmatched" or identity_already_assigned:
+            hours_out = 0
+            weekly = {}
+            monthly_hours = {}
+            weekly_by_month = {}
+            cumulative_hours = 0
+            hours_note = ""
+
+        return {
+            **base_fields,
+            "messy_name_original": (linked_group or {}).get("candidate_name"),
+            "messy_client_name": (linked_group or {}).get("client_name"),
+            "weekly_breakdown": weekly,
+            "total_hours": hours_out,
+            "cumulative_hours": cumulative_hours,
+            "monthly_hours": monthly_hours,
+            "weekly_by_month": weekly_by_month,
+            "hours_note": hours_note,
+            "confidence_score": best["confidence"] if linked_group is not None else 0.0,
+            "match_method": best["method"] if linked_group is not None else "none",
+            "match_status": status,
+            "match_explanation": explanation,
+            "alternatives": alts,
+            "_messy_key": messy_key,
+        }
+
+    def _plausible_alternatives_from_groups(
+        self,
+        ranked: List[Dict[str, Any]],
+        best: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Surface other messy identities that could also be this template person."""
+        if not best:
+            return []
+        top_name = float(best["signals"].get("name_score") or 0)
+        floor = max(self.MIN_IDENTITY_NAME_SCORE, top_name * self.ALT_RELATIVE_FLOOR)
+        alts = []
+        for r in ranked:
+            group = r.get("group") or {}
+            if group is (best.get("group") or {}):
+                continue
+            if r.get("messy_key") == best.get("messy_key"):
+                continue
+            if not r.get("identity_compatible"):
+                continue
+            name_score = float(r["signals"].get("name_score") or 0)
+            if name_score < floor:
+                continue
+            why = r.get("why_suggested") or ""
+            alts.append({
+                "candidate_id": None,
+                "candidate_name": group.get("candidate_name"),
+                "client_name": group.get("client_name"),
+                "confidence": r["confidence"],
+                "name_score": name_score,
+                "client_score": float(r["signals"].get("client_score") or 0),
+                "combined_score": r["confidence"],
+                "method": r["method"],
+                "why_suggested": why,
+                "why": why,
+            })
+            if len(alts) >= 4:
+                break
+        return alts
 
     def rank_for_rematch(
         self,
@@ -476,19 +883,31 @@ class ReconciliationMatcher:
             confidence = min(100.0, confidence + 8.0)
             identity_ok = True
 
+        invoice_score, invoice_why = self._invoice_prefix_signal(
+            group.get("invoice_prefixes") or [],
+            template.get("_name_parts") or parse_name_tokens(template_name),
+        )
+        if identity_ok and invoice_score >= 90:
+            confidence = min(100.0, confidence + 4.0)
+            name_info["evidence"] = list(name_info.get("evidence") or []) + ["invoice_prefix_corroborates"]
+            if invoice_why:
+                why_base = (name_info.get("why") or "").rstrip(".")
+                name_info["why"] = f"{why_base}. {invoice_why}" if why_base else invoice_why
+
         client_band = self._client_band(client_score, client_available)
         name_band = self._name_band(name_score, identity_ok)
 
         return {
             "candidate": template,
             "confidence": round(float(confidence), 2),
-            "method": name_info["method"] + ("+id" if id_match else ""),
+            "method": name_info["method"] + ("+id" if id_match else "") + ("+invoice" if invoice_score >= 90 else ""),
             "identity_compatible": identity_ok,
             "why_suggested": name_info["why"],
             "signals": {
                 "name_score": round(name_score, 2),
                 "client_score": round(client_score, 2),
                 "month_score": round(month_score, 2),
+                "invoice_score": round(invoice_score, 2),
                 "identity_compatible": identity_ok,
                 "identity_evidence": name_info["evidence"],
                 "client_available": client_available,
@@ -503,8 +922,42 @@ class ReconciliationMatcher:
                 "template_client": template.get("client_name"),
                 "messy_candidate": messy_name,
                 "template_candidate": template_name,
+                "name_features": name_info.get("features") or {},
+                "master_name_not_unique": int(template.get("_homonym_same_client") or 1) > 1,
+                "homonym_count": int(template.get("_homonym_count") or 1),
+                "homonym_same_client": int(template.get("_homonym_same_client") or 1),
             },
         }
+
+    @staticmethod
+    def _invoice_prefix_signal(
+        prefixes: List[Any],
+        name_parts: Dict[str, Any],
+    ) -> Tuple[float, str]:
+        """
+        Weak corroboration: invoice codes like GANT-06/07 often start with
+        letters from the person's name. Never used as sole identity evidence.
+        """
+        cleaned = [str(p).strip().upper() for p in (prefixes or []) if str(p).strip()]
+        if not cleaned:
+            return 0.0, ""
+        first = str(name_parts.get("first") or "").upper()
+        last = str(name_parts.get("last") or "").upper()
+        tokens = [str(t).upper() for t in (name_parts.get("tokens") or [])]
+        for prefix in cleaned:
+            if len(prefix) < 3:
+                continue
+            if last and last.startswith(prefix):
+                return 100.0, "Invoice code prefix matches last name"
+            if first and first.startswith(prefix):
+                return 95.0, "Invoice code prefix matches first name"
+            if any(
+                token.startswith(prefix) or prefix.startswith(token[:4])
+                for token in tokens
+                if len(token) >= 3
+            ):
+                return 90.0, "Invoice code prefix matches a name token"
+        return 0.0, ""
 
     def _client_band(self, client_score: float, client_available: bool) -> str:
         if not client_available:
@@ -545,27 +998,46 @@ class ReconciliationMatcher:
                 "method": "empty",
                 "why": "Missing name",
                 "evidence": evidence,
+                "features": {},
             }
 
         if n1 == n2:
             evidence.append("exact_normalized_name")
+            features = name_feature_scores(messy, template, p1, p2)
             return {
                 "score": 100.0,
                 "compatible": True,
                 "method": "exact",
                 "why": "Normalized full name matches exactly",
                 "evidence": evidence,
+                "features": features,
+            }
+
+        compact1 = str(p1.get("compact") or "")
+        compact2 = str(p2.get("compact") or "")
+        if compact1 and compact1 == compact2:
+            evidence.append("compact_name_match")
+            features = name_feature_scores(messy, template, p1, p2)
+            return {
+                "score": 99.5,
+                "compatible": True,
+                "method": "compact",
+                "why": "Names match after removing punctuation and spaces",
+                "evidence": evidence,
+                "features": features,
             }
 
         # Token-order insensitive equality (handles First Last vs Last First after normalize)
         if sorted(p1["tokens"]) == sorted(p2["tokens"]) and p1["tokens"]:
             evidence.append("same_tokens_any_order")
+            features = name_feature_scores(messy, template, p1, p2)
             return {
                 "score": 99.0,
                 "compatible": True,
                 "method": "token_permutation",
                 "why": "Same name tokens in different order",
                 "evidence": evidence,
+                "features": features,
             }
 
         first_ok, first_why = self._token_compatible(p1["first"], p2["first"], "first")
@@ -613,6 +1085,25 @@ class ReconciliationMatcher:
                     why_parts.append(f"{base}. {middle_note}" if middle_note else base)
                     method = "containment"
 
+        if not compatible and first_ok:
+            sig1 = {t for t in p1["tokens"] if len(t) > 1}
+            sig2 = {t for t in p2["tokens"] if len(t) > 1}
+            shared = sig1 & sig2
+            shorter, longer = (sig1, sig2) if len(sig1) <= len(sig2) else (sig2, sig1)
+            shorter_last = p1["last"] if len(sig1) <= len(sig2) else p2["last"]
+            if (
+                len(shared) >= 2
+                and shorter
+                and shorter <= longer
+                and shorter_last in longer
+            ):
+                compatible = True
+                evidence.append("token_subset")
+                why_parts.append(
+                    "All significant tokens of the shorter name appear in the longer name"
+                )
+                method = "token_subset"
+
         # Score: blend identity-aware components; skip expensive metaphone path when possible
         first_score = float(fuzz.ratio(p1["first"], p2["first"])) if p1["first"] and p2["first"] else 0.0
         if self._initial_match(p1["first"], p2["first"]):
@@ -626,12 +1117,18 @@ class ReconciliationMatcher:
         # Lightweight stand-in for full SimilarityScorer (avoids metaphone on every pair)
         raw = float(fuzz.WRatio(n1, n2))
 
+        features = name_feature_scores(messy, template, p1, p2)
+        jaro = float(features.get("name_jaro_similarity") or 0)
+        ngram = float(features.get("name_ngram_similarity") or 0)
+
         identity_blend = (
-            last_score * 0.40
-            + first_score * 0.30
-            + token_set * 0.15
-            + token_sort * 0.10
-            + raw * 0.05
+            last_score * 0.36
+            + first_score * 0.26
+            + token_set * 0.12
+            + token_sort * 0.08
+            + raw * 0.04
+            + jaro * 0.08
+            + ngram * 0.06
         )
 
         if middle_note:
@@ -647,6 +1144,7 @@ class ReconciliationMatcher:
                 "method": "rejected_unrelated",
                 "why": why,
                 "evidence": evidence,
+                "features": features,
             }
 
         score = min(100.0, max(identity_blend, 78.0 if first_ok and last_ok else identity_blend))
@@ -660,6 +1158,7 @@ class ReconciliationMatcher:
             "method": method,
             "why": why,
             "evidence": evidence,
+            "features": features,
         }
 
     def _token_compatible(self, a: str, b: str, role: str) -> Tuple[bool, str]:
@@ -672,6 +1171,11 @@ class ReconciliationMatcher:
         threshold = self.FIRST_NAME_FUZZY_MIN if role == "first" else self.LAST_NAME_FUZZY_MIN
         if float(fuzz.ratio(a, b)) >= threshold:
             return True, f"{role}_fuzzy"
+        jaro = float(JaroWinkler.similarity(a, b) or 0)
+        jaro_pct = jaro * 100.0 if jaro <= 1.0 else jaro
+        jaro_min = 92.0 if role == "first" else 93.0
+        if min(len(a), len(b)) >= 4 and jaro_pct >= jaro_min:
+            return True, f"{role}_jaro"
         return False, f"{role}_mismatch"
 
     @staticmethod

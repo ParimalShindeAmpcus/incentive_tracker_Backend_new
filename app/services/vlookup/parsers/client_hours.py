@@ -15,7 +15,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from app.services.vlookup.normalization import normalize_client_name, normalize_month_year, normalize_name
+from app.services.vlookup.normalization import (
+    extract_person_name,
+    normalize_client_name,
+    normalize_month_year,
+    normalize_name,
+)
 
 
 NOISE_PREFIXES = (
@@ -430,16 +435,9 @@ def _extract_name_from_memo(memo: str) -> str:
         m = pattern.match(text)
         if m:
             return _clean_candidate_name(m.group("name"))
-    # Fallback: cut at known phrases
-    for marker in (
-        " FOR THE WEEK",
-        " FOR THE MONTH",
-        " FOR THE PERIOD",
-        " FOR WEEK",
-    ):
-        idx = text.upper().find(marker)
-        if idx > 0:
-            return _clean_candidate_name(text[:idx])
+    extracted = extract_person_name(text)
+    if extracted:
+        return _clean_candidate_name(extracted)
     return _clean_candidate_name(text)
 
 
@@ -447,6 +445,7 @@ def _clean_candidate_name(name: str) -> str:
     if not name:
         return ""
     text = str(name).strip().strip('"').strip("'")
+    text = extract_person_name(text) or text
     text = re.sub(r"\s+", " ", text)
     # Drop trailing punctuation / consultant suffixes
     text = re.sub(
@@ -530,13 +529,34 @@ def _find_col(columns, candidates: List[str]) -> Optional[str]:
     return None
 
 
+def invoice_letter_prefix(source_ref: Optional[str]) -> str:
+    """
+    Extract a generic invoice letter prefix such as GANT from ``GANT-06/07``.
+
+    Format-driven only — never person-specific. Used as a weak corroborating
+    signal against first/last name starts when those names already match.
+    """
+    if not source_ref:
+        return ""
+    text = str(source_ref).strip().upper()
+    if not text or text.lower().startswith("line-") or text.lower().startswith("row-"):
+        return ""
+    match = re.match(r"^([A-Z]{2,8})", text)
+    return match.group(1) if match else ""
+
+
 def aggregate_hours_by_candidate(
     rows: List[Dict[str, Any]],
     all_rows_for_cumulative: Optional[List[Dict[str, Any]]] = None,
+    *,
+    group_by_month: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    Collapse parsed invoice/week rows into one candidate-month group
-    used by the matcher. Preserves weekly breakdown.
+    Collapse parsed invoice/week rows into groups used by the matcher.
+
+    When group_by_month is True (legacy), one group per candidate+month.
+    When False, one group per candidate identity (name + client) across all
+    months so VLOOKUP can match once and filter hours later.
 
     Template Hours start at 0; these aggregated hours are what get written
     into the Hours Template after matching.
@@ -545,20 +565,22 @@ def aggregate_hours_by_candidate(
     is provided (full multi-month client extract), also attach cumulative_hours
     across months so Accounts can see progress toward 160h.
     """
-    groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    groups: Dict[Tuple[str, ...], Dict[str, Any]] = {}
 
     for row in rows:
         name = row["candidate_name"]
         month = row.get("month") or ""
         client = row.get("client_name") or ""
-        # Group key: normalized name + month; client tracked as majority vote
-        key = (normalize_name(name), month)
+        if group_by_month:
+            key: Tuple[str, ...] = (normalize_name(name), month)
+        else:
+            key = (normalize_name(name), normalize_client_name(client))
         if key not in groups:
             groups[key] = {
                 "candidate_name": name,
                 "candidate_id": row.get("candidate_id"),
                 "client_name": client,
-                "month": month,
+                "month": month if group_by_month else "",
                 "total_hours": 0.0,
                 "cumulative_hours": 0.0,
                 "monthly_hours": {},
@@ -567,6 +589,7 @@ def aggregate_hours_by_candidate(
                 "source_rows": [],
                 "client_votes": defaultdict(float),
                 "name_votes": defaultdict(float),
+                "invoice_prefixes": set(),
             }
         g = groups[key]
         hours = float(row.get("hours_worked") or 0)
@@ -577,6 +600,9 @@ def aggregate_hours_by_candidate(
         if client:
             g["client_votes"][client] += hours
         g["name_votes"][name] += hours
+        prefix = invoice_letter_prefix(str(row.get("source_ref") or ""))
+        if prefix:
+            g["invoice_prefixes"].add(prefix)
 
     # Cumulative hours + per-month weekly breakdown across the full client file
     cumulative_source = all_rows_for_cumulative if all_rows_for_cumulative is not None else rows
@@ -615,6 +641,12 @@ def aggregate_hours_by_candidate(
             for m, weeks in sorted(weekly_by_name_month.get(nkey, {}).items())
         }
         g["hours_note"] = _hours_progress_note(g["total_hours"], g["cumulative_hours"])
+        prefixes = g.get("invoice_prefixes") or set()
+        g["invoice_prefixes"] = sorted(prefixes) if isinstance(prefixes, set) else list(prefixes or [])
+        if not group_by_month:
+            # Identity match is month-independent; hours are selected later.
+            months_present = [m for m in (g.get("monthly_hours") or {}) if m]
+            g["month"] = months_present[-1] if months_present else ""
         del g["client_votes"]
         del g["name_votes"]
         result.append(g)

@@ -34,6 +34,7 @@ from app.repositories.entities.vlookup import (
     VLookupWeeklyHours,
 )
 from app.repositories.vlookup import vlookup_repository as repo
+from app.repositories.candidates import candidate_repository
 from app.services.hours import hours_service
 from app.services.vlookup.normalization import normalize_month_year, normalize_name
 from app.services.vlookup.parsers.client_hours import (
@@ -148,27 +149,9 @@ def upload_template_and_messy(
             available_months=available_months,
         )
 
-        if month_filter:
-            parsed_rows = [
-                r
-                for r in unfiltered["rows"]
-                if normalize_month_year(str(r.get("month") or "")) == month_filter
-            ]
-        else:
-            parsed_rows = list(unfiltered["rows"])
-
-        if not parsed_rows:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "No hours data found for the selected month. "
-                    f"Detected format: {unfiltered.get('format')}. "
-                    f"Requested month: {month_filter or 'none'}. "
-                    f"Months available in client file: {available_months}. "
-                    "Set Target Month to one of the available months (e.g. 2025-07)."
-                ),
-            )
-
+        # Keep every month in the client file. Identity is matched once;
+        # Accounts pick a month on the results dashboard for display/export.
+        parsed_rows = list(unfiltered["rows"])
         parsed = {
             **unfiltered,
             "rows": parsed_rows,
@@ -203,13 +186,7 @@ def upload_template_and_messy(
                 }
             )
 
-        if not weekly_mappings or (
-            month_filter
-            and not any(
-                normalize_month_year(str(r.get("month") or "")) == month_filter
-                for r in weekly_mappings
-            )
-        ):
+        if not weekly_mappings:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -224,6 +201,7 @@ def upload_template_and_messy(
         client_groups = aggregate_hours_by_candidate(
             parsed["rows"],
             all_rows_for_cumulative=unfiltered["rows"],
+            group_by_month=False,
         )
 
         match_month = month_filter or template_month
@@ -251,6 +229,8 @@ def upload_template_and_messy(
             "unmatched",
             "potential_duplicate",
             "conflicting",
+            "accepted",
+            "rejected",
         ]
         matched_mappings: List[Dict[str, Any]] = []
         for status in status_keys:
@@ -287,16 +267,17 @@ def upload_template_and_messy(
         messy_count = len(weekly_mappings)
 
         month_note = None
-        if (
-            not target_month
-            and template_month
-            and month_filter
-            and template_month != month_filter
-        ):
+        if available_months:
+            months_label = ", ".join(available_months)
             month_note = (
-                f"Template month is {template_month}, but client file has "
-                f"{available_months}. Used client month {month_filter} for reconciliation."
+                f"Client file contains {len(available_months)} month(s): {months_label}. "
+                "Identities were matched once against the Hours Template. "
+                "Select a month on Results to view and export that month's hours."
             )
+            if target_month and month_filter:
+                month_note += f" Default month filter: {month_filter}."
+        elif template_month:
+            month_note = f"No month could be detected in the client file. Template month is {template_month}."
 
         upload_batch = VLookupUploadBatch(
             batch_id=batch_id,
@@ -327,13 +308,16 @@ def upload_template_and_messy(
             template_count=len(template_records),
             template_created=created,
             template_reused=reused,
-            messy_count=messy_count,            client_candidate_count=parsed.get("candidate_count"),
+            messy_count=messy_count,
+            client_candidate_count=parsed.get("candidate_count"),
             months_in_client_file=list(available_months),
             matched_count=len(match_results.get("matched", [])),
             needs_review_count=len(match_results.get("needs_review", [])),
             unmatched_count=len(match_results.get("unmatched", [])),
             duplicate_count=len(match_results.get("potential_duplicate", [])),
             conflicting_count=len(match_results.get("conflicting", [])),
+            accepted_count=len(match_results.get("accepted", [])),
+            rejected_count=len(match_results.get("rejected", [])),
             parser_warnings=(parsed.get("warnings") or []) + ([month_note] if month_note else []),
             month_note=month_note,
             total_records=(
@@ -342,6 +326,8 @@ def upload_template_and_messy(
                 + len(match_results.get("unmatched", []))
                 + len(match_results.get("potential_duplicate", []))
                 + len(match_results.get("conflicting", []))
+                + len(match_results.get("accepted", []))
+                + len(match_results.get("rejected", []))
             ),
         )
     except HTTPException:
@@ -365,16 +351,20 @@ def get_stats(db: Session, batch_id: Optional[str] = None) -> VLookupStatsRespon
     batch = repo.get_batch(db, latest)
     return VLookupStatsResponse(
         batch_id=latest,
-        matched_count=counts["matched"],
-        needs_review_count=counts["needs_review"],
-        unmatched_count=counts["unmatched"],
-        duplicate_count=counts["potential_duplicate"],
-        conflicting_count=counts["conflicting"],
+        matched_count=counts.get("matched", 0),
+        needs_review_count=counts.get("needs_review", 0),
+        unmatched_count=counts.get("unmatched", 0),
+        duplicate_count=counts.get("potential_duplicate", 0),
+        conflicting_count=counts.get("conflicting", 0),
+        accepted_count=counts.get("accepted", 0),
+        rejected_count=counts.get("rejected", 0),
         total_records=sum(counts.values()),
         unique_master_candidates=repo.count_unique_master_candidates(db, latest),
+        hours_template_count=repo.count_template_candidates(db, latest),
         target_month=batch.target_month if batch else None,
         client_file_format=batch.client_file_format if batch else None,
         parser_warnings=list(batch.parser_warnings or []) if batch else [],
+        months_in_client_file=repo.list_months_for_batch(db, latest),
     )
 
 
@@ -403,9 +393,19 @@ def get_matches_by_status(
                 db, latest, match.messy_name_original
             )
             payload["weekly_by_month"] = weekly_by_month
-            # Also expose on explanation for clients that read nested fields
+        monthly_hours = payload.get("monthly_hours") or {}
+        if (not monthly_hours) and weekly_by_month:
+            monthly_hours = {
+                month: float(sum(float(h or 0) for h in (weeks or {}).values()))
+                for month, weeks in weekly_by_month.items()
+            }
+            payload["monthly_hours"] = monthly_hours
+        if weekly_by_month or monthly_hours:
             explanation = dict(payload.get("match_explanation") or {})
-            explanation["weekly_by_month"] = weekly_by_month
+            if weekly_by_month:
+                explanation["weekly_by_month"] = weekly_by_month
+            if monthly_hours:
+                explanation["monthly_hours"] = monthly_hours
             payload["match_explanation"] = explanation
         out.append(payload)
     return VLookupMatchesByStatusResponse(status=status, batch_id=latest, matches=out)
@@ -488,9 +488,14 @@ def accept_match(
             status_code=400,
             detail="Cannot accept unmatched record without a template candidate. Use rematch first.",
         )
+    if match.match_status == "matched" and not match.manually_reviewed:
+        raise HTTPException(
+            status_code=400,
+            detail="Auto-matched candidates do not need Accept or Reject.",
+        )
 
     body = body or VLookupReviewBody()
-    match.match_status = "matched"
+    match.match_status = "accepted"
     match.review_action = "accepted"
     repo.touch_reviewed(match, reviewed_by=body.reviewed_by, notes=body.notes)
 
@@ -506,7 +511,7 @@ def accept_match(
     explanation["audit"] = {
         "what_happened": explanation["identity_headline"],
         "why": summary,
-        "identity_status": "matched",
+        "identity_status": "accepted",
         "validation_status": (explanation.get("validation") or {}).get("status"),
         "validation_summary": (explanation.get("validation") or {}).get("summary"),
         "has_alternatives": bool(explanation.get("alternatives")),
@@ -522,36 +527,54 @@ def reject_match(
     match = repo.get_match(db, match_id)
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
+    if match.match_status == "matched" and not match.manually_reviewed:
+        raise HTTPException(
+            status_code=400,
+            detail="Auto-matched candidates do not need Accept or Reject.",
+        )
+    if match.match_status == "rejected":
+        raise HTTPException(
+            status_code=400,
+            detail="This candidate is already rejected. Use Restore if it was rejected by mistake.",
+        )
 
     body = body or VLookupReviewBody()
+    previous_status = match.match_status
     previous_name = match.template_candidate_name
-    match.match_status = "unmatched"
+    explanation = dict(match.match_explanation or {})
+    snapshot = {
+        "previous_status": previous_status,
+        "template_candidate_id": match.template_candidate_id,
+        "template_candidate_name": match.template_candidate_name,
+        "template_candidate_id_str": match.template_candidate_id_str,
+        "confidence_score": match.confidence_score,
+        "match_method": match.match_method,
+        "identity_summary": explanation.get("identity_summary"),
+        "identity_headline": explanation.get("identity_headline"),
+    }
+    match.match_status = "rejected"
     match.review_action = "rejected"
-    match.template_candidate_id = None
-    match.template_candidate_name = None
-    match.template_candidate_id_str = None
-    match.confidence_score = 0.0
-    match.match_method = "manual_reject"
     repo.touch_reviewed(match, reviewed_by=body.reviewed_by, notes=body.notes)
 
-    explanation = dict(match.match_explanation or {})
     rejected_name = f" '{previous_name}'" if previous_name else ""
     summary = (
         f"Rejected: Accounts rejected suggested identity{rejected_name} "
-        f"for source '{match.messy_name_original}'."
+        f"for source '{match.messy_name_original or match.template_candidate_name}'."
     )
     if body.notes:
         summary = f"{summary} Note: {body.notes}"
     explanation["identity_summary"] = summary
-    explanation["identity_headline"] = "Unmatched (rejected)"
-    explanation["alternatives"] = explanation.get("alternatives") or []
+    explanation["identity_headline"] = "Rejected"
+    explanation["restore_snapshot"] = snapshot
     explanation["audit"] = {
         "what_happened": explanation["identity_headline"],
         "why": summary,
-        "identity_status": "unmatched",
+        "identity_status": "rejected",
         "validation_status": (explanation.get("validation") or {}).get("status"),
         "validation_summary": (explanation.get("validation") or {}).get("summary"),
         "has_alternatives": bool(explanation.get("alternatives")),
+        "master_candidate": match.template_candidate_name,
+        "client_candidate": match.messy_name_original,
     }
     match.match_explanation = explanation
     db.commit()
@@ -575,7 +598,7 @@ def rematch(
     match.match_method = "manual"
     match.review_action = "modified"
     match.confidence_score = 100.0
-    match.match_status = "matched" if body.accept else "needs_review"
+    match.match_status = "accepted" if body.accept else "needs_review"
     repo.touch_reviewed(match, reviewed_by=body.reviewed_by, notes=body.notes)
 
     explanation = dict(match.match_explanation or {})
@@ -613,31 +636,169 @@ def rematch(
     )
 
 
+def restore_match(
+    db: Session, match_id: int, body: Optional[VLookupReviewBody] = None
+) -> VLookupActionResponse:
+    match = repo.get_match(db, match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if match.match_status != "rejected":
+        raise HTTPException(
+            status_code=400,
+            detail="Only rejected candidates can be restored.",
+        )
+
+    body = body or VLookupReviewBody()
+    explanation = dict(match.match_explanation or {})
+    snapshot = explanation.get("restore_snapshot") or {}
+    previous_status = snapshot.get("previous_status") or "needs_review"
+    if previous_status not in repo.VALID_STATUSES or previous_status == "rejected":
+        previous_status = "needs_review"
+
+    match.match_status = previous_status
+    match.review_action = "restored"
+    if snapshot.get("template_candidate_id"):
+        match.template_candidate_id = snapshot.get("template_candidate_id")
+    if snapshot.get("template_candidate_name"):
+        match.template_candidate_name = snapshot.get("template_candidate_name")
+    if snapshot.get("template_candidate_id_str"):
+        match.template_candidate_id_str = snapshot.get("template_candidate_id_str")
+    if snapshot.get("confidence_score") is not None:
+        match.confidence_score = float(snapshot.get("confidence_score") or 0)
+    if snapshot.get("match_method"):
+        match.match_method = snapshot.get("match_method")
+    repo.touch_reviewed(match, reviewed_by=body.reviewed_by, notes=body.notes)
+
+    summary = (
+        f"Restored: candidate returned to '{previous_status.replace('_', ' ')}' "
+        f"after accidental reject."
+    )
+    if body.notes:
+        summary = f"{summary} Note: {body.notes}"
+    explanation["identity_summary"] = snapshot.get("identity_summary") or summary
+    explanation["identity_headline"] = snapshot.get("identity_headline") or (
+        f"Restored: {match.template_candidate_name or 'candidate'}"
+    )
+    explanation["audit"] = {
+        "what_happened": explanation["identity_headline"],
+        "why": summary,
+        "identity_status": previous_status,
+        "validation_status": (explanation.get("validation") or {}).get("status"),
+        "validation_summary": (explanation.get("validation") or {}).get("summary"),
+        "has_alternatives": bool(explanation.get("alternatives")),
+        "master_candidate": match.template_candidate_name,
+        "client_candidate": match.messy_name_original,
+    }
+    match.match_explanation = explanation
+    db.commit()
+    return VLookupActionResponse(match_id=match_id, message="Candidate restored")
+
+
+def list_hours_template(
+    db: Session, batch_id: Optional[str] = None
+) -> Dict[str, Any]:
+    latest = repo.latest_batch_id(db, batch_id)
+    rows = repo.list_templates_for_batch(db, latest)
+    candidates = [repo.serialize_template_candidate(row) for row in rows]
+    return {
+        "batch_id": latest,
+        "count": len(candidates),
+        "candidates": candidates,
+    }
+
+
+def list_messy_file(
+    db: Session, batch_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """Read-only aggregated identities from the uploaded client (messy) hours file."""
+    latest = repo.latest_batch_id(db, batch_id)
+    rows = repo.list_weekly_hours_for_batch(db, latest)
+    merged: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for row in rows:
+        name = str(row.candidate_name_messy or "").strip()
+        client = str(row.client_name or "").strip()
+        key = (name.lower(), client.lower())
+        dest = merged.get(key)
+        if dest is None:
+            dest = {
+                "candidate_name": name,
+                "client_name": client or None,
+                "normalized_name": row.normalized_name,
+                "monthly_hours": {},
+                "total_hours": 0,
+                "week_count": 0,
+            }
+            merged[key] = dest
+        month = str(row.month or "").strip() or "unknown"
+        hours = int(row.hours_worked or 0)
+        dest["monthly_hours"][month] = float(dest["monthly_hours"].get(month, 0)) + hours
+        dest["total_hours"] = int(dest["total_hours"]) + hours
+        dest["week_count"] = int(dest["week_count"]) + 1
+        if len(name) > len(str(dest.get("candidate_name") or "")):
+            dest["candidate_name"] = name
+    identities = sorted(
+        merged.values(),
+        key=lambda item: (str(item.get("candidate_name") or "").lower(), str(item.get("client_name") or "").lower()),
+    )
+    return {
+        "batch_id": latest,
+        "count": len(identities),
+        "identities": identities,
+    }
+
+
+def _hours_for_export_month(match: VLookupMatchedRecord, month_key: str) -> int:
+    explanation = match.match_explanation or {}
+    monthly = explanation.get("monthly_hours") or {}
+    if month_key and monthly.get(month_key) is not None:
+        try:
+            return int(round(float(monthly.get(month_key) or 0)))
+        except (TypeError, ValueError):
+            return 0
+    if month_key and normalize_month_year(str(match.messy_month or "")) == month_key:
+        return int(match.total_hours or 0)
+    if not month_key:
+        return int(match.total_hours or 0)
+    return 0
+
+
 def _matched_hours_export_rows(
     db: Session,
     batch_id: Optional[str] = None,
     include_review_pending: bool = False,
+    month_key: Optional[str] = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
-    """Build the same matched rows used for the filled Hours Template download."""
+    """
+    Build filled Hours Template rows.
+
+    Only review-complete matches: auto-matched + manually accepted.
+    Rejected, unmatched, and other-client people are excluded.
+    """
     latest = repo.latest_batch_id(db, batch_id)
     if not latest:
         raise HTTPException(status_code=404, detail="No matches found")
 
     batch = repo.get_batch(db, latest)
     batch_month = normalize_month_year(str(getattr(batch, "target_month", None) or ""))
+    requested_month = normalize_month_year(str(month_key or "")) or batch_month
+    available_months = repo.list_months_for_batch(db, latest)
+    if not requested_month and available_months:
+        requested_month = available_months[-1]
 
-    statuses = ["matched"]
+    statuses = ["matched", "accepted"]
     if include_review_pending:
-        statuses.append("needs_review")
+        statuses.extend(["needs_review", "potential_duplicate", "conflicting"])
 
     matches = repo.list_matches_for_download(db, latest, statuses)
     data: List[Dict[str, Any]] = []
     for match in matches:
+        if match.review_action == "rejected" or match.match_status == "rejected":
+            continue
         if not match.template_candidate_id:
             continue
         template = repo.get_template_by_id(db, match.template_candidate_id)
-        # Prefer messy/target month (already often YYYY-MM); normalize template labels like August-2026.
-        month_value = (
+        hours = _hours_for_export_month(match, requested_month)
+        month_value = requested_month or (
             normalize_month_year(str(match.messy_month or ""))
             or normalize_month_year(str(template.month if template and template.month else ""))
             or batch_month
@@ -649,7 +810,7 @@ def _matched_hours_export_rows(
                 "Candidate ID": match.template_candidate_id_str or "",
                 "Candidate Name": match.template_candidate_name or "",
                 "Client Name": template.client_name if template else "",
-                "Hours Worked": match.total_hours,
+                "Hours Worked": hours,
                 "Month": month_value,
                 "Match Status": match.match_status,
                 "Confidence": match.confidence_score,
@@ -666,9 +827,13 @@ def download_matches(
     db: Session,
     batch_id: Optional[str] = None,
     include_review_pending: bool = False,
+    month_key: Optional[str] = None,
 ) -> StreamingResponse:
     latest, data = _matched_hours_export_rows(
-        db, batch_id=batch_id, include_review_pending=include_review_pending
+        db,
+        batch_id=batch_id,
+        include_review_pending=include_review_pending,
+        month_key=month_key,
     )
     _ = latest
     df = pd.DataFrame(data)
@@ -712,6 +877,7 @@ def publish_hours_from_batch(
     batch_id: Optional[str] = None,
     division: Optional[str] = None,
     include_review_pending: bool = False,
+    month_key: Optional[str] = None,
     uploaded_by: Optional[int] = None,
 ) -> VLookupPublishHoursResponse:
     """
@@ -719,7 +885,10 @@ def publish_hours_from_batch(
     (`hours_data_versions` / `hours_rows`). This is the DB source of truth for Hours Worked.
     """
     latest, data = _matched_hours_export_rows(
-        db, batch_id=batch_id, include_review_pending=include_review_pending
+        db,
+        batch_id=batch_id,
+        include_review_pending=include_review_pending,
+        month_key=month_key,
     )
     if not data:
         raise HTTPException(
@@ -766,14 +935,36 @@ def publish_hours_from_batch(
             )
         raise HTTPException(status_code=400, detail=" ".join(detail_parts))
 
+    known_rows: List[HoursRowIn] = []
+    for row in rows:
+        external = str(row.external_candidate_id or "").strip()
+        if not external:
+            continue
+        if candidate_repository.get_candidate_by_external_id(db, external) is None:
+            continue
+        known_rows.append(row)
+
     primary_month = Counter(month_keys).most_common(1)[0][0]
+    if not known_rows:
+        # Hours Template IDs often are not in Candidate Master. Download still works;
+        # Hours & Benchmark publish is skipped instead of failing the request.
+        return VLookupPublishHoursResponse(
+            status="skipped",
+            batch_id=latest,
+            hours_version_id=0,
+            row_count=0,
+            division=division,
+            month_key=primary_month,
+            version_label="",
+        )
+
     version_label = f"VLOOKUP {primary_month} ({latest[:8]})"
     payload = CreateHoursVersionRequest(
         version_label=version_label,
         division=division,
         source_filename=f"vlookup_batch_{latest}.xlsx",
         notes=f"Published from VLOOKUP batch {latest}",
-        rows=rows,
+        rows=known_rows,
     )
     detail = hours_service.create_version(db, payload, uploaded_by=uploaded_by)
     return VLookupPublishHoursResponse(
