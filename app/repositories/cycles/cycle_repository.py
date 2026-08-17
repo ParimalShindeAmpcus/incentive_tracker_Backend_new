@@ -153,6 +153,18 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[CyclePaymentStatus
     )
 
 
+def ensure_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) -> List[CyclePaymentStatus]:
+    existing = {row.candidate_id for row in list_payment_statuses(db, cycle_id)}
+    created = []
+    for candidate_id in candidate_ids:
+        if candidate_id not in existing:
+            row = CyclePaymentStatus(cycle_id=cycle_id, candidate_id=candidate_id, status="PAYMENT_PENDING")
+            db.add(row)
+            created.append(row)
+    db.flush()
+    return created
+
+
 def get_payment_status(db: Session, status_id: int) -> Optional[CyclePaymentStatus]:
     return db.query(CyclePaymentStatus).filter(CyclePaymentStatus.id == status_id).first()
 
@@ -162,10 +174,16 @@ def update_payment_status(
     row: CyclePaymentStatus,
     *,
     status: str,
+    payment_received_date=None,
+    payment_reference: Optional[str] = None,
     notes: Optional[str],
     updated_by: Optional[int],
 ) -> CyclePaymentStatus:
     row.status = status
+    if payment_received_date is not None:
+        row.payment_received_date = payment_received_date
+    if payment_reference is not None:
+        row.payment_reference = payment_reference
     if notes is not None:
         row.notes = notes
     row.updated_by = updated_by

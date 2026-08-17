@@ -140,6 +140,8 @@ class PaymentStatusOut(BaseModel):
     cycle_id: int
     candidate_id: int
     status: str
+    payment_received_date: Optional[date] = None
+    payment_reference: Optional[str] = None
     notes: Optional[str] = None
     updated_by: Optional[int] = None
     updated_at: Optional[datetime] = None
@@ -147,6 +149,8 @@ class PaymentStatusOut(BaseModel):
 
 class PaymentStatusUpdate(BaseModel):
     status: str
+    payment_received_date: Optional[date] = None
+    payment_reference: Optional[str] = None
     notes: Optional[str] = None
 
 

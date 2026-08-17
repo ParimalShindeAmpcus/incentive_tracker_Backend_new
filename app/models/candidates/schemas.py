@@ -40,6 +40,8 @@ class CandidateOut(BaseModel):
     msp_fee: Optional[Decimal] = None
     margin: Optional[Decimal] = None
     markup_percent: Optional[Decimal] = None
+    approved_markup_percentage: Optional[Decimal] = None
+    ownership_confirmed: bool = False
     remote: Optional[str] = None
     work_location: Optional[str] = None
     candidate_location: Optional[str] = None
@@ -97,6 +99,8 @@ class CandidateUpdate(BaseModel):
     bill_rate: Optional[Decimal] = None
     msp_fee: Optional[Decimal] = None
     margin: Optional[Decimal] = None
+    approved_markup_percentage: Optional[Decimal] = None
+    ownership_confirmed: Optional[bool] = None
     remote: Optional[str] = None
     work_location: Optional[str] = None
     candidate_location: Optional[str] = None
