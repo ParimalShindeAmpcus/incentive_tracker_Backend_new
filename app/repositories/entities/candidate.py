@@ -60,6 +60,11 @@ class Candidate(Base):
     msp_fee: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
     margin: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
     markup_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
+    # This is intentionally separate from the calculated/imported mark-up.  It is
+    # the reviewed value used by client incentive calculations and is never
+    # derived during a finalized cycle.
+    approved_markup_percentage: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
+    ownership_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     remote: Mapped[Optional[str]] = mapped_column(String(20))
     work_location: Mapped[Optional[str]] = mapped_column(String(255))
     candidate_location: Mapped[Optional[str]] = mapped_column(String(255))

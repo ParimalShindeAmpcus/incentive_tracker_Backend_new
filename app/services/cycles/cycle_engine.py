@@ -32,6 +32,13 @@ from app.services.incentives.nashik_calculator import (
     calculate_nashik_placement,
 )
 from app.services.incentives.nashik_rules import is_nashik_division
+from app.services.cycles.engines.ampcus_client import (
+    calculate_placement as calculate_ampcus_client_placement,
+    coordinator_index,
+    is_ampcus_client_division,
+)
+from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
+from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, special_average
 
 
 def _to_master(cand: Candidate) -> MasterCandidate:
@@ -103,6 +110,41 @@ def run_cycle_calculation(
     hours_rows: Sequence[HoursMatchRow],
     window: CycleWindow,
 ) -> Tuple[List[LineDraft], dict, List[dict], List[dict]]:
+    # Ampcus Client is placement/payment/approved-markup driven.  It must not
+    # require an hours import or inherit Nashik's 160-hour matching flow.
+    if is_ampcus_client_division(cycle.division) or is_ampcus_inhouse_division(cycle.division):
+        masters = candidate_repository.list_all_candidates(db)
+        division_masters = [c for c in masters if is_ampcus_client_division(c.division)]
+        if division_masters:
+            masters = division_masters
+        payment_by_candidate = {
+            row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
+        }
+        coordinators = coordinator_index(db)
+        lines = []
+        pending = 0
+        no_slab = 0
+        for candidate in masters:
+            if is_ampcus_client_division(cycle.division):
+                drafts = calculate_ampcus_client_placement(candidate, cycle_end=window.end, payment=payment_by_candidate.get(candidate.id), coordinators=coordinators)
+            else:
+                drafts = calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators)
+            if any(line.reason == "PAYMENT_PENDING" for line in drafts):
+                pending += 1
+            if any(line.reason == "MARKUP_BELOW_INCENTIVE_THRESHOLD" for line in drafts):
+                no_slab += 1
+            lines.extend(drafts)
+        stats = {
+            "total_hours_rows": len(masters), "matched_name_and_id": len(masters),
+            "matched_id_fallback": 0, "name_id_mismatch": 0, "unmatched": 0,
+            "inactive": sum(1 for c in masters if not c.incentive_active), "already_paid": 0,
+        }
+        validations = [
+            {"check_key": "payment_pending", "severity": "YELLOW" if pending else "GREEN", "message": "Placements awaiting first full-month client payment", "count": pending, "details_json": None},
+            {"check_key": "no_incentive_slab", "severity": "YELLOW" if no_slab else "GREEN", "message": "Placements below the client mark-up threshold", "count": no_slab, "details_json": None},
+        ]
+        return lines, stats, [], validations
+
     masters = candidate_repository.list_all_candidates(db)
     if cycle.division:
         division_masters = [c for c in masters if (c.division or "") == cycle.division]
@@ -191,6 +233,16 @@ def run_cycle_calculation(
                 )
             )
             continue
+        if is_sambhaji_nagar_division(cycle.division):
+            payment_by_candidate = {row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)}
+            drafts = calculate_sambhaji_placement(
+                cand,
+                hours=hours,
+                payment_status=str(getattr(payment_by_candidate.get(pk), "status", "PAYMENT_PENDING")),
+                coordinators=coordinator_index(db),
+            )
+            lines.extend(drafts)
+            continue
         if not is_nashik_division(cycle.division):
             lines.append(
                 _ineligible_line(
@@ -229,6 +281,9 @@ def run_cycle_calculation(
             if (not draft.eligible) and "already paid" in (draft.reason or "").lower():
                 stats["already_paid"] += 1
             lines.append(draft)
+
+    if is_sambhaji_nagar_division(cycle.division):
+        lines = special_average(lines)
 
     validations = [
         {

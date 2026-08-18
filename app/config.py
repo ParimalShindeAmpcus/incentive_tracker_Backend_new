@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import List, Optional
 from urllib.parse import quote_plus
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,6 +71,18 @@ class Settings(BaseSettings):
     vlookup_moderate_name_score: float = 78.0
     vlookup_min_identity_name_score: float = 70.0
     vlookup_ambiguity_gap: float = 8.0
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug_value(cls, value):
+        """Accept common deployment labels without preventing API startup."""
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "production", "prod", "off", "no"}:
+                return False
+            if normalized in {"development", "dev", "debug", "on", "yes"}:
+                return True
+        return value
 
     @model_validator(mode="after")
     def assemble_database_url(self):

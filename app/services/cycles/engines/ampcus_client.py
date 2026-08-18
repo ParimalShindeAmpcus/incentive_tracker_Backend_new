@@ -1,0 +1,147 @@
+"""Ampcus Tech Client incentive rules.
+
+This engine deliberately has no hours or 90-day condition.  It consumes the
+reviewed placement snapshot (Candidate in the current data model) and emits
+server-calculated line drafts only.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import date
+from decimal import Decimal
+from typing import Dict, Iterable, List, Optional, Tuple
+
+from sqlalchemy.orm import Session
+
+from app.repositories.entities.candidate import Candidate
+from app.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
+from app.services.incentives.nashik_calculator import LineDraft
+
+ZERO = Decimal("0")
+ROLES = ("Recruiter", "Team Lead", "Manager", "CRM", "CH/VP")
+SLABS: Tuple[Tuple[Decimal, Decimal, Dict[str, int]], ...] = (
+    (Decimal("0"), Decimal("5"), {role: 0 for role in ROLES}),
+    (Decimal("5"), Decimal("10"), {"Recruiter": 2000, "Team Lead": 250, "Manager": 500, "CRM": 750, "CH/VP": 500}),
+    (Decimal("10"), Decimal("15"), {"Recruiter": 3000, "Team Lead": 250, "Manager": 500, "CRM": 750, "CH/VP": 1000}),
+    (Decimal("15"), Decimal("20"), {"Recruiter": 5000, "Team Lead": 500, "Manager": 1000, "CRM": 1000, "CH/VP": 1500}),
+    (Decimal("20"), Decimal("25"), {"Recruiter": 6000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 2000}),
+    (Decimal("25"), Decimal("30"), {"Recruiter": 7000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 2500}),
+    (Decimal("30"), Decimal("35"), {"Recruiter": 8000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 3000}),
+    (Decimal("35"), Decimal("40"), {"Recruiter": 9000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 3500}),
+    (Decimal("40"), Decimal("100"), {"Recruiter": 10000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 4000}),
+)
+
+
+def is_ampcus_client_division(division: Optional[str]) -> bool:
+    return str(division or "").strip().lower().replace(" ", "").replace("-", "") in {
+        "ampcustechclient", "ampcustech(client)", "ampcusclient"
+    }
+
+
+def resolve_slab(markup: Optional[Decimal]) -> Optional[Tuple[Decimal, Decimal, Dict[str, int]]]:
+    if markup is None or markup < ZERO or markup > Decimal("100"):
+        return None
+    for low, high, amounts in SLABS:
+        if (low == ZERO and low <= markup <= high) or (low < markup <= high):
+            return low, high, amounts
+    return None
+
+
+def _line(candidate: Candidate, role: str, person: Optional[str], amount: Decimal, *, eligible: bool, reason: str, rule: str, details: dict) -> LineDraft:
+    return LineDraft(
+        candidate_id=candidate.id,
+        candidate_name=candidate.candidate_name,
+        role=role,
+        person=(person or "—").strip(),
+        incentive_type="AMPCUS_CLIENT_MARKUP",
+        rule_applied=rule,
+        eligible=eligible,
+        base_incentive=amount,
+        pro_rata_factor=Decimal("1") if eligible else ZERO,
+        amount=amount if eligible else ZERO,
+        hours=ZERO,
+        margin=candidate.approved_markup_percentage,
+        reason=reason,
+        explanation=[json.dumps(details, default=str)],
+    )
+
+
+def _people(candidate: Candidate) -> Dict[str, Optional[str]]:
+    # CH takes precedence over AVP/VP.  The slab is paid exactly once.
+    return {
+        "Recruiter": candidate.recruiter,
+        "Team Lead": candidate.team_lead,
+        "Manager": candidate.manager,
+        "CRM": candidate.crm,
+        "CH/VP": candidate.center_head or candidate.avp,
+    }
+
+
+def _inactive(candidate: Candidate) -> bool:
+    return candidate.incentive_active is False or "INACTIVE" in str(candidate.status or "").upper()
+
+
+def _project_ended(candidate: Candidate, cycle_end: date) -> bool:
+    return candidate.end_date is not None and candidate.end_date <= cycle_end
+
+
+def calculate_placement(
+    candidate: Candidate,
+    *, cycle_end: date,
+    payment: Optional[object] = None,
+    coordinators: Optional[Dict[str, CoordinatorRecord]] = None,
+) -> List[LineDraft]:
+    """Return five deterministic role lines for one placement snapshot."""
+    people = _people(candidate)
+    markup = candidate.approved_markup_percentage
+    payment_status = str(getattr(payment, "status", "PAYMENT_PENDING") or "PAYMENT_PENDING").upper()
+    details = {
+        "approved_markup_percentage": str(markup) if markup is not None else None,
+        "payment_status": payment_status,
+        "payment_received_date": str(getattr(payment, "payment_received_date", None) or "") or None,
+        "payment_reference": getattr(payment, "payment_reference", None),
+        "ownership_confirmed": candidate.ownership_confirmed,
+    }
+    def all_zero(reason: str, rule: str) -> List[LineDraft]:
+        return [_line(candidate, role, people[role], ZERO, eligible=False, reason=reason, rule=rule, details=details) for role in ROLES]
+
+    if not candidate.start_date:
+        return all_zero("CANDIDATE_NOT_STARTED", "Ampcus Client eligibility")
+    if not candidate.ownership_confirmed:
+        return all_zero("OWNERSHIP_NOT_CONFIRMED", "Ampcus Client eligibility")
+    if _inactive(candidate):
+        return all_zero("CANDIDATE_INACTIVE", "Ampcus Client eligibility")
+    if _project_ended(candidate, cycle_end):
+        return all_zero("PROJECT_ENDED", "Ampcus Client eligibility")
+    if payment_status not in {"RECEIVED", "PAYMENT_RECEIVED"}:
+        return all_zero("PAYMENT_PENDING", "Ampcus Client payment gate")
+    slab = resolve_slab(markup)
+    if slab is None:
+        return all_zero("MARKUP_NOT_AVAILABLE" if markup is None else "MARKUP_OUT_OF_RANGE", "Ampcus Client mark-up validation")
+    low, high, amounts = slab
+    details["incentive_slab"] = {"min_markup": str(low), "max_markup": str(high)}
+    if markup is not None and markup <= Decimal("5"):
+        return all_zero("MARKUP_BELOW_INCENTIVE_THRESHOLD", "Ampcus Client mark-up slab")
+    if any(not people[role] for role in ROLES):
+        return all_zero("MISSING_HIERARCHY", "Ampcus Client hierarchy validation")
+
+    coordinators = coordinators or {}
+    lines: List[LineDraft] = []
+    for role in ROLES:
+        person = people[role]
+        amount = Decimal(amounts[role])
+        recruiter = role == "Recruiter"
+        status = coordinators.get((person or "").strip().lower())
+        coordinator_status = getattr(status, "employment_status", CoordinatorStatus.ACTIVE)
+        coordinator_status_value = getattr(coordinator_status, "value", str(coordinator_status)).upper()
+        if recruiter and coordinator_status_value in {CoordinatorStatus.LEFT.value, CoordinatorStatus.NOTICE.value}:
+            reason = "COORDINATOR_LEFT" if coordinator_status_value == CoordinatorStatus.LEFT.value else "COORDINATOR_ON_NOTICE"
+            lines.append(_line(candidate, role, person, ZERO, eligible=False, reason=reason, rule="Ampcus Client recruiter status", details=details))
+        else:
+            lines.append(_line(candidate, role, person, amount, eligible=True, reason="ELIGIBLE", rule=f"Ampcus Client mark-up {low}–{high}%", details=details))
+    return lines
+
+
+def coordinator_index(db: Session) -> Dict[str, CoordinatorRecord]:
+    return {row.normalized_name.strip().lower(): row for row in db.query(CoordinatorRecord).filter(CoordinatorRecord.is_deleted.is_(False)).all()}

@@ -182,6 +182,8 @@ class CyclePaymentStatus(Base):
     cycle_id: Mapped[int] = mapped_column(ForeignKey("incentive_cycles.id"), nullable=False, index=True)
     candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="PENDING", nullable=False)
+    payment_received_date: Mapped[Optional[date]] = mapped_column(Date)
+    payment_reference: Mapped[Optional[str]] = mapped_column(String(255))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     updated_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     updated_at: Mapped[datetime] = mapped_column(

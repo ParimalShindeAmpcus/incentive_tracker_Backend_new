@@ -38,6 +38,9 @@ from app.repositories.entities.cycle import CycleStatus
 from app.repositories.hours import hours_repository
 from app.repositories.incentives import incentive_repository
 from app.services.cycles.cycle_engine import run_cycle_calculation
+from app.services.cycles.engines.ampcus_client import is_ampcus_client_division
+from app.services.cycles.engines.ampcus_inhouse import is_ampcus_inhouse_division
+from app.services.cycles.engines.sambhaji_nagar import is_sambhaji_nagar_division
 from app.services.cycles.hours_name_matcher import HoursMatchRow
 from app.services.cycles.hours_template_parser import parse_hours_template
 from app.services.incentives.nashik_calculator import CycleWindow
@@ -49,6 +52,13 @@ def create_cycle(db: Session, payload: CycleCreate, created_by: Optional[int] = 
     data["status"] = CycleStatus.DRAFT
     cycle = cycle_repository.create_cycle(db, data)
     cycle_repository.ensure_default_checklist(db, cycle.id)
+    if is_ampcus_client_division(cycle.division) or is_sambhaji_nagar_division(cycle.division):
+        candidates = candidate_repository.list_all_candidates(db)
+        cycle_repository.ensure_payment_statuses(
+            db,
+            cycle.id,
+            [candidate.id for candidate in candidates if (is_ampcus_client_division(candidate.division) if is_ampcus_client_division(cycle.division) else is_sambhaji_nagar_division(candidate.division))],
+        )
     db.commit()
     db.refresh(cycle)
     return CycleOut.model_validate(cycle)
@@ -187,6 +197,8 @@ def update_payment_status(
         db,
         row,
         status=payload.status,
+        payment_received_date=payload.payment_received_date,
+        payment_reference=payload.payment_reference,
         notes=payload.notes,
         updated_by=user_id,
     )
@@ -223,6 +235,16 @@ def approve_cycle(
     user_id: Optional[int] = None,
 ) -> CycleOut:
     cycle = _require_cycle(db, cycle_id)
+    if is_ampcus_client_division(cycle.division):
+        if cycle.status != CycleStatus.CALCULATED:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ampcus Client cycle must be calculated before finalization")
+        blocking = {
+            "CANDIDATE_NOT_STARTED", "OWNERSHIP_NOT_CONFIRMED", "CANDIDATE_INACTIVE",
+            "PROJECT_ENDED", "PAYMENT_PENDING", "MARKUP_NOT_AVAILABLE",
+            "MARKUP_OUT_OF_RANGE", "MISSING_HIERARCHY",
+        }
+        if any(line.reason in blocking for line in cycle_repository.list_lines(db, cycle.id)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ampcus Client cycle has unresolved placement validation errors")
     cycle.status = CycleStatus.APPROVED
     cycle.approved_at = datetime.now(timezone.utc)
     db.add(cycle)
@@ -271,7 +293,7 @@ def calculate_cycle(db: Session, cycle_id: int) -> CalculateResult:
             detail="Approved cycles cannot be recalculated",
         )
     hours_rows = _hours_rows_for_cycle(db, cycle)
-    if not hours_rows:
+    if not hours_rows and not (is_ampcus_client_division(cycle.division) or is_ampcus_inhouse_division(cycle.division)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Upload the filled hours template before calculating",
