@@ -37,6 +37,7 @@ COLUMN_ALIASES = {
     "candidate": "name",
     "consultant": "name",
     "name": "name",
+    "candidate start id": "id",
     "candidate id": "id",
     "start id": "id",
     "id": "id",
@@ -61,10 +62,10 @@ def _map_headers(headers: List[str]) -> dict:
         alias = COLUMN_ALIASES.get(_header_key(header))
         if alias and alias not in mapping:
             mapping[alias] = idx
-    missing = [label for label in ("name", "id", "hours") if label not in mapping]
+    missing = [label for label in ("name", "id", "client", "hours", "month") if label not in mapping]
     if missing:
         raise ValueError(
-            "Hours file is missing required columns: Candidate Name, Candidate ID, Hours Worked"
+            "Hours file is missing required columns: Candidate Name, Candidate Start ID, Client Name, Hours Worked, Month"
         )
     return mapping
 

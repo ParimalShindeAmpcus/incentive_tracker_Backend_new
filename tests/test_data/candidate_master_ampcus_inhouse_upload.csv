@@ -1,0 +1,3 @@
+external_candidate_id,start_id,candidate_name,client,contract_type,margin,recruiter,team_lead,manager,crm,center_head,avp,organization,candidate_source,recruiter_location,start_date,end_date,division,is_active,incentive_active,placement_level,status
+INH-201,INH-201,Inhouse Candidate A,InHouse Client Inc,C2C,0,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2026-04-01,,ampcusTechInhouse,true,true,ABOVE_MANAGER,Active
+INH-202,INH-202,Inhouse Candidate B,InHouse Client Inc,C2C,0,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2026-04-01,,ampcusTechInhouse,true,true,BELOW_MANAGER,Active

@@ -1,0 +1,6 @@
+Candidate Name,Candidate Start ID,Client Name,Hours Worked,Month
+Client Candidate A,CLI-101,Bravens Inc,160,August-2026
+Client Candidate B,CLI-102,Ampcus Inc,160,August-2026
+Inhouse Candidate A,INH-201,InHouse Client Inc,160,August-2026
+Inhouse Candidate B,INH-202,InHouse Client Inc,160,August-2026
+Unmatched Client Candidate,UNK-999,Some Corp,160,August-2026

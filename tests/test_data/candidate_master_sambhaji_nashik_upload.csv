@@ -1,0 +1,9 @@
+external_candidate_id,start_id,candidate_name,client,contract_type,margin,recruiter,team_lead,manager,crm,center_head,avp,organization,candidate_source,recruiter_location,start_date,end_date,division,is_active,incentive_active
+NSK-001,NSK-001,Rahul Sharma,Bravens Inc,C2C,12,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2026-01-01,,nashik,true,true
+NSK-002,NSK-002,Priya Patel,Ampcus Inc,C2C,8,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2026-01-01,,nashik,true,true
+NSK-003,NSK-003,Amit Deshmukh,Apokrin LLC,C2C,5,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2026-01-01,,nashik,true,true
+NSK-004,NSK-004,Suresh Patil,Ampcus Inc,C2C,15,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2026-01-01,,nashik,true,true
+SBN-001,SBN-001,Sneha Kulkarni,Ampcus Inc,C2C,10,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Sambhaji Nagar,2026-01-01,,sambhajiNagar,true,true
+SBN-002,SBN-002,Vikram Jadhav,Bravens Inc,C2C,6,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Sambhaji Nagar,2026-01-01,,sambhajiNagar,true,true
+SBN-003,SBN-003,Pooja Gaikwad,ITech Inc,C2C,20,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Sambhaji Nagar,2026-01-01,,sambhajiNagar,true,true
+SBN-004,SBN-004,Meena Wagh,Ampcus Inc,C2C,4,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Sambhaji Nagar,2026-01-01,,sambhajiNagar,true,true

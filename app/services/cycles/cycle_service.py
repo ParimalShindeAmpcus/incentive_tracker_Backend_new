@@ -41,6 +41,7 @@ from app.services.cycles.cycle_engine import run_cycle_calculation
 from app.services.cycles.engines.ampcus_client import is_ampcus_client_division
 from app.services.cycles.engines.ampcus_inhouse import is_ampcus_inhouse_division
 from app.services.cycles.engines.sambhaji_nagar import is_sambhaji_nagar_division
+from app.services.cycles.division_resolver import resolve_candidate_division
 from app.services.cycles.hours_name_matcher import HoursMatchRow
 from app.services.cycles.hours_template_parser import parse_hours_template
 from app.services.incentives.nashik_calculator import CycleWindow
@@ -54,11 +55,17 @@ def create_cycle(db: Session, payload: CycleCreate, created_by: Optional[int] = 
     cycle_repository.ensure_default_checklist(db, cycle.id)
     if is_ampcus_client_division(cycle.division) or is_sambhaji_nagar_division(cycle.division):
         candidates = candidate_repository.list_all_candidates(db)
-        cycle_repository.ensure_payment_statuses(
-            db,
-            cycle.id,
-            [candidate.id for candidate in candidates if (is_ampcus_client_division(candidate.division) if is_ampcus_client_division(cycle.division) else is_sambhaji_nagar_division(candidate.division))],
-        )
+        ids: list[int] = []
+        for cand in candidates:
+            resolved = resolve_candidate_division(
+                organization=cand.organization,
+                recruiter_work_location=cand.recruiter_location,
+                contract_type=cand.contract_type,
+                master_division=cand.division,
+            )
+            if cycle.division and resolved.resolved_division == cycle.division:
+                ids.append(cand.id)
+        cycle_repository.ensure_payment_statuses(db, cycle.id, ids)
     db.commit()
     db.refresh(cycle)
     return CycleOut.model_validate(cycle)

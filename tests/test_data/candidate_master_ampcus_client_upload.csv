@@ -1,0 +1,3 @@
+external_candidate_id,start_id,candidate_name,client,contract_type,margin,recruiter,team_lead,manager,crm,center_head,avp,organization,candidate_source,recruiter_location,start_date,end_date,division,is_active,incentive_active,placement_level,status
+CLI-101,CLI-101,Client Candidate A,Bravens Inc,C2C,18.50,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2026-01-15,,ampcusTechClient,true,true,ABOVE_MANAGER,Active
+CLI-102,CLI-102,Client Candidate B,Ampcus Inc,C2C,12.00,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Pune,2026-01-15,,ampcusTechClient,true,true,BELOW_MANAGER,Active

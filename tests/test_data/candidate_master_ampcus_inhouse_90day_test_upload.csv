@@ -1,0 +1,3 @@
+external_candidate_id,start_id,candidate_name,client,contract_type,margin,recruiter,team_lead,manager,crm,center_head,avp,organization,candidate_source,recruiter_location,start_date,end_date,division,status,placement_level
+INH-301,INH-301,Inhouse 90+ Days Eligible,InHouse Client Inc,C2C,0,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2025-10-01,,ampcusTechInhouse,Active,ABOVE_MANAGER
+INH-302,INH-302,Inhouse <90 Days Not Eligible,InHouse Client Inc,C2C,0,Amit William Ohol,Majid Khan,Nitin Giri,David,ABC,DEF,Ampcus Inc,Ampcus Inc,Nashik,2026-07-20,,ampcusTechInhouse,Active,BELOW_MANAGER
