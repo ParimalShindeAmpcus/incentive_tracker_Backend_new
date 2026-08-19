@@ -15,8 +15,24 @@ def candidate(**overrides):
 def test_inhouse_90_day_and_level_amounts():
     lines = inhouse(candidate(), cycle_end=date(2026, 5, 1), coordinators={})
     assert {line.role: line.amount for line in lines} == {"Recruiter": Decimal("3000"), "Manager": Decimal("500"), "Center Head": Decimal("1000")}
+    assert all(line.eligible is True and line.reason == "ELIGIBLE" for line in lines)
+
+    # Above manager level
+    above = inhouse(candidate(placement_level="ABOVE_MANAGER"), cycle_end=date(2026, 5, 1), coordinators={})
+    assert {line.role: line.amount for line in above} == {"Recruiter": Decimal("5000"), "Manager": Decimal("500"), "Center Head": Decimal("1000")}
+
+    # Less than 90 days tenure
     below = inhouse(candidate(start_date=date(2026, 4, 1)), cycle_end=date(2026, 5, 1), coordinators={})
-    assert all(line.amount == 0 and line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in below)
+    assert all(line.amount == 0 and line.eligible is False and line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in below)
+
+    # Already paid deduplication
+    paid_keys = {"1|INHOUSE|Recruiter|r", "1|INHOUSE|Manager|m"}
+    dedup = inhouse(candidate(), cycle_end=date(2026, 5, 1), coordinators={}, paid_keys=paid_keys)
+    assert {line.role: (line.amount, line.reason) for line in dedup} == {
+        "Recruiter": (Decimal("0"), "ALREADY_PAID"),
+        "Manager": (Decimal("0"), "ALREADY_PAID"),
+        "Center Head": (Decimal("1000"), "ELIGIBLE"),
+    }
 
 
 def test_sambhaji_matrix_and_payment_gate():
@@ -25,3 +41,4 @@ def test_sambhaji_matrix_and_payment_gate():
     assert all(line.amount == 0 for line in pending)
     paid = sambhaji(candidate(), hours=Decimal("80"), payment_status="RECEIVED", coordinators={})
     assert paid[0].amount == Decimal("5000")
+

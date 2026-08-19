@@ -113,7 +113,7 @@ def run_cycle_calculation(
 ) -> Tuple[List[LineDraft], dict, List[dict], List[dict]]:
     # Ampcus Client is placement/payment/approved-markup driven.  It must not
     # require an hours import or inherit Nashik's 160-hour matching flow.
-    if is_ampcus_client_division(cycle.division) or is_ampcus_inhouse_division(cycle.division):
+    if is_ampcus_client_division(cycle.division):
         masters = candidate_repository.list_all_candidates(db)
         division_masters = [c for c in masters if is_ampcus_client_division(c.division)]
         if division_masters:
@@ -126,10 +126,7 @@ def run_cycle_calculation(
         pending = 0
         no_slab = 0
         for candidate in masters:
-            if is_ampcus_client_division(cycle.division):
-                drafts = calculate_ampcus_client_placement(candidate, cycle_end=window.end, payment=payment_by_candidate.get(candidate.id), coordinators=coordinators)
-            else:
-                drafts = calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators)
+            drafts = calculate_ampcus_client_placement(candidate, cycle_end=window.end, payment=payment_by_candidate.get(candidate.id), coordinators=coordinators)
             if any(line.reason == "PAYMENT_PENDING" for line in drafts):
                 pending += 1
             if any(line.reason == "MARKUP_BELOW_INCENTIVE_THRESHOLD" for line in drafts):
@@ -143,6 +140,39 @@ def run_cycle_calculation(
         validations = [
             {"check_key": "payment_pending", "severity": "YELLOW" if pending else "GREEN", "message": "Placements awaiting first full-month client payment", "count": pending, "details_json": None},
             {"check_key": "no_incentive_slab", "severity": "YELLOW" if no_slab else "GREEN", "message": "Placements below the client mark-up threshold", "count": no_slab, "details_json": None},
+        ]
+        return lines, stats, [], validations
+
+    # Ampcus In-House is 90-day active tenure driven directly from Candidate Master.
+    # No hours template upload required; candidates completing 90 days are automatically eligible.
+    if is_ampcus_inhouse_division(cycle.division):
+        masters = candidate_repository.list_all_candidates(db)
+        division_masters = [c for c in masters if is_ampcus_inhouse_division(c.division)]
+        if division_masters:
+            masters = division_masters
+        paid_keys = incentive_repository.paid_one_time_keys(db, cycle.id)
+        coordinators = coordinator_index(db)
+        lines = []
+        not_90_days = 0
+        inactive = 0
+        already_paid = 0
+        for candidate in masters:
+            drafts = calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
+            if any(line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in drafts):
+                not_90_days += 1
+            if any(line.reason == "CANDIDATE_INACTIVE" for line in drafts):
+                inactive += 1
+            if any(line.reason == "ALREADY_PAID" for line in drafts):
+                already_paid += 1
+            lines.extend(drafts)
+        stats = {
+            "total_hours_rows": len(masters), "matched_name_and_id": len(masters),
+            "matched_id_fallback": 0, "name_id_mismatch": 0, "unmatched": 0,
+            "inactive": inactive, "already_paid": already_paid,
+        }
+        validations = [
+            {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
+            {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
         ]
         return lines, stats, [], validations
 
