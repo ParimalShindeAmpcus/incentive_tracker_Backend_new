@@ -443,6 +443,9 @@ def run_cycle_calculation(
                 master_division=cand_entity.division,
             )
             resolved_division = resolved.resolved_division
+            if not cand_entity.division and cycle.division:
+                resolved_division = cycle.division
+
             resolved_div_by_pk[cand_entity.id] = resolved_division
             matched_method_by_pk[cand_entity.id] = method
 

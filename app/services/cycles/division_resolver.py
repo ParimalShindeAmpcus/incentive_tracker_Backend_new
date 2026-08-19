@@ -80,10 +80,27 @@ def resolve_candidate_division(
             recruiter_work_location=recruiter_work_location,
         )
 
+    # Check if organization indicates Ampcus Tech divisions
+    org_lower = _norm_text(organization).lower()
+    ct_upper = _norm_text(contract_type).upper().replace(" ", "")
+    if "ampcus tech" in org_lower:
+        if "inhouse" in org_lower or ct_upper in {"INHOUSE", "FULLTIME", "FULL_TIME"}:
+            return ResolvedCandidateDivision(
+                resolved_division="ampcusTechInhouse",
+                master_division=_norm_text(master_division) or None,
+                organization=organization,
+                recruiter_work_location=recruiter_work_location,
+            )
+        return ResolvedCandidateDivision(
+            resolved_division="ampcusTechClient",
+            master_division=_norm_text(master_division) or None,
+            organization=organization,
+            recruiter_work_location=recruiter_work_location,
+        )
+
     # Full-Time is a contract classification in the data.
     # When the master_division can't be normalized, treat Full-Time as In-House.
-    ct = _norm_text(contract_type).upper().replace(" ", "")
-    if ct in {"FULLTIME", "FULL_TIME"}:
+    if ct_upper in {"FULLTIME", "FULL_TIME"}:
         return ResolvedCandidateDivision(
             resolved_division="ampcusTechInhouse",
             master_division=_norm_text(master_division) or None,
