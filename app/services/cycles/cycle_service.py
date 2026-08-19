@@ -34,15 +34,31 @@ from app.models.cycles.schemas import (
 from app.models.incentives.schemas import IncentiveLineOut
 from app.repositories.candidates import candidate_repository
 from app.repositories.cycles import cycle_repository
-from app.repositories.entities.cycle import CycleStatus
+from app.repositories.entities.cycle import CycleStatus, MatchResult
 from app.repositories.hours import hours_repository
 from app.repositories.incentives import incentive_repository
+from app.services.cycles.cycle_candidates import (
+    candidate_matches_division,
+    is_seed_candidate,
+    resolve_candidates_for_cycle,
+)
 from app.services.cycles.cycle_engine import run_cycle_calculation
-from app.services.cycles.engines.ampcus_client import is_ampcus_client_division
+from app.services.cycles.engines.ampcus_client import coordinator_index, is_ampcus_client_division
 from app.services.cycles.engines.ampcus_inhouse import is_ampcus_inhouse_division
 from app.services.cycles.engines.sambhaji_nagar import is_sambhaji_nagar_division
 from app.services.cycles.division_resolver import resolve_candidate_division
 from app.services.cycles.hours_name_matcher import HoursMatchRow
+from app.services.cycles.hours_name_matcher import (
+    ID_FALLBACK,
+    NAME_AND_ID,
+    NAME_ID_MISMATCH,
+    UNMATCHED,
+    HoursMatchRow,
+    MasterCandidate,
+    build_id_index,
+    build_name_index,
+    match_hours_row,
+)
 from app.services.cycles.hours_template_parser import parse_hours_template
 from app.services.incentives.nashik_calculator import CycleWindow
 
@@ -185,8 +201,25 @@ def update_checklist(
 
 
 def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
-    _require_cycle(db, cycle_id)
-    return [PaymentStatusOut.model_validate(r) for r in cycle_repository.list_payment_statuses(db, cycle_id)]
+    cycle = _require_cycle(db, cycle_id)
+    rows = cycle_repository.list_payment_statuses(db, cycle_id)
+    out: List[PaymentStatusOut] = []
+    for row in rows:
+        cand = candidate_repository.get_candidate(db, row.candidate_id)
+        payload = PaymentStatusOut.model_validate(row).model_dump()
+        if cand is not None:
+            payload.update(
+                {
+                    "candidate_name": cand.candidate_name,
+                    "external_candidate_id": cand.external_candidate_id,
+                    "start_id": cand.start_id,
+                    "contract_type": cand.contract_type,
+                    "markup_percent": cand.markup_percent,
+                    "approved_markup_percentage": cand.approved_markup_percentage,
+                }
+            )
+        out.append(PaymentStatusOut(**payload))
+    return out
 
 
 def update_payment_status(
@@ -248,7 +281,7 @@ def approve_cycle(
         blocking = {
             "CANDIDATE_NOT_STARTED", "OWNERSHIP_NOT_CONFIRMED", "CANDIDATE_INACTIVE",
             "PROJECT_ENDED", "PAYMENT_PENDING", "MARKUP_NOT_AVAILABLE",
-            "MARKUP_OUT_OF_RANGE", "MISSING_HIERARCHY",
+            "MARKUP_OUT_OF_RANGE", "MISSING_HIERARCHY", "COORDINATOR_NOT_IN_MASTER",
         }
         if any(line.reason in blocking for line in cycle_repository.list_lines(db, cycle.id)):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ampcus Client cycle has unresolved placement validation errors")
@@ -260,9 +293,137 @@ def approve_cycle(
     return CycleOut.model_validate(cycle)
 
 
+def _to_master_candidate(cand) -> MasterCandidate:
+    return MasterCandidate(
+        pk=cand.id,
+        name=cand.candidate_name or "",
+        external_id=cand.external_candidate_id or "",
+        start_id=cand.start_id or "",
+        activity_id=cand.activity_id or "",
+    )
+
+
+def _coordinator_issues_for_candidate(candidate, coordinators: dict) -> List[str]:
+    from app.services.cycles.engines.ampcus_client import _people, _is_not_applicable
+
+    issues: List[str] = []
+    for role, person in _people(candidate).items():
+        if not person or not str(person).strip():
+            continue
+        if _is_not_applicable(person):
+            continue
+        if str(person).strip().lower() not in coordinators:
+            issues.append(
+                f"{candidate.candidate_name} ({candidate.external_candidate_id or candidate.start_id}): "
+                f"{role} '{person}' not found in Coordinator Master"
+            )
+    return issues
+
+
+def _match_hours_rows_for_cycle(db: Session, cycle, parsed_rows: List[HoursMatchRow]):
+    all_masters = [
+        c for c in candidate_repository.list_all_candidates(db) if not is_seed_candidate(c)
+    ]
+    # Ampcus Client placement uploads list explicit candidates for the cycle.
+    # Match against the full Candidate Master (minus seed rows) so records are not
+    # dropped when organization is "Ampcus Inc" / "Ampcus Cyber" instead of the
+    # literal string "Ampcus Tech".
+    if is_ampcus_client_division(cycle.division):
+        masters = all_masters
+    else:
+        masters = [
+            c for c in all_masters if candidate_matches_division(c, cycle.division)
+        ]
+    master_objs = [_to_master_candidate(c) for c in masters]
+    by_name = build_name_index(master_objs)
+    by_id = build_id_index(master_objs)
+    by_pk = {c.id: c for c in masters}
+
+    match_rows: List[dict] = []
+    matched_ids: List[int] = []
+    issues: List[str] = []
+    coordinator_issues: List[str] = []
+    coordinators = coordinator_index(db)
+    seen_coordinator_checks: set[int] = set()
+
+    for row in parsed_rows:
+        decision = match_hours_row(row, by_name, by_id)
+        hours = Decimal(str(row.hours or 0))
+        accepted = decision.matched
+        result = (
+            MatchResult.MATCHED
+            if accepted
+            else MatchResult.UNMATCHED
+            if decision.status == UNMATCHED
+            else MatchResult.REJECTED
+        )
+        match_rows.append(
+            {
+                "source_row_ref": str(row.source_row),
+                "source_candidate_name": row.uploaded_name,
+                "source_candidate_id": row.uploaded_id,
+                "source_client": row.client,
+                "hours_worked": hours,
+                "candidate_id": decision.master.pk if decision.master else None,
+                "match_method": decision.status,
+                "match_result": result,
+                "confidence": "HIGH"
+                if decision.status == NAME_AND_ID
+                else ("MEDIUM" if decision.status == ID_FALLBACK else "LOW"),
+                "accepted": accepted,
+                "notes": decision.warning or decision.reason,
+            }
+        )
+        if accepted and decision.master:
+            matched_ids.append(decision.master.pk)
+            cand = by_pk.get(decision.master.pk)
+            if cand and cand.id not in seen_coordinator_checks:
+                seen_coordinator_checks.add(cand.id)
+                coordinator_issues.extend(_coordinator_issues_for_candidate(cand, coordinators))
+        elif not accepted:
+            label = row.uploaded_name or row.uploaded_id or f"row {row.source_row}"
+            issues.append(f"Row {row.source_row}: {label} — {decision.reason}")
+
+    unique_matched = sorted(set(matched_ids))
+    return match_rows, unique_matched, issues, coordinator_issues
+
+
 def upload_hours_file(db: Session, cycle_id: int, filename: str, content: bytes) -> HoursUploadOut:
     cycle = _require_cycle(db, cycle_id)
-    rows = parse_hours_template(content, filename)
+    placement_only = is_ampcus_client_division(cycle.division)
+    rows = parse_hours_template(content, filename, require_hours=not placement_only)
+
+    if placement_only or is_sambhaji_nagar_division(cycle.division):
+        match_rows, matched_ids, issues, coordinator_issues = _match_hours_rows_for_cycle(db, cycle, rows)
+        cycle_repository.replace_matches(db, cycle.id, match_rows)
+        cycle_repository.replace_payment_statuses(db, cycle.id, matched_ids)
+        db.commit()
+        if not matched_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": (
+                        "No candidates from the placement file matched Candidate Master"
+                        if is_ampcus_client_division(cycle.division)
+                        else "No candidates from the hours file matched Candidate Master"
+                    ),
+                    "issues": issues,
+                    "coordinator_issues": coordinator_issues,
+                },
+            )
+        return HoursUploadOut(
+            cycle_id=cycle.id,
+            row_count=len(rows),
+            matched_count=len(matched_ids),
+            unmatched_count=len(issues),
+            issues=issues,
+            coordinator_issues=coordinator_issues,
+            message=(
+                f"Matched {len(matched_ids)} candidate(s) from {len(rows)} uploaded row(s). "
+                "Review payment status before calculation."
+            ),
+        )
+
     cycle_repository.replace_matches(
         db,
         cycle.id,
@@ -300,6 +461,13 @@ def calculate_cycle(db: Session, cycle_id: int) -> CalculateResult:
             detail="Approved cycles cannot be recalculated",
         )
     hours_rows = _hours_rows_for_cycle(db, cycle)
+    if is_ampcus_client_division(cycle.division):
+        payment_rows = cycle_repository.list_payment_statuses(db, cycle.id)
+        if not payment_rows:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Upload the placement file first — no matched candidates are linked to this cycle",
+            )
     if not hours_rows and not (is_ampcus_client_division(cycle.division) or is_ampcus_inhouse_division(cycle.division)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

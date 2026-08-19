@@ -39,6 +39,13 @@ def is_ampcus_client_division(division: Optional[str]) -> bool:
     }
 
 
+def _is_not_applicable(person: Optional[str]) -> bool:
+    if not person:
+        return False
+    norm = str(person).strip().lower().replace(" ", "").replace("/", "").replace("-", "").replace(".", "")
+    return norm in {"na", "notapplicable", "none", ""}
+
+
 def resolve_slab(markup: Optional[Decimal]) -> Optional[Tuple[Decimal, Decimal, Dict[str, int]]]:
     if markup is None or markup < ZERO or markup > Decimal("100"):
         return None
@@ -61,7 +68,7 @@ def _line(candidate: Candidate, role: str, person: Optional[str], amount: Decima
         pro_rata_factor=Decimal("1") if eligible else ZERO,
         amount=amount if eligible else ZERO,
         hours=ZERO,
-        margin=candidate.approved_markup_percentage,
+        margin=candidate.margin,
         reason=reason,
         explanation=[json.dumps(details, default=str)],
     )
@@ -94,10 +101,10 @@ def calculate_placement(
 ) -> List[LineDraft]:
     """Return five deterministic role lines for one placement snapshot."""
     people = _people(candidate)
-    markup = candidate.approved_markup_percentage
+    markup = candidate.margin
     payment_status = str(getattr(payment, "status", "PAYMENT_PENDING") or "PAYMENT_PENDING").upper()
     details = {
-        "approved_markup_percentage": str(markup) if markup is not None else None,
+        "margin": str(markup) if markup is not None else None,
         "payment_status": payment_status,
         "payment_received_date": str(getattr(payment, "payment_received_date", None) or "") or None,
         "payment_reference": getattr(payment, "payment_reference", None),
@@ -108,7 +115,10 @@ def calculate_placement(
 
     if not candidate.start_date:
         return all_zero("CANDIDATE_NOT_STARTED", "Ampcus Client eligibility")
-    if not candidate.ownership_confirmed:
+    ownership_ok = candidate.ownership_confirmed or bool(
+        candidate.recruiter and str(candidate.recruiter).strip()
+    )
+    if not ownership_ok:
         return all_zero("OWNERSHIP_NOT_CONFIRMED", "Ampcus Client eligibility")
     if _inactive(candidate):
         return all_zero("CANDIDATE_INACTIVE", "Ampcus Client eligibility")
@@ -131,15 +141,70 @@ def calculate_placement(
     for role in ROLES:
         person = people[role]
         amount = Decimal(amounts[role])
-        recruiter = role == "Recruiter"
-        status = coordinators.get((person or "").strip().lower())
-        coordinator_status = getattr(status, "employment_status", CoordinatorStatus.ACTIVE)
+        
+        if _is_not_applicable(person):
+            lines.append(
+                _line(
+                    candidate,
+                    role,
+                    person,
+                    ZERO,
+                    eligible=False,
+                    reason="ROLE_NOT_APPLICABLE",
+                    rule="Ampcus Client hierarchy validation",
+                    details=details,
+                )
+            )
+            continue
+            
+        coord = coordinators.get((person or "").strip().lower())
+        if not coord:
+            lines.append(
+                _line(
+                    candidate,
+                    role,
+                    person,
+                    ZERO,
+                    eligible=False,
+                    reason="COORDINATOR_NOT_IN_MASTER",
+                    rule="Ampcus Client coordinator validation",
+                    details=details,
+                )
+            )
+            continue
+        coordinator_status = getattr(coord, "employment_status", CoordinatorStatus.ACTIVE)
         coordinator_status_value = getattr(coordinator_status, "value", str(coordinator_status)).upper()
-        if recruiter and coordinator_status_value in {CoordinatorStatus.LEFT.value, CoordinatorStatus.NOTICE.value}:
-            reason = "COORDINATOR_LEFT" if coordinator_status_value == CoordinatorStatus.LEFT.value else "COORDINATOR_ON_NOTICE"
-            lines.append(_line(candidate, role, person, ZERO, eligible=False, reason=reason, rule="Ampcus Client recruiter status", details=details))
+        if coordinator_status_value in {CoordinatorStatus.LEFT.value, CoordinatorStatus.NOTICE.value}:
+            reason = (
+                "COORDINATOR_LEFT"
+                if coordinator_status_value == CoordinatorStatus.LEFT.value
+                else "COORDINATOR_ON_NOTICE"
+            )
+            lines.append(
+                _line(
+                    candidate,
+                    role,
+                    person,
+                    ZERO,
+                    eligible=False,
+                    reason=reason,
+                    rule="Ampcus Client coordinator status",
+                    details={**details, "coordinator_status": coordinator_status_value},
+                )
+            )
         else:
-            lines.append(_line(candidate, role, person, amount, eligible=True, reason="ELIGIBLE", rule=f"Ampcus Client mark-up {low}–{high}%", details=details))
+            lines.append(
+                _line(
+                    candidate,
+                    role,
+                    person,
+                    amount,
+                    eligible=True,
+                    reason="ELIGIBLE",
+                    rule=f"Ampcus Client mark-up {low}–{high}%",
+                    details={**details, "coordinator_status": coordinator_status_value},
+                )
+            )
     return lines
 
 

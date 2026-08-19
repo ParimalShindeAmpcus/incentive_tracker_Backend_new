@@ -39,6 +39,7 @@ from app.services.cycles.engines.ampcus_client import (
     is_ampcus_client_division,
 )
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
+from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
 from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, special_average
 
 
@@ -113,11 +114,8 @@ def run_cycle_calculation(
 ) -> Tuple[List[LineDraft], dict, List[dict], List[dict]]:
     # Ampcus Client is placement/payment/approved-markup driven.  It must not
     # require an hours import or inherit Nashik's 160-hour matching flow.
-    if is_ampcus_client_division(cycle.division):
-        masters = candidate_repository.list_all_candidates(db)
-        division_masters = [c for c in masters if is_ampcus_client_division(c.division)]
-        if division_masters:
-            masters = division_masters
+    if is_ampcus_client_division(cycle.division) or is_ampcus_inhouse_division(cycle.division):
+        masters = resolve_candidates_for_cycle(db, cycle)
         payment_by_candidate = {
             row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
         }
@@ -140,6 +138,8 @@ def run_cycle_calculation(
         validations = [
             {"check_key": "payment_pending", "severity": "YELLOW" if pending else "GREEN", "message": "Placements awaiting first full-month client payment", "count": pending, "details_json": None},
             {"check_key": "no_incentive_slab", "severity": "YELLOW" if no_slab else "GREEN", "message": "Placements below the client mark-up threshold", "count": no_slab, "details_json": None},
+            {"check_key": "coordinator_not_in_master", "severity": "RED" if any(line.reason == "COORDINATOR_NOT_IN_MASTER" for line in lines) else "GREEN", "message": "Hierarchy person not found in Coordinator Master", "count": sum(1 for line in lines if line.reason == "COORDINATOR_NOT_IN_MASTER"), "details_json": None},
+            {"check_key": "coordinator_ineligible", "severity": "YELLOW" if any(line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"} for line in lines) else "GREEN", "message": "Coordinator on notice or left — incentive excluded", "count": sum(1 for line in lines if line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"}), "details_json": None},
         ]
         return lines, stats, [], validations
 

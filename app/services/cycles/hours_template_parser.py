@@ -46,32 +46,54 @@ COLUMN_ALIASES = {
     "hours worked": "hours",
     "hours": "hours",
     "month": "month",
+    "period": "month",
+    "billing month": "month",
+    "incentive month": "month",
 }
 
 
-def parse_hours_template(content: bytes, filename: str = "hours.xlsx") -> List[HoursMatchRow]:
+def parse_hours_template(
+    content: bytes,
+    filename: str = "hours.xlsx",
+    *,
+    require_hours: bool = True,
+) -> List[HoursMatchRow]:
     name = (filename or "").lower()
     if name.endswith(".csv"):
-        return _parse_csv(content)
-    return _parse_xlsx(content)
+        return _parse_csv(content, require_hours=require_hours)
+    return _parse_xlsx(content, require_hours=require_hours)
 
 
-def _map_headers(headers: List[str]) -> dict:
+def _map_headers(headers: List[str], *, require_hours: bool = True) -> dict:
     mapping = {}
     for idx, header in enumerate(headers):
         alias = COLUMN_ALIASES.get(_header_key(header))
         if alias and alias not in mapping:
             mapping[alias] = idx
-    missing = [label for label in ("name", "id", "client", "hours", "month") if label not in mapping]
+    required = ("name", "id", "client", "month")
+    if require_hours:
+        required = ("name", "id", "hours")
+    labels = {
+        "name": "Candidate Name",
+        "id": "Candidate ID",
+        "hours": "Hours Worked",
+        "client": "Client Name",
+        "month": "Month",
+    }
+    missing = [labels[label] for label in required if label not in mapping]
     if missing:
-        raise ValueError(
-            "Hours file is missing required columns: Candidate Name, Candidate Start ID, Client Name, Hours Worked, Month"
-        )
+        kind = "Hours file" if require_hours else "Placement file"
+        raise ValueError(f"{kind} is missing required columns: {', '.join(missing)}")
     return mapping
 
 
-def _rows_from_values(headers: List[str], data_rows: List[List[object]]) -> List[HoursMatchRow]:
-    mapping = _map_headers(headers)
+def _rows_from_values(
+    headers: List[str],
+    data_rows: List[List[object]],
+    *,
+    require_hours: bool = True,
+) -> List[HoursMatchRow]:
+    mapping = _map_headers(headers, require_hours=require_hours)
     out: List[HoursMatchRow] = []
     for offset, values in enumerate(data_rows, start=2):
         def take(key: str) -> str:
@@ -84,8 +106,10 @@ def _rows_from_values(headers: List[str], data_rows: List[List[object]]) -> List
         ident = take("id")
         if not name and not ident:
             continue
-        hours_idx = mapping["hours"]
-        hours_raw = values[hours_idx] if hours_idx < len(values) else None
+        hours_raw = None
+        if "hours" in mapping:
+            hours_idx = mapping["hours"]
+            hours_raw = values[hours_idx] if hours_idx < len(values) else None
         out.append(
             HoursMatchRow(
                 uploaded_name=name,
@@ -97,24 +121,25 @@ def _rows_from_values(headers: List[str], data_rows: List[List[object]]) -> List
             )
         )
     if not out:
-        raise ValueError("No data rows found in the hours file")
+        kind = "hours file" if require_hours else "placement file"
+        raise ValueError(f"No data rows found in the {kind}")
     return out
 
 
-def _parse_xlsx(content: bytes) -> List[HoursMatchRow]:
+def _parse_xlsx(content: bytes, *, require_hours: bool = True) -> List[HoursMatchRow]:
     workbook = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     sheet = workbook.active
     rows = list(sheet.iter_rows(values_only=True))
     if not rows:
         raise ValueError("Hours Excel file is empty")
     headers = [_cell(v) for v in rows[0]]
-    return _rows_from_values(headers, [list(r) for r in rows[1:]])
+    return _rows_from_values(headers, [list(r) for r in rows[1:]], require_hours=require_hours)
 
 
-def _parse_csv(content: bytes) -> List[HoursMatchRow]:
+def _parse_csv(content: bytes, *, require_hours: bool = True) -> List[HoursMatchRow]:
     text = content.decode("utf-8-sig", errors="replace")
     reader = csv.reader(io.StringIO(text))
     rows = list(reader)
     if not rows:
         raise ValueError("Hours CSV file is empty")
-    return _rows_from_values(rows[0], rows[1:])
+    return _rows_from_values(rows[0], rows[1:], require_hours=require_hours)

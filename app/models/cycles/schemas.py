@@ -145,6 +145,12 @@ class PaymentStatusOut(BaseModel):
     notes: Optional[str] = None
     updated_by: Optional[int] = None
     updated_at: Optional[datetime] = None
+    candidate_name: Optional[str] = None
+    external_candidate_id: Optional[str] = None
+    start_id: Optional[str] = None
+    contract_type: Optional[str] = None
+    markup_percent: Optional[Decimal] = None
+    approved_markup_percentage: Optional[Decimal] = None
 
 
 class PaymentStatusUpdate(BaseModel):
@@ -210,3 +216,7 @@ class HoursUploadOut(BaseModel):
     cycle_id: int
     row_count: int
     message: str
+    matched_count: int = 0
+    unmatched_count: int = 0
+    issues: List[str] = Field(default_factory=list)
+    coordinator_issues: List[str] = Field(default_factory=list)

@@ -153,6 +153,13 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[CyclePaymentStatus
     )
 
 
+def clear_payment_statuses(db: Session, cycle_id: int) -> None:
+    db.query(CyclePaymentStatus).filter(CyclePaymentStatus.cycle_id == cycle_id).delete(
+        synchronize_session=False
+    )
+    db.flush()
+
+
 def ensure_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) -> List[CyclePaymentStatus]:
     existing = {row.candidate_id for row in list_payment_statuses(db, cycle_id)}
     created = []
@@ -161,6 +168,17 @@ def ensure_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]
             row = CyclePaymentStatus(cycle_id=cycle_id, candidate_id=candidate_id, status="PAYMENT_PENDING")
             db.add(row)
             created.append(row)
+    db.flush()
+    return created
+
+
+def replace_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) -> List[CyclePaymentStatus]:
+    clear_payment_statuses(db, cycle_id)
+    created: List[CyclePaymentStatus] = []
+    for candidate_id in candidate_ids:
+        row = CyclePaymentStatus(cycle_id=cycle_id, candidate_id=candidate_id, status="PAYMENT_PENDING")
+        db.add(row)
+        created.append(row)
     db.flush()
     return created
 

@@ -155,6 +155,16 @@ def find_existing_candidate(db: Session, row: dict) -> Optional[Candidate]:
 
 
 
+def _sync_markup_fields(row: dict, candidate: Candidate) -> None:
+    markup = row.get("approved_markup_percentage") or row.get("markup_percent")
+    if markup is not None:
+        candidate.markup_percent = markup
+        candidate.approved_markup_percentage = markup
+    recruiter = row.get("recruiter") or candidate.recruiter
+    if recruiter and str(recruiter).strip():
+        candidate.ownership_confirmed = True
+
+
 def create_candidates(
     db: Session,
     version: CandidateDataVersion,
@@ -282,6 +292,7 @@ def create_candidates(
 
             if row.get("placement_level"):
                 existing.placement_level = row.get("placement_level")
+            _sync_markup_fields(row, existing)
             db.add(existing)
             created.append(existing)
 
@@ -315,6 +326,8 @@ def create_candidates(
                 bill_rate=bill_rate_val,
                 msp_fee=row.get("msp_fee"),
                 margin=row.get("margin"),
+                markup_percent=row.get("markup_percent") or row.get("approved_markup_percentage"),
+                approved_markup_percentage=row.get("approved_markup_percentage") or row.get("markup_percent"),
                 remote=row.get("remote"),
                 work_location=row.get("work_location"),
                 candidate_location=row.get("candidate_location"),
@@ -341,7 +354,9 @@ def create_candidates(
                 last_touched_version_id=version.id,
                 is_active=True,
                 incentive_active=True,
+                ownership_confirmed=bool(row.get("recruiter")),
             )
+            _sync_markup_fields(row, candidate)
             db.add(candidate)
             created.append(candidate)
 
