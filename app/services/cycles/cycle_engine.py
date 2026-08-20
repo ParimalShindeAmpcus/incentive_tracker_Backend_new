@@ -601,10 +601,27 @@ def run_cycle_calculation(
 
     if is_ampcus_inhouse_division(cycle.division):
         assert coordinators is not None
+        not_90_days = 0
+        inactive = 0
+        already_paid_count = 0
         for pk in included_pks:
             candidate = by_pk[pk]
-            lines.extend(calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators))
-        return lines, stats, match_rows, []
+            drafts = calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
+            if any(line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in drafts):
+                not_90_days += 1
+            if any(line.reason == "CANDIDATE_INACTIVE" for line in drafts):
+                inactive += 1
+            if any(line.reason == "ALREADY_PAID" for line in drafts):
+                already_paid_count += 1
+            lines.extend(drafts)
+        stats["inactive"] = inactive
+        stats["already_paid"] = already_paid_count
+        validations = [
+            {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
+            {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
+            {"check_key": "already_paid", "severity": "YELLOW" if already_paid_count else "GREEN", "message": "One-time incentives already paid in a previous cycle", "count": already_paid_count, "details_json": None},
+        ]
+        return lines, stats, match_rows, validations
 
     if is_sambhaji_nagar_division(cycle.division):
         assert coordinators is not None
