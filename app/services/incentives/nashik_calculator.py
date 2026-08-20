@@ -25,6 +25,9 @@ from app.services.incentives.nashik_rules import (
     normalize_person,
 )
 
+# Employment statuses that block incentive for a person (mirrors Client/Sambhaji).
+INELIGIBLE_EMPLOYMENT_STATUSES = {"LEFT", "NOTICE"}
+
 
 @dataclass
 class PlacementInput:
@@ -94,8 +97,10 @@ def _inr(value: Decimal) -> str:
     return f"₹{int(money(value)):,}"
 
 
-def _hierarchy(p: PlacementInput) -> List[Tuple[str, str]]:
+def _all_roles(p: PlacementInput) -> List[Tuple[str, str]]:
+    """Collect every occupied role including Recruiter (dedupe same role)."""
     raw = [
+        ("Recruiter", p.recruiter),
         ("Team Lead", p.team_lead),
         ("Manager", p.manager),
         ("Senior Manager", p.senior_manager),
@@ -104,10 +109,49 @@ def _hierarchy(p: PlacementInput) -> List[Tuple[str, str]]:
         ("Center Head", p.center_head),
         ("AVP", p.avp),
     ]
-    return [(role, person.strip()) for role, person in raw if person and person.strip()]
+    seen_roles: Set[str] = set()
+    out: List[Tuple[str, str]] = []
+    for role, person in raw:
+        if not person or not str(person).strip():
+            continue
+        if role in seen_roles:
+            continue
+        seen_roles.add(role)
+        out.append((role, str(person).strip()))
+    return out
+
+
+def _employment_status(
+    person: str,
+    employment_status: Optional[Dict[str, str]],
+    role: Optional[str] = None,
+) -> str:
+    """
+    Resolve ACTIVE|LEFT|NOTICE for a hierarchy participant.
+
+    Primary key (Coordinator Master / cycle_engine): normalize_person(name).
+    Optional override key for role-scoped tests: "{role}|{person}".
+    """
+    if not employment_status:
+        return "ACTIVE"
+    key = normalize_person(person)
+    if role:
+        role_key = f"{role.strip().lower()}|{key}"
+        if role_key in employment_status:
+            return str(employment_status[role_key] or "ACTIVE").upper()
+    return str(employment_status.get(key, "ACTIVE") or "ACTIVE").upper()
+
+
+def _status_reason(status: str) -> str:
+    if status == "LEFT":
+        return "COORDINATOR_LEFT"
+    if status == "NOTICE":
+        return "COORDINATOR_ON_NOTICE"
+    return "COORDINATOR_INELIGIBLE"
 
 
 def _limit_roles(entries: Sequence[Tuple[str, str]], max_roles: int) -> List[Tuple[str, str]]:
+    """Per-person top-N by ROLE_PRIORITY (includes Recruiter)."""
     by_person: Dict[str, List[Tuple[str, str]]] = {}
     for role, person in entries:
         by_person.setdefault(normalize_person(person), []).append((role, person))
@@ -179,11 +223,109 @@ def _scope(p: PlacementInput, reason: str, explanation: List[str]) -> List[LineD
     ]
 
 
+def _role_amount(
+    p: PlacementInput,
+    role: str,
+    hours: Decimal,
+) -> Tuple[str, Decimal, Decimal, Decimal, str, List[str]]:
+    """
+    Return (incentive_type, base, factor, amount, reason, explanation) for a selected role.
+    Eligibility against hours is applied by the caller after status/top-2 selection.
+    """
+    if role == "Recruiter":
+        if p.margin is None:
+            return (
+                "RECURRING",
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                "Margin is required for Nashik recruiter incentive",
+                ["Approved margin/hour is missing"],
+            )
+        kind, base, category = nashik_recruiter_base(p.margin)
+        if kind == "special":
+            return (
+                "SPECIAL",
+                base,
+                Decimal("1"),
+                base,
+                "Low margin special incentive per successful placement",
+                [
+                    "Incentive Type = Recruiter Special One-Time",
+                    f"Margin Category = {category}",
+                    f"Approved margin/hour = ${p.margin}",
+                    f"Base Incentive = {_inr(base)}",
+                    "One-time only — duplicate ledger blocks a second payment",
+                ],
+            )
+        factor, amount = nashik_pro_rata(base, hours)
+        reason = (
+            "Margin falls outside the configured slabs"
+            if base == 0
+            else "Full incentive — 160+ hours completed"
+            if hours >= STANDARD_HOURS
+            else "Pro-rata incentive for hours below 160"
+        )
+        return (
+            "RECURRING",
+            base,
+            factor,
+            amount,
+            reason,
+            [
+                f"Candidate → Division Nashik → Contract {normalize_contract(p.contract_type)}",
+                f"Hours = {hours} · Approved margin/hour = ${p.margin}",
+                f"Applicable Incentive Slab = {category}",
+                f"Base Incentive = {_inr(base)}",
+                f"Pro-Rata Factor = {hours} / {STANDARD_HOURS} = {factor}",
+                f"Final Incentive = {_inr(amount)}",
+            ],
+        )
+
+    if role == "Team Lead":
+        factor, amount = nashik_pro_rata(TEAM_LEAD_BASE, hours)
+        return (
+            "RECURRING",
+            TEAM_LEAD_BASE,
+            factor,
+            amount,
+            "Full ₹250 for 160 hours" if hours >= STANDARD_HOURS else "Pro-rata for hours below 160",
+            [
+                f"Person role = Team Lead · Recurring",
+                f"{_inr(TEAM_LEAD_BASE)} × {hours} / {STANDARD_HOURS} = {_inr(amount)}",
+            ],
+        )
+
+    amount = LEADERSHIP_ONE_TIME[role]
+    return (
+        "ONE_TIME",
+        amount,
+        Decimal("1"),
+        amount,
+        (
+            "Candidate completed 160 hours — one-time leadership incentive"
+            if hours >= STANDARD_HOURS
+            else f"Only {hours} hours completed — 160 hours required (not pro-rated)"
+        ),
+        [
+            f"Person role = {role} · One-Time",
+            f"160-hour requirement = {STANDARD_HOURS} · Hours completed = {hours}",
+            f"One-time amount {_inr(amount)} (not pro-rated)",
+            "Previous payment check via approved-cycle history",
+        ],
+    )
+
+
 def calculate_nashik_placement(
     p: PlacementInput,
     window: CycleWindow,
     paid_keys: Optional[Set[str]] = None,
+    employment_status: Optional[Dict[str, str]] = None,
 ) -> List[LineDraft]:
+    """
+    employment_status: map of normalize_person(name) -> ACTIVE|LEFT|NOTICE
+    sourced from Coordinator Master via cycle_engine.coordinator_index.
+    """
     paid_keys = paid_keys or set()
     hours = p.hours if p.hours is not None else Decimal("0")
     p.hours = hours
@@ -212,37 +354,101 @@ def calculate_nashik_placement(
             f"Cycle {window.start} to {window.end}",
         ])
 
-    mapped = [
-        (role, person)
-        for role, person in _hierarchy(p)
-        if role == "Team Lead" or role in LEADERSHIP_ONE_TIME
-    ]
-    selected = _limit_roles(mapped, MAX_ROLES_PER_PERSON)
+    occupied = _all_roles(p)
+    if not occupied:
+        return _scope(p, "No hierarchy or recruiter assigned", ["No roles available for calculation"])
+
+    # 1) Status filter first — LEFT/NOTICE become ineligible lines, not candidates for top-2.
+    status_blocked: List[Tuple[str, str, str]] = []
+    status_ok: List[Tuple[str, str]] = []
+    for role, person in occupied:
+        status = _employment_status(person, employment_status, role=role)
+        if status in INELIGIBLE_EMPLOYMENT_STATUSES:
+            status_blocked.append((role, person, status))
+        else:
+            status_ok.append((role, person))
+
+    # 2) Top-2 across ALL remaining roles (Recruiter included in the pool).
+    selected = _limit_roles(status_ok, MAX_ROLES_PER_PERSON)
+    selected_keys = {(role, normalize_person(person)) for role, person in selected}
     selected_summary = "; ".join(f"{role}={person}" for role, person in selected) or "none"
+
     lines: List[LineDraft] = []
 
-    if p.project_ended and hours < STANDARD_HOURS:
+    # Emit excluded LEFT/NOTICE lines (hierarchy continues for others).
+    for role, person, status in status_blocked:
+        incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, hours)
         lines.append(
             _line(
                 p,
-                role="Recruiter",
-                person=p.recruiter or "—",
-                incentive_type="SPECIAL",
-                rule_applied="Nashik — Project end before 160 hours",
-                eligible=True,
-                base=PROJECT_END_RECRUITER,
-                factor=Decimal("1"),
-                amount=PROJECT_END_RECRUITER,
-                reason="Project ended before 160 hours — flat ₹2,000",
+                role=role,
+                person=person,
+                incentive_type=incentive_type,
+                rule_applied="Nashik — employment status exclusion",
+                eligible=False,
+                base=base,
+                factor=factor,
+                amount=Decimal("0"),
+                reason=_status_reason(status),
                 explanation=[
-                    f"Project ended with {hours} hours worked (< 160)",
-                    "Nashik rule: regular incentive is not processed",
-                    f"Recruiter flat incentive = {_inr(PROJECT_END_RECRUITER)}",
+                    *explanation,
+                    f"Employment status = {status}",
+                    "LEFT/NOTICE employees are excluded from Nashik incentive",
+                    "Remaining hierarchy continues for other eligible people",
+                    f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
                 ],
             )
         )
+
+    # Emit not-selected status-ok roles (lost top-2 competition).
+    for role, person in status_ok:
+        if (role, normalize_person(person)) in selected_keys:
+            continue
+        incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, hours)
+        lines.append(
+            _line(
+                p,
+                role=role,
+                person=person,
+                incentive_type=incentive_type,
+                rule_applied="Nashik — max two roles per person",
+                eligible=False,
+                base=base,
+                factor=factor,
+                amount=Decimal("0"),
+                reason="Role not selected under maximum two eligible roles rule",
+                explanation=[
+                    *explanation,
+                    f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
+                ],
+            )
+        )
+
+    # Project-end special: only recruiter flat amount when selected; TL forced to zero.
+    if p.project_ended and hours < STANDARD_HOURS:
         for role, person in selected:
-            if role == "Team Lead":
+            if role == "Recruiter":
+                lines.append(
+                    _line(
+                        p,
+                        role="Recruiter",
+                        person=person,
+                        incentive_type="SPECIAL",
+                        rule_applied="Nashik — Project end before 160 hours",
+                        eligible=True,
+                        base=PROJECT_END_RECRUITER,
+                        factor=Decimal("1"),
+                        amount=PROJECT_END_RECRUITER,
+                        reason="Project ended before 160 hours — flat ₹2,000",
+                        explanation=[
+                            f"Project ended with {hours} hours worked (< 160)",
+                            "Nashik rule: regular incentive is not processed",
+                            f"Recruiter flat incentive = {_inr(PROJECT_END_RECRUITER)}",
+                            f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
+                        ],
+                    )
+                )
+            elif role == "Team Lead":
                 lines.append(
                     _line(
                         p,
@@ -255,112 +461,65 @@ def calculate_nashik_placement(
                         factor=Decimal("0"),
                         amount=Decimal("0"),
                         reason="Project ended before 160 hours — Team Lead incentive is ₹0 for Nashik",
-                        explanation=["Nashik project-end rule sets Team Lead to ₹0"],
+                        explanation=[
+                            "Nashik project-end rule sets Team Lead to ₹0",
+                            f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
+                        ],
+                    )
+                )
+            else:
+                incentive_type, base, factor, amount, reason, explanation = _role_amount(p, role, hours)
+                lines.append(
+                    _line(
+                        p,
+                        role=role,
+                        person=person,
+                        incentive_type=incentive_type,
+                        rule_applied="Nashik — Project end before 160 hours",
+                        eligible=False,
+                        base=base,
+                        factor=factor,
+                        amount=Decimal("0"),
+                        reason="Project ended before 160 hours — one-time incentive not payable",
+                        explanation=[
+                            *explanation,
+                            f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
+                        ],
                     )
                 )
         return _apply_duplicates(lines, paid_keys)
 
-    if p.margin is not None:
-        kind, base, category = nashik_recruiter_base(p.margin)
-        if kind == "special":
-            lines.append(
-                _line(
-                    p,
-                    role="Recruiter",
-                    person=p.recruiter or "—",
-                    incentive_type="SPECIAL",
-                    rule_applied="Nashik — Margin ≤ $0.99 special one-time",
-                    eligible=True,
-                    base=base,
-                    factor=Decimal("1"),
-                    amount=base,
-                    reason="Low margin special incentive per successful placement",
-                    explanation=[
-                        "Incentive Type = Recruiter Special One-Time",
-                        f"Margin Category = {category}",
-                        f"Approved margin/hour = ${p.margin}",
-                        f"Base Incentive = {_inr(base)}",
-                        "One-time only — duplicate ledger blocks a second payment",
-                    ],
-                )
-            )
-        else:
-            factor, amount = nashik_pro_rata(base, hours)
-            lines.append(
-                _line(
-                    p,
-                    role="Recruiter",
-                    person=p.recruiter or "—",
-                    incentive_type="RECURRING",
-                    rule_applied="Nashik Recruiter Recurring (margin/hour slab)",
-                    eligible=base > 0,
-                    base=base,
-                    factor=factor,
-                    amount=amount,
-                    reason=(
-                        "Margin falls outside the configured slabs"
-                        if base == 0
-                        else "Full incentive — 160+ hours completed"
-                        if hours >= STANDARD_HOURS
-                        else "Pro-rata incentive for hours below 160"
-                    ),
-                    explanation=[
-                        f"Candidate → Division Nashik → Contract {normalize_contract(p.contract_type)}",
-                        f"Hours = {hours} · Approved margin/hour = ${p.margin}",
-                        f"Applicable Incentive Slab = {category}",
-                        f"Base Incentive = {_inr(base)}",
-                        f"Pro-Rata Factor = {hours} / {STANDARD_HOURS} = {factor}",
-                        f"Final Incentive = {_inr(amount)}",
-                    ],
-                )
-            )
-
+    # Normal path for selected roles.
     for role, person in selected:
-        if role == "Team Lead":
-            factor, amount = nashik_pro_rata(TEAM_LEAD_BASE, hours)
-            lines.append(
-                _line(
-                    p,
-                    role="Team Lead",
-                    person=person,
-                    incentive_type="RECURRING",
-                    rule_applied="Nashik Team Lead Recurring",
-                    eligible=True,
-                    base=TEAM_LEAD_BASE,
-                    factor=factor,
-                    amount=amount,
-                    reason="Full ₹250 for 160 hours" if hours >= STANDARD_HOURS else "Pro-rata for hours below 160",
-                    explanation=[
-                        f"Person = {person} · Role = Team Lead · Recurring",
-                        f"{_inr(TEAM_LEAD_BASE)} × {hours} / {STANDARD_HOURS} = {_inr(amount)}",
-                        f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
-                    ],
-                )
-            )
-            continue
-        amount = LEADERSHIP_ONE_TIME[role]
-        eligible = hours >= STANDARD_HOURS
+        incentive_type, base, factor, amount, reason, explanation = _role_amount(p, role, hours)
+        if role in LEADERSHIP_ONE_TIME and hours < STANDARD_HOURS:
+            eligible = False
+        elif role == "Recruiter" and base == 0 and incentive_type == "RECURRING":
+            eligible = False
+        else:
+            eligible = True
         lines.append(
             _line(
                 p,
                 role=role,
                 person=person,
-                incentive_type="ONE_TIME",
-                rule_applied=f"Nashik Division — Leadership one-time ({role})",
-                eligible=eligible,
-                base=amount,
-                factor=Decimal("1"),
-                amount=amount,
-                reason=(
-                    "Candidate completed 160 hours — one-time leadership incentive"
-                    if eligible
-                    else f"Only {hours} hours completed — 160 hours required (not pro-rated)"
+                incentive_type=incentive_type,
+                rule_applied=(
+                    "Nashik Recruiter Recurring (margin/hour slab)"
+                    if role == "Recruiter" and incentive_type == "RECURRING"
+                    else "Nashik — Margin ≤ $0.99 special one-time"
+                    if role == "Recruiter" and incentive_type == "SPECIAL"
+                    else "Nashik Team Lead Recurring"
+                    if role == "Team Lead"
+                    else f"Nashik Division — Leadership one-time ({role})"
                 ),
+                eligible=eligible,
+                base=base,
+                factor=factor,
+                amount=amount if eligible else Decimal("0"),
+                reason=reason,
                 explanation=[
-                    f"Person = {person} · Role = {role} · One-Time",
-                    f"160-hour requirement = {STANDARD_HOURS} · Hours completed = {hours}",
-                    f"One-time amount {_inr(amount)} (not pro-rated)",
-                    "Previous payment check via approved-cycle history",
+                    *explanation,
                     f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
                 ],
             )
@@ -393,8 +552,16 @@ def calculate_nashik_cycle(
     placements: Sequence[PlacementInput],
     window: CycleWindow,
     paid_keys: Optional[Set[str]] = None,
+    employment_status: Optional[Dict[str, str]] = None,
 ) -> List[LineDraft]:
     lines: List[LineDraft] = []
     for placement in placements:
-        lines.extend(calculate_nashik_placement(placement, window, paid_keys))
+        lines.extend(
+            calculate_nashik_placement(
+                placement,
+                window,
+                paid_keys,
+                employment_status=employment_status,
+            )
+        )
     return lines

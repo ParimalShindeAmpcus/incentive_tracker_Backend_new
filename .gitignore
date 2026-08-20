@@ -56,3 +56,5 @@ uploads/
 tmp/
 temp/
 .cache/
+# Excel files
+*.xlsx

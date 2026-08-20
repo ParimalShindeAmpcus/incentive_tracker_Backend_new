@@ -47,6 +47,7 @@ ROLE_PRIORITY = [
     "Manager",
     "CRM",
     "Team Lead",
+    "Recruiter",
 ]
 
 

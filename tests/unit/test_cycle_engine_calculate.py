@@ -7,10 +7,12 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.db import Base
 from app.repositories.entities.candidate import Candidate, CandidateDataVersion
+from app.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
 from app.repositories.entities.cycle import CycleStatus, IncentiveCycle
 from app.services.cycles.cycle_engine import run_cycle_calculation
 from app.services.cycles.hours_name_matcher import HoursMatchRow
 from app.services.incentives.nashik_calculator import CycleWindow
+from app.services.incentives.nashik_rules import normalize_person
 
 
 def _session():
@@ -451,3 +453,98 @@ def test_hours_all_divisions_only_selected_cycle_included():
         assert notes["inclusion_status"] == "EXCLUDED"
 
     assert stats["unmatched"] == 0
+
+
+def _seed_coordinator(db, full_name: str, status: CoordinatorStatus, email_suffix: str = "a"):
+    db.add(
+        CoordinatorRecord(
+            full_name=full_name,
+            normalized_name=normalize_person(full_name),
+            email=f"{email_suffix}.{normalize_person(full_name).replace(' ', '.')}@example.com",
+            organization="Ampcus Inc",
+            role_title="Coordinator",
+            employment_status=status,
+            incentive_eligible=status == CoordinatorStatus.ACTIVE,
+        )
+    )
+    db.flush()
+
+
+def test_nashik_recruiter_left_hierarchy_continues_via_coordinator_master():
+    db = _session()
+    _seed_candidate(
+        db,
+        recruiter="Rec Left",
+        team_lead="TL Active",
+        manager="Mgr Active",
+        crm="CRM Active",
+        center_head=None,
+        avp=None,
+        margin=Decimal("8"),
+    )
+    _seed_coordinator(db, "Rec Left", CoordinatorStatus.LEFT, "1")
+    _seed_coordinator(db, "TL Active", CoordinatorStatus.ACTIVE, "2")
+    _seed_coordinator(db, "Mgr Active", CoordinatorStatus.ACTIVE, "3")
+    _seed_coordinator(db, "CRM Active", CoordinatorStatus.ACTIVE, "4")
+    cycle = _cycle(db)
+    rows = [HoursMatchRow(uploaded_name="Aisha Mayes", uploaded_id="12345", hours=160)]
+    lines, _, _, _ = run_cycle_calculation(db, cycle, rows, WINDOW)
+
+    rec = next(line for line in lines if line.role == "Recruiter")
+    assert rec.eligible is False
+    assert rec.amount == Decimal("0")
+    assert rec.reason == "COORDINATOR_LEFT"
+    assert any(line.role == "Team Lead" and line.eligible and line.amount == Decimal("250") for line in lines)
+    assert any(line.role == "Manager" and line.eligible for line in lines)
+    assert any(line.role == "CRM" and line.eligible for line in lines)
+
+
+def test_nashik_manager_left_both_sides_continue_via_coordinator_master():
+    db = _session()
+    _seed_candidate(
+        db,
+        recruiter="Rec Active",
+        team_lead="TL Active",
+        manager="Mgr Left",
+        crm="CRM Active",
+        center_head=None,
+        avp=None,
+        margin=Decimal("8"),
+    )
+    _seed_coordinator(db, "Rec Active", CoordinatorStatus.ACTIVE, "1")
+    _seed_coordinator(db, "TL Active", CoordinatorStatus.ACTIVE, "2")
+    _seed_coordinator(db, "Mgr Left", CoordinatorStatus.LEFT, "3")
+    _seed_coordinator(db, "CRM Active", CoordinatorStatus.ACTIVE, "4")
+    cycle = _cycle(db)
+    rows = [HoursMatchRow(uploaded_name="Aisha Mayes", uploaded_id="12345", hours=160)]
+    lines, _, _, _ = run_cycle_calculation(db, cycle, rows, WINDOW)
+
+    assert any(line.role == "Manager" and line.reason == "COORDINATOR_LEFT" and line.amount == 0 for line in lines)
+    assert any(line.role == "Recruiter" and line.eligible and line.amount == Decimal("2000") for line in lines)
+    assert any(line.role == "Team Lead" and line.eligible for line in lines)
+    assert any(line.role == "CRM" and line.eligible for line in lines)
+
+
+def test_nashik_nitin_three_roles_top_two_excludes_recruiter_in_cycle():
+    db = _session()
+    person = "Nitin Giri"
+    _seed_candidate(
+        db,
+        recruiter=person,
+        team_lead="Other TL",
+        manager=person,
+        crm=person,
+        center_head=None,
+        avp=None,
+        margin=Decimal("8"),
+    )
+    _seed_coordinator(db, person, CoordinatorStatus.ACTIVE, "1")
+    _seed_coordinator(db, "Other TL", CoordinatorStatus.ACTIVE, "2")
+    cycle = _cycle(db)
+    rows = [HoursMatchRow(uploaded_name="Aisha Mayes", uploaded_id="12345", hours=160)]
+    lines, _, _, _ = run_cycle_calculation(db, cycle, rows, WINDOW)
+
+    nitin = [line for line in lines if line.person == person and line.eligible and line.amount > 0]
+    roles = {line.role for line in nitin}
+    assert roles == {"Manager", "CRM"}
+    assert not any(line.role == "Recruiter" and line.eligible and line.amount > 0 and line.person == person for line in lines)

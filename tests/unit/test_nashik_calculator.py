@@ -115,13 +115,16 @@ def test_duplicate_special_blocked():
     assert rec.eligible is False
 
 
-def test_max_two_roles_per_person():
+def test_max_two_roles_per_person_includes_recruiter():
     lines = calculate_nashik_placement(
-        _placement(team_lead="Alex", crm="Alex", manager="Alex"),
+        _placement(recruiter="Alex", team_lead="Alex", crm="Alex", manager="Alex"),
         WINDOW,
     )
     alex = [line for line in lines if line.person == "Alex" and line.eligible and line.amount > 0]
-    assert len(alex) <= 2
+    assert len(alex) == 2
+    roles = {line.role for line in alex}
+    assert roles == {"Manager", "CRM"}
+    assert "Recruiter" not in roles
 
 
 def test_client_name_is_not_blocking_company():

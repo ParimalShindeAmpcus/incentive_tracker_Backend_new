@@ -32,7 +32,7 @@ from app.services.incentives.nashik_calculator import (
     PlacementInput,
     calculate_nashik_placement,
 )
-from app.services.incentives.nashik_rules import is_nashik_division
+from app.services.incentives.nashik_rules import is_nashik_division, normalize_person
 from app.services.cycles.engines.ampcus_client import (
     calculate_placement as calculate_ampcus_client_placement,
     coordinator_index,
@@ -104,6 +104,24 @@ def _ineligible_line(
         reason=reason,
         explanation=[reason],
     )
+
+
+def _nashik_employment_status(coordinators: Optional[dict]) -> Dict[str, str]:
+    """Map normalize_person(name) -> ACTIVE|LEFT|NOTICE from Coordinator Master."""
+    if not coordinators:
+        return {}
+    out: Dict[str, str] = {}
+    for key, row in coordinators.items():
+        status = getattr(row, "employment_status", "ACTIVE")
+        status_value = str(getattr(status, "value", status) or "ACTIVE").upper()
+        out[normalize_person(key)] = status_value
+        full_name = getattr(row, "full_name", None)
+        if full_name:
+            out[normalize_person(full_name)] = status_value
+        normalized = getattr(row, "normalized_name", None)
+        if normalized:
+            out[normalize_person(normalized)] = status_value
+    return out
 
 
 def run_cycle_calculation(
@@ -285,7 +303,12 @@ def run_cycle_calculation(
                 )
             )
             continue
-        drafts = calculate_nashik_placement(_placement(cand, hours, window), window, paid_keys)
+        drafts = calculate_nashik_placement(
+            _placement(cand, hours, window),
+            window,
+            paid_keys,
+            employment_status=_nashik_employment_status(coordinator_index(db)),
+        )
         for draft in drafts:
             payload = {
                 "division": "Nashik",
@@ -405,7 +428,17 @@ def run_cycle_calculation(
             row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
         }
 
-    coordinators = coordinator_index(db) if (is_ampcus_client_division(cycle.division) or is_ampcus_inhouse_division(cycle.division) or is_sambhaji_nagar_division(cycle.division)) else None
+    coordinators = (
+        coordinator_index(db)
+        if (
+            is_ampcus_client_division(cycle.division)
+            or is_ampcus_inhouse_division(cycle.division)
+            or is_sambhaji_nagar_division(cycle.division)
+            or is_nashik_division(cycle.division)
+        )
+        else None
+    )
+    nashik_status = _nashik_employment_status(coordinators) if is_nashik_division(cycle.division) else {}
     paid_keys = incentive_repository.paid_one_time_keys(db, cycle.id)
 
     # 1) If hours were uploaded, match & resolve for every hours row.
@@ -669,7 +702,12 @@ def run_cycle_calculation(
                 )
                 continue
 
-            drafts = calculate_nashik_placement(_placement(cand, hours, window), window, paid_keys)
+            drafts = calculate_nashik_placement(
+                _placement(cand, hours, window),
+                window,
+                paid_keys,
+                employment_status=nashik_status,
+            )
             for draft in drafts:
                 payload = {
                     "division": "Nashik",
