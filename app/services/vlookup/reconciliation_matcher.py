@@ -121,14 +121,15 @@ class ReconciliationMatcher:
                 "_month": normalize_month_year(str(t.get("month") or target or "")),
                 "_candidate_id": str(t.get("candidate_id") or "").strip().upper(),
             })
-        name_counts: Dict[str, int] = defaultdict(int)
-        name_client_counts: Dict[Tuple[str, str], int] = defaultdict(int)
+        name_client_month_counts: Dict[Tuple[str, str, str], int] = defaultdict(int)
         for t in templates:
-            name_counts[t["_norm_name"]] += 1
-            name_client_counts[(t["_norm_name"], t["_norm_client"])] += 1
+            # Same person repeated for June/July/August is not a homonym.
+            name_client_month_counts[(t["_norm_name"], t["_norm_client"], t["_month"] or "")] += 1
         for t in templates:
-            t["_homonym_count"] = name_counts[t["_norm_name"]]
-            t["_homonym_same_client"] = name_client_counts[(t["_norm_name"], t["_norm_client"])]
+            t["_homonym_count"] = name_client_month_counts[
+                (t["_norm_name"], t["_norm_client"], t["_month"] or "")
+            ]
+            t["_homonym_same_client"] = t["_homonym_count"]
 
         by_norm: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         by_last: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -174,16 +175,16 @@ class ReconciliationMatcher:
             reverse=True,
         )
 
-        assigned_messy_keys = set()
+        assigned_claims = set()
         pending = []
         for pair in scored_pairs:
             record = self._build_template_match_record(
-                pair["template"], pair["candidates"], assigned_messy_keys, target
+                pair["template"], pair["candidates"], assigned_claims, target
             )
             pending.append(record)
-            messy_key = record.get("_messy_key")
-            if messy_key and record["match_status"] != "unmatched":
-                assigned_messy_keys.add(messy_key)
+            claim_key = record.get("_claim_key")
+            if claim_key and record["match_status"] != "unmatched":
+                assigned_claims.add(claim_key)
 
         results = {
             "matched": [],
@@ -197,6 +198,7 @@ class ReconciliationMatcher:
 
         for record in pending:
             record.pop("_messy_key", None)
+            record.pop("_claim_key", None)
             explanation = record.setdefault("match_explanation", {})
             hours = float(record.get("total_hours") or 0)
             cumulative = float(record.get("cumulative_hours") or hours)
@@ -418,17 +420,22 @@ class ReconciliationMatcher:
         self,
         template: Dict[str, Any],
         ranked: List[Dict[str, Any]],
-        assigned_messy_keys: set,
+        assigned_claims: set,
         target_month: str,
     ) -> Dict[str, Any]:
-        available = [
-            r for r in ranked
-            if r.get("messy_key") not in assigned_messy_keys
-        ]
+        template_month = template.get("_month") or target_month or ""
+
+        def _is_claimed(row: Dict[str, Any]) -> bool:
+            key = row.get("messy_key")
+            if not key:
+                return False
+            return (key, template_month) in assigned_claims
+
+        available = [r for r in ranked if not _is_claimed(r)]
         compatible = [r for r in available if r.get("identity_compatible")]
         claimed_compatible = [
             r for r in ranked
-            if r.get("identity_compatible") and r.get("messy_key") in assigned_messy_keys
+            if r.get("identity_compatible") and _is_claimed(r)
         ]
         identity_already_assigned = False
         best = compatible[0] if compatible else (available[0] if available else None)
@@ -443,9 +450,13 @@ class ReconciliationMatcher:
         group = (best or {}).get("group") or {}
         monthly_hours = dict(group.get("monthly_hours") or {})
         weekly_by_month = dict(group.get("weekly_by_month") or {})
-        if target_month and monthly_hours.get(target_month) is not None:
-            hours_out = int(round(float(monthly_hours.get(target_month) or 0)))
-            weekly = dict((weekly_by_month.get(target_month) or group.get("weekly_breakdown") or {}))
+        hours_month = template_month or target_month
+        if hours_month and monthly_hours.get(hours_month) is not None:
+            hours_out = int(round(float(monthly_hours.get(hours_month) or 0)))
+            weekly = dict((weekly_by_month.get(hours_month) or group.get("weekly_breakdown") or {}))
+        elif hours_month:
+            hours_out = 0
+            weekly = {}
         else:
             hours_out = int(round(float(group.get("total_hours") or 0)))
             weekly = dict(group.get("weekly_breakdown") or {})
@@ -460,7 +471,9 @@ class ReconciliationMatcher:
             "template_candidate_id_str": template.get("candidate_id"),
             "messy_name_original": group.get("candidate_name") if best else None,
             "messy_client_name": group.get("client_name") if best else None,
-            "messy_month": (group.get("month") or target_month) if best else (target_month or template.get("_month")),
+            "messy_month": hours_month or (
+                (group.get("month") or target_month) if best else (target_month or template.get("_month"))
+            ),
             "weekly_records": group.get("source_rows") or [],
             "weekly_breakdown": weekly,
             "total_hours": hours_out,
@@ -555,12 +568,15 @@ class ReconciliationMatcher:
             headline = f"Needs review: {template.get('candidate_name')}"
 
         if status == "unmatched":
-            summary = (
-                "This Hours Template candidate was not found in the client hours file "
-                "with a sufficiently reliable identity match."
-            )
-            headline = "Unmatched"
-            linked_group = None
+            if "year_mismatch" not in flags and "month_year_mismatch" not in flags:
+                summary = (
+                    "This Hours Template candidate was not found in the client hours file "
+                    "with a sufficiently reliable identity match."
+                )
+                headline = "Unmatched"
+                linked_group = None
+            else:
+                linked_group = group
             messy_key = None
             alts = self._plausible_alternatives_from_groups(compatible, best)
         elif identity_already_assigned:
@@ -631,8 +647,9 @@ class ReconciliationMatcher:
         if status == "unmatched" or identity_already_assigned:
             hours_out = 0
             weekly = {}
-            monthly_hours = {}
-            weekly_by_month = {}
+            if "year_mismatch" not in flags and "month_year_mismatch" not in flags:
+                monthly_hours = {}
+                weekly_by_month = {}
             cumulative_hours = 0
             hours_note = ""
 
@@ -652,6 +669,7 @@ class ReconciliationMatcher:
             "match_explanation": explanation,
             "alternatives": alts,
             "_messy_key": messy_key,
+            "_claim_key": (messy_key, template_month) if messy_key else None,
         }
 
     def _plausible_alternatives_from_groups(
@@ -850,10 +868,24 @@ class ReconciliationMatcher:
         else:
             client_score = 0.0
 
-        messy_month = normalize_month_year(str(group.get("month") or target_month or ""))
-        template_month = template.get("_month") or target_month
-        month_available = bool(messy_month and template_month)
-        month_score = 100.0 if month_available and messy_month == template_month else 0.0
+        messy_month = normalize_month_year(str(group.get("month") or ""))
+        client_months = {
+            normalize_month_year(str(m))
+            for m in (group.get("monthly_hours") or {})
+            if normalize_month_year(str(m))
+        }
+        if messy_month:
+            client_months.add(messy_month)
+        template_month = (
+            template.get("_month")
+            or normalize_month_year(str(template.get("month") or ""))
+            or normalize_month_year(target_month or "")
+        )
+        month_available = bool(template_month and client_months)
+        month_compatible = bool(month_available and template_month in client_months)
+        month_score = 100.0 if month_compatible else 0.0
+        if not messy_month and month_compatible:
+            messy_month = template_month
 
         # Combined confidence: name + client + month. Client can pull a strong
         # name match below auto-match when clients disagree. Never floor confidence
@@ -912,6 +944,8 @@ class ReconciliationMatcher:
                 "identity_evidence": name_info["evidence"],
                 "client_available": client_available,
                 "month_available": month_available,
+                "month_compatible": month_compatible,
+                "client_months": sorted(client_months),
                 "id_match": id_match,
                 "client_band": client_band,
                 "name_band": name_band,
@@ -1387,6 +1421,27 @@ class ReconciliationMatcher:
                 "summary": "No sufficiently reliable candidate identity was found.",
                 "headline": "Unmatched",
                 "flags": ["weak_or_missing_candidate_identity"],
+            }
+
+        template_month = str(signals.get("template_month") or "").strip()
+        client_months = [
+            str(m) for m in (signals.get("client_months") or []) if str(m).strip()
+        ]
+        template_year = template_month[:4] if len(template_month) >= 4 else ""
+        client_years = {m[:4] for m in client_months if len(str(m)) >= 4}
+        # Same person in another month of the SAME year is still a VLOOKUP hit
+        # (hours for the template month may be 0). Only a different year is not.
+        if template_year and client_years and template_year not in client_years:
+            months_label = ", ".join(sorted(set(client_months)))
+            return {
+                "status": "unmatched",
+                "summary": (
+                    f"Candidate identity may match, but Hours Template year {template_year} "
+                    f"does not appear in the client file ({months_label}). "
+                    "Auto-match requires the same year."
+                ),
+                "headline": "Unmatched (year mismatch)",
+                "flags": ["year_mismatch", "month_year_mismatch"],
             }
 
         # Case D — strong candidate + strong conflicting client

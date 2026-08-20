@@ -51,9 +51,10 @@ def stats(
     db: DbSession,
     user: CurrentUser,
     batch_id: Optional[str] = Query(None),
+    month: Optional[str] = Query(None, description="YYYY-MM month to count results for"),
 ) -> VLookupStatsResponse:
     _ = user
-    return vlookup_service.get_stats(db, batch_id=batch_id)
+    return vlookup_service.get_stats(db, batch_id=batch_id, month=month)
 
 
 @router.get("/matches/{status}", response_model=VLookupMatchesByStatusResponse)
@@ -62,9 +63,12 @@ def matches_by_status(
     db: DbSession,
     user: CurrentUser,
     batch_id: Optional[str] = Query(None),
+    month: Optional[str] = Query(None, description="YYYY-MM month to list results for"),
 ) -> VLookupMatchesByStatusResponse:
     _ = user
-    return vlookup_service.get_matches_by_status(db, status=status, batch_id=batch_id)
+    return vlookup_service.get_matches_by_status(
+        db, status=status, batch_id=batch_id, month=month
+    )
 
 
 @router.get("/template-candidates", response_model=VLookupTemplateSearchResponse)

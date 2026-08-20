@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.repositories.entities.vlookup import (
@@ -77,53 +77,74 @@ def get_match(db: Session, match_id: int) -> Optional[VLookupMatchedRecord]:
     ).scalar_one_or_none()
 
 
+def _apply_month_filter(stmt, month_key: Optional[str], *, already_joined: bool = False):
+    if not month_key:
+        return stmt
+    if not already_joined:
+        stmt = stmt.outerjoin(
+            VLookupTemplateCandidate,
+            VLookupMatchedRecord.template_candidate_id == VLookupTemplateCandidate.id,
+        )
+    return stmt.where(
+        or_(
+            VLookupMatchedRecord.messy_month == month_key,
+            VLookupTemplateCandidate.month == month_key,
+        )
+    )
+
+
 def list_matches_by_status(
-    db: Session, batch_id: str, status: str
+    db: Session,
+    batch_id: str,
+    status: str,
+    month_key: Optional[str] = None,
 ) -> List[VLookupMatchedRecord]:
-    return list(
-        db.execute(
-            select(VLookupMatchedRecord)
-            .where(VLookupMatchedRecord.upload_batch_id == batch_id)
-            .where(VLookupMatchedRecord.match_status == status)
-            .order_by(VLookupMatchedRecord.confidence_score.desc())
-        ).scalars().all()
+    stmt = (
+        select(VLookupMatchedRecord)
+        .where(VLookupMatchedRecord.upload_batch_id == batch_id)
+        .where(VLookupMatchedRecord.match_status == status)
+        .order_by(VLookupMatchedRecord.confidence_score.desc())
     )
+    stmt = _apply_month_filter(stmt, month_key)
+    return list(db.execute(stmt).scalars().unique().all())
 
 
-def count_by_status(db: Session, batch_id: str, status: str) -> int:
-    return (
-        db.execute(
-            select(func.count(VLookupMatchedRecord.id))
-            .where(VLookupMatchedRecord.upload_batch_id == batch_id)
-            .where(VLookupMatchedRecord.match_status == status)
-        ).scalar()
-        or 0
+def count_by_status(
+    db: Session, batch_id: str, status: str, month_key: Optional[str] = None
+) -> int:
+    stmt = (
+        select(func.count(VLookupMatchedRecord.id))
+        .where(VLookupMatchedRecord.upload_batch_id == batch_id)
+        .where(VLookupMatchedRecord.match_status == status)
     )
+    stmt = _apply_month_filter(stmt, month_key)
+    return db.execute(stmt).scalar() or 0
 
 
-def count_unique_master_candidates(db: Session, batch_id: str) -> int:
+def count_unique_master_candidates(
+    db: Session, batch_id: str, month_key: Optional[str] = None
+) -> int:
     """Distinct Hours Template candidates that linked to a client-file identity."""
-    return (
-        db.execute(
-            select(func.count(func.distinct(VLookupMatchedRecord.template_candidate_id)))
-            .where(VLookupMatchedRecord.upload_batch_id == batch_id)
-            .where(VLookupMatchedRecord.template_candidate_id.isnot(None))
-            .where(VLookupMatchedRecord.messy_name_original.isnot(None))
-            .where(VLookupMatchedRecord.match_status != "rejected")
-        ).scalar()
-        or 0
+    stmt = (
+        select(func.count(func.distinct(VLookupMatchedRecord.template_candidate_id)))
+        .where(VLookupMatchedRecord.upload_batch_id == batch_id)
+        .where(VLookupMatchedRecord.template_candidate_id.isnot(None))
+        .where(VLookupMatchedRecord.messy_name_original.isnot(None))
+        .where(VLookupMatchedRecord.match_status.notin_(["rejected", "unmatched"]))
     )
+    stmt = _apply_month_filter(stmt, month_key)
+    return db.execute(stmt).scalar() or 0
 
 
-def count_template_candidates(db: Session, batch_id: str) -> int:
-    return (
-        db.execute(
-            select(func.count(VLookupTemplateCandidate.id)).where(
-                VLookupTemplateCandidate.upload_batch_id == batch_id
-            )
-        ).scalar()
-        or 0
+def count_template_candidates(
+    db: Session, batch_id: str, month_key: Optional[str] = None
+) -> int:
+    stmt = select(func.count(VLookupTemplateCandidate.id)).where(
+        VLookupTemplateCandidate.upload_batch_id == batch_id
     )
+    if month_key:
+        stmt = stmt.where(VLookupTemplateCandidate.month == month_key)
+    return db.execute(stmt).scalar() or 0
 
 
 def list_weekly_hours_for_batch(
@@ -141,14 +162,20 @@ def list_weekly_hours_for_batch(
 
 
 def list_months_for_batch(db: Session, batch_id: str) -> List[str]:
-    rows = db.execute(
+    weekly_rows = db.execute(
         select(VLookupWeeklyHours.month)
         .where(VLookupWeeklyHours.upload_batch_id == batch_id)
         .where(VLookupWeeklyHours.month.isnot(None))
         .distinct()
     ).scalars().all()
-    months = sorted({str(m) for m in rows if m})
-    return months
+    template_rows = db.execute(
+        select(VLookupTemplateCandidate.month)
+        .where(VLookupTemplateCandidate.upload_batch_id == batch_id)
+        .where(VLookupTemplateCandidate.month.isnot(None))
+        .distinct()
+    ).scalars().all()
+    months = {str(m).strip() for m in list(weekly_rows) + list(template_rows) if m and str(m).strip()}
+    return sorted(months)
 
 
 def list_matches_for_download(

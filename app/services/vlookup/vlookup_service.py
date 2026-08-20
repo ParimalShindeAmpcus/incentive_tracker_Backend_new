@@ -75,11 +75,15 @@ def upload_template_and_messy(
                 ),
             )
 
-        template_months = [
-            normalize_month_year(str(v))
-            for v in template_df.get("month", pd.Series(dtype=str)).dropna().unique()
-            if str(v).strip() and str(v).lower() != "nan"
-        ]
+        template_months = sorted(
+            {
+                normalize_month_year(str(v))
+                for v in template_df.get("month", pd.Series(dtype=str)).dropna().unique()
+                if str(v).strip()
+                and str(v).lower() != "nan"
+                and normalize_month_year(str(v))
+            }
+        )
         template_month = template_months[0] if template_months else ""
 
         template_records: List[VLookupTemplateCandidate] = []
@@ -99,7 +103,9 @@ def upload_template_and_messy(
                     template_hours=int(
                         float(row.get("hours_worked", row.get("hours", 0)) or 0)
                     ),
-                    month=str(row.get("month", template_month or "") or ""),
+                    month=normalize_month_year(str(row.get("month", "") or ""))
+                    or template_month
+                    or "",
                     pay_rate=_optional_decimal(row.get("pay_rate")),
                     bill_rate=_optional_decimal(row.get("bill_rate")),
                     margin_per_hour=_optional_decimal(row.get("margin_per_hour")),
@@ -145,7 +151,7 @@ def upload_template_and_messy(
         available_months = unfiltered.get("months_found") or []
         month_filter = _resolve_target_month(
             explicit=target_month,
-            template_month=template_month,
+            template_months=template_months,
             available_months=available_months,
         )
 
@@ -211,7 +217,7 @@ def upload_template_and_messy(
                 "candidate_id": r.candidate_id,
                 "candidate_name": r.candidate_name,
                 "client_name": r.client_name,
-                "month": match_month or r.month,
+                "month": normalize_month_year(str(r.month or "")) or "",
             }
             for r in template_records
         ]
@@ -267,13 +273,35 @@ def upload_template_and_messy(
         messy_count = len(weekly_mappings)
 
         month_note = None
+        client_months_norm = [normalize_month_year(m) for m in (available_months or []) if m]
+        overlap_months = [m for m in template_months if m in client_months_norm]
         if available_months:
             months_label = ", ".join(available_months)
-            month_note = (
-                f"Client file contains {len(available_months)} month(s): {months_label}. "
-                "Identities were matched once against the Hours Template. "
-                "Select a month on Results to view and export that month's hours."
-            )
+            template_label = ", ".join(template_months) if template_months else "none"
+            if overlap_months:
+                month_note = (
+                    f"Client file contains {len(available_months)} month(s): {months_label}. "
+                    f"Hours Template month(s): {template_label}. "
+                    "People are matched by identity when the year overlaps. "
+                    "Hours for the selected month are taken from the client file "
+                    "(0 if that person has no weeks in that month)."
+                )
+            else:
+                template_years = {m[:4] for m in template_months if m}
+                client_years = {m[:4] for m in client_months_norm if m}
+                if template_years and client_years and template_years.isdisjoint(client_years):
+                    month_note = (
+                        f"Hours Template year(s) {', '.join(sorted(template_years))} do not "
+                        f"overlap client file year(s) {', '.join(sorted(client_years))}. "
+                        "Auto-match requires the same year."
+                    )
+                else:
+                    month_note = (
+                        f"Client file contains {len(available_months)} month(s): {months_label}. "
+                        f"Hours Template month(s): {template_label}. "
+                        "People are matched by identity. Hours for a month are 0 when that "
+                        "person has no client-file weeks in that month."
+                    )
             if target_month and month_filter:
                 month_note += f" Default month filter: {month_filter}."
         elif template_month:
@@ -342,12 +370,18 @@ def upload_template_and_messy(
         raise HTTPException(status_code=500, detail=f"Upload failed: {detail}") from exc
 
 
-def get_stats(db: Session, batch_id: Optional[str] = None) -> VLookupStatsResponse:
+def get_stats(
+    db: Session, batch_id: Optional[str] = None, month: Optional[str] = None
+) -> VLookupStatsResponse:
     latest = repo.latest_batch_id(db, batch_id)
     if not latest:
         return VLookupStatsResponse()
 
-    counts = {status: repo.count_by_status(db, latest, status) for status in repo.VALID_STATUSES}
+    month_key = normalize_month_year(str(month or "")) or None
+    counts = {
+        status: repo.count_by_status(db, latest, status, month_key=month_key)
+        for status in repo.VALID_STATUSES
+    }
     batch = repo.get_batch(db, latest)
     return VLookupStatsResponse(
         batch_id=latest,
@@ -359,8 +393,12 @@ def get_stats(db: Session, batch_id: Optional[str] = None) -> VLookupStatsRespon
         accepted_count=counts.get("accepted", 0),
         rejected_count=counts.get("rejected", 0),
         total_records=sum(counts.values()),
-        unique_master_candidates=repo.count_unique_master_candidates(db, latest),
-        hours_template_count=repo.count_template_candidates(db, latest),
+        unique_master_candidates=repo.count_unique_master_candidates(
+            db, latest, month_key=month_key
+        ),
+        hours_template_count=repo.count_template_candidates(
+            db, latest, month_key=month_key
+        ),
         target_month=batch.target_month if batch else None,
         client_file_format=batch.client_file_format if batch else None,
         parser_warnings=list(batch.parser_warnings or []) if batch else [],
@@ -369,7 +407,10 @@ def get_stats(db: Session, batch_id: Optional[str] = None) -> VLookupStatsRespon
 
 
 def get_matches_by_status(
-    db: Session, status: str, batch_id: Optional[str] = None
+    db: Session,
+    status: str,
+    batch_id: Optional[str] = None,
+    month: Optional[str] = None,
 ) -> VLookupMatchesByStatusResponse:
     if status not in repo.VALID_STATUSES:
         raise HTTPException(
@@ -380,7 +421,8 @@ def get_matches_by_status(
     if not latest:
         return VLookupMatchesByStatusResponse(status=status, batch_id=None, matches=[])
 
-    matches = repo.list_matches_by_status(db, latest, status)
+    month_key = normalize_month_year(str(month or "")) or None
+    matches = repo.list_matches_by_status(db, latest, status, month_key=month_key)
     out = []
     for match in matches:
         template = None
@@ -1051,20 +1093,31 @@ def _rebuild_weekly_by_month(
 
 def _resolve_target_month(
     explicit: Optional[str],
-    template_month: str,
+    template_months: list,
     available_months: list,
+    template_month: str = "",
 ) -> Optional[str]:
     if explicit:
         return normalize_month_year(explicit)
 
     normalized_available = [normalize_month_year(m) for m in available_months if m]
-    if template_month and template_month in normalized_available:
-        return template_month
+    normalized_template = [
+        normalize_month_year(m) for m in (template_months or []) if m
+    ]
+    if template_month:
+        tm = normalize_month_year(template_month)
+        if tm and tm not in normalized_template:
+            normalized_template.append(tm)
 
+    overlap = [m for m in normalized_template if m in normalized_available]
+    if overlap:
+        return sorted(set(overlap))[-1]
+    # Do not fall back to an unrelated client-file month/year.
+    if normalized_template:
+        return sorted(set(normalized_template))[0]
     if normalized_available:
         return sorted(normalized_available)[-1]
-
-    return normalize_month_year(template_month) if template_month else None
+    return None
 
 
 def _parse_tabular_file(file_content: bytes, filename: str) -> pd.DataFrame:
