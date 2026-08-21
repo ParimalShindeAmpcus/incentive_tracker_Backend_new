@@ -40,8 +40,7 @@ from app.services.cycles.engines.ampcus_client import (
 )
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
 from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
-from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, special_average
-
+from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, special_average, build_sn_validations
 
 def _to_master(cand: Candidate) -> MasterCandidate:
     return MasterCandidate(
@@ -648,6 +647,8 @@ def run_cycle_calculation(
             )
             lines.extend(drafts)
 
+        sn_validations = build_sn_validations(lines)
+        
         return special_average(lines), stats, match_rows, [
             {
                 "check_key": "matched_name_and_id",
@@ -701,7 +702,7 @@ def run_cycle_calculation(
                     default=str,
                 ),
             },
-        ]
+        ] + sn_validations
 
     if is_nashik_division(cycle.division):
         for pk, hours in hours_by_pk.items():
@@ -858,4 +859,8 @@ def run_cycle_calculation(
             "details_json": None,
         },
     ]
+
+    if is_sambhaji_nagar_division(cycle.division):
+        validations.extend(build_sn_validations(lines))
+
     return lines, stats, match_rows, validations

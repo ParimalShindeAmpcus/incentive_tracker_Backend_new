@@ -395,8 +395,18 @@ def upload_hours_file(db: Session, cycle_id: int, filename: str, content: bytes)
 
     if placement_only or is_sambhaji_nagar_division(cycle.division):
         match_rows, matched_ids, issues, coordinator_issues = _match_hours_rows_for_cycle(db, cycle, rows)
+        
+        filtered_matched_ids = []
+        for r in match_rows:
+            if r["accepted"] and r["candidate_id"] is not None:
+                if is_sambhaji_nagar_division(cycle.division):
+                    if r.get("hours_worked", Decimal("0")) < Decimal("160"):
+                        filtered_matched_ids.append(r["candidate_id"])
+                else:
+                    filtered_matched_ids.append(r["candidate_id"])
+                    
         cycle_repository.replace_matches(db, cycle.id, match_rows)
-        cycle_repository.replace_payment_statuses(db, cycle.id, matched_ids)
+        cycle_repository.sync_payment_statuses(db, cycle.id, list(set(filtered_matched_ids)))
         db.commit()
         if not matched_ids:
             raise HTTPException(
@@ -629,9 +639,6 @@ def _export_row(cycle, line, cand) -> list:
         source = cand.candidate_source or cand.organization or ""
     if not source:
         source = str(meta.get("candidate_source") or "")
-    team = ""
-    if cand:
-        team = cand.crm or cand.center_head or cand.associate_director or cand.manager or cand.team_lead or ""
     month = f"{cycle.incentive_month}-01" if cycle.incentive_month else ""
     return [
         line.person,
@@ -646,7 +653,6 @@ def _export_row(cycle, line, cand) -> list:
         int(round(float(line.amount or 0))),
         incentive_type,
         source,
-        team,
     ]
 
 
@@ -673,7 +679,6 @@ def export_cycle(db: Session, cycle_id: int) -> StreamingResponse:
         "Incentive Amount (INR)",
         "Incentive Type",
         "Candidate Source",
-        "Team",
     ]
     sheet.append(headers)
     for line in lines:

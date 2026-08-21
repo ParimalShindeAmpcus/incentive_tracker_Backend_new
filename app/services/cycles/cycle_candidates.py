@@ -12,10 +12,11 @@ from app.repositories.cycles import cycle_repository
 from app.repositories.entities.candidate import Candidate
 from app.services.cycles.engines.ampcus_client import is_ampcus_client_division
 from app.services.cycles.engines.ampcus_inhouse import is_ampcus_inhouse_division
+from app.services.cycles.engines.sambhaji_nagar import is_sambhaji_nagar_division
 from app.services.incentives.nashik_rules import is_nashik_division
 
 _DEMO_EXTERNAL_ID = re.compile(
-    r"^(NSK|ATC|ATH|SN|TMP|BULK-(NASHIK|SAMBHAJINAGAR|AMPCUSTECHCLIENT|AMPCUSTECHINHOUSE))-\d+$",
+    r"^(TMP|BULK-(NASHIK|SAMBHAJINAGAR|AMPCUSTECHCLIENT|AMPCUSTECHINHOUSE))-\d+$",
     re.IGNORECASE,
 )
 
@@ -58,12 +59,17 @@ def candidate_matches_division(candidate: Candidate, cycle_division: str) -> boo
     if is_ampcus_inhouse_division(cycle_division):
         return "inhouse" in org or contract == "INHOUSE"
 
+    if is_sambhaji_nagar_division(cycle_division):
+        loc = (candidate.recruiter_location or "").lower()
+        return "sambhaji" in loc or "sambhajinagar" in loc or "sambhaji nagar" in loc
+
     if is_nashik_division(cycle_division):
         from app.services.incentives.nashik_rules import matches_nashik_company
 
         return matches_nashik_company(candidate.candidate_source, candidate.organization)
 
-    # Sambhaji Nagar and other divisions: match explicit division tag only.
+
+    # Other divisions: match explicit division tag only.
     return False
 
 
