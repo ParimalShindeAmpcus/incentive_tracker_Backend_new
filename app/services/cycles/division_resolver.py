@@ -82,9 +82,10 @@ def resolve_candidate_division(
 
     # Check if organization indicates Ampcus Tech divisions
     org_lower = _norm_text(organization).lower()
+    org_compact = org_lower.replace(" ", "").replace("-", "")
     ct_upper = _norm_text(contract_type).upper().replace(" ", "")
-    if "ampcus tech" in org_lower:
-        if "inhouse" in org_lower or ct_upper in {"INHOUSE", "FULLTIME", "FULL_TIME"}:
+    if "ampcustech" in org_compact or "ampcus tech" in org_lower:
+        if "inhouse" in org_compact or ct_upper in {"INHOUSE", "FULLTIME", "FULL_TIME"}:
             return ResolvedCandidateDivision(
                 resolved_division="ampcusTechInhouse",
                 master_division=_norm_text(master_division) or None,
