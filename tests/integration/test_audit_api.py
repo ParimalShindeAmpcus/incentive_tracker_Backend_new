@@ -78,3 +78,56 @@ def test_filter_by_action(client, auth_headers):
     logs = response.json()
     assert len(logs) >= 1
     assert all(log["action"] == "FILE_UPLOAD" for log in logs)
+
+
+def test_new_action_types_are_accepted(client, auth_headers):
+    for action, title in (
+        ("FILE_DOWNLOAD", "Downloaded Candidate Master Excel"),
+        ("CANDIDATE_ADD", "Added 3 candidate(s)"),
+        ("CANDIDATE_UPDATE", "Updated candidate Jane Doe"),
+        ("CYCLE_APPROVE", "Approved cycle 2026-08"),
+        ("PAYMENT_UPDATE", "Updated payment status for Jane Doe"),
+        ("COORDINATOR_DELETE", "Deleted left coordinator Jane Doe"),
+    ):
+        response = client.post(
+            "/api/v1/audit/logs",
+            json={"action": action, "title": title, "details": f"Test {action}"},
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["action"] == action
+
+        listed = client.get(
+            "/api/v1/audit/logs",
+            params={"action": action},
+            headers=auth_headers,
+        )
+        assert listed.status_code == 200
+        assert all(item["action"] == action for item in listed.json())
+        assert any(item["title"] == title for item in listed.json())
+
+
+def test_create_coordinator_writes_coordinator_add(client, auth_headers):
+    response = client.post(
+        "/api/v1/coordinators",
+        json={
+            "full_name": "Audit Trail Coordinator",
+            "email": "audit.trail.coordinator@example.com",
+            "organization": "Ampcus",
+            "role_title": "CRM",
+            "employment_status": "ACTIVE",
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 201, response.text
+
+    logs = client.get(
+        "/api/v1/audit/logs",
+        params={"action": "COORDINATOR_ADD", "search": "Audit Trail Coordinator"},
+        headers=auth_headers,
+    )
+    assert logs.status_code == 200
+    matches = logs.json()
+    assert matches, "creating a coordinator should write COORDINATOR_ADD"
+    assert all(item["action"] == "COORDINATOR_ADD" for item in matches)
+    assert any("Audit Trail Coordinator" in (item["title"] + item["details"]) for item in matches)

@@ -1,10 +1,9 @@
 """VLOOKUP reconciliation ORM entities (template + client hours matching)."""
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -23,17 +22,9 @@ class VLookupTemplateCandidate(Base):
     template_hours: Mapped[int] = mapped_column(Integer, default=0)
     month: Mapped[Optional[str]] = mapped_column(String(20))
 
-    pay_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
-    bill_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
-    margin_per_hour: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     contract_type: Mapped[Optional[str]] = mapped_column(String(20))
     division: Mapped[Optional[str]] = mapped_column(String(50))
     recruiter_name: Mapped[Optional[str]] = mapped_column(String(255))
-    team_lead_name: Mapped[Optional[str]] = mapped_column(String(255))
-    manager_name: Mapped[Optional[str]] = mapped_column(String(255))
-    crm_name: Mapped[Optional[str]] = mapped_column(String(255))
-    start_date: Mapped[Optional[str]] = mapped_column(String(20))
-    end_date: Mapped[Optional[str]] = mapped_column(String(20))
 
     upload_batch_id: Mapped[Optional[str]] = mapped_column(String(50), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -72,7 +63,6 @@ class VLookupMatchedRecord(Base):
     messy_name_original: Mapped[Optional[str]] = mapped_column(String(255))
     messy_client_name: Mapped[Optional[str]] = mapped_column(String(255))
     messy_month: Mapped[Optional[str]] = mapped_column(String(20))
-    weekly_hours_ids: Mapped[Optional[Any]] = mapped_column(JSON)
     weekly_breakdown: Mapped[Optional[Any]] = mapped_column(JSON)
     total_hours: Mapped[int] = mapped_column(Integer, nullable=False)
 
@@ -105,7 +95,6 @@ class VLookupUploadBatch(Base):
     filename: Mapped[Optional[str]] = mapped_column(String(255))
     total_records: Mapped[Optional[int]] = mapped_column(Integer)
     status: Mapped[Optional[str]] = mapped_column(String(20))
-    error_message: Mapped[Optional[str]] = mapped_column(Text)
 
     matched_count: Mapped[int] = mapped_column(Integer, default=0)
     needs_review_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -118,5 +107,10 @@ class VLookupUploadBatch(Base):
     parser_warnings: Mapped[Optional[Any]] = mapped_column(JSON)
 
     uploaded_by: Mapped[Optional[str]] = mapped_column(String(255))
+    cancelled_by: Mapped[Optional[str]] = mapped_column(String(255))
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    stage: Mapped[Optional[str]] = mapped_column(String(40))
+    cycle_id: Mapped[Optional[int]] = mapped_column(Integer)
+    resume_state: Mapped[Optional[Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

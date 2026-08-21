@@ -8,7 +8,7 @@ from collections import Counter
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 from fastapi import HTTPException, UploadFile
@@ -18,6 +18,9 @@ from sqlalchemy.orm import Session
 from app.models.hours.schemas import CreateHoursVersionRequest, HoursRowIn
 from app.models.vlookup.schemas import (
     VLookupActionResponse,
+    VLookupCancelBody,
+    VLookupDraftListResponse,
+    VLookupDraftOut,
     VLookupMatchesByStatusResponse,
     VLookupPublishHoursResponse,
     VLookupRematchBody,
@@ -27,6 +30,9 @@ from app.models.vlookup.schemas import (
     VLookupTemplateSearchResponse,
     VLookupUploadResponse,
 )
+from app.repositories.audit import audit_repository
+from app.repositories.entities.audit import AuditAction
+from app.repositories.entities.user import User
 from app.repositories.entities.vlookup import (
     VLookupMatchedRecord,
     VLookupTemplateCandidate,
@@ -35,6 +41,7 @@ from app.repositories.entities.vlookup import (
 )
 from app.repositories.vlookup import vlookup_repository as repo
 from app.repositories.candidates import candidate_repository
+from app.services.audit import audit_service
 from app.services.hours import hours_service
 from app.services.vlookup.normalization import normalize_month_year, normalize_name
 from app.services.vlookup.parsers.client_hours import (
@@ -56,6 +63,7 @@ def upload_template_and_messy(
     messy_file: UploadFile,
     target_month: Optional[str] = None,
     uploaded_by: Optional[str] = None,
+    user: Optional[User] = None,
 ) -> VLookupUploadResponse:
     batch_id = str(uuid.uuid4())[:8]
     try:
@@ -106,17 +114,9 @@ def upload_template_and_messy(
                     month=normalize_month_year(str(row.get("month", "") or ""))
                     or template_month
                     or "",
-                    pay_rate=_optional_decimal(row.get("pay_rate")),
-                    bill_rate=_optional_decimal(row.get("bill_rate")),
-                    margin_per_hour=_optional_decimal(row.get("margin_per_hour")),
                     contract_type=str(row.get("contract_type", "") or ""),
                     division=str(row.get("division", "") or ""),
                     recruiter_name=str(row.get("recruiter_name", "") or ""),
-                    team_lead_name=str(row.get("team_lead_name", "") or ""),
-                    manager_name=str(row.get("manager_name", "") or ""),
-                    crm_name=str(row.get("crm_name", "") or ""),
-                    start_date=str(row.get("start_date", "") or ""),
-                    end_date=str(row.get("end_date", "") or ""),
                     upload_batch_id=batch_id,
                 )
             )
@@ -249,7 +249,6 @@ def upload_template_and_messy(
                         "messy_name_original": match.get("messy_name_original"),
                         "messy_client_name": match.get("messy_client_name"),
                         "messy_month": match.get("messy_month") or month_filter,
-                        "weekly_hours_ids": [],
                         "weekly_breakdown": match.get("weekly_breakdown") or {},
                         "total_hours": int(match.get("total_hours") or 0),
                         "confidence_score": float(match.get("confidence_score") or 0),
@@ -312,7 +311,8 @@ def upload_template_and_messy(
             file_type="template_and_messy",
             filename=f"{template_file.filename} + {messy_file.filename}",
             total_records=len(template_records) + messy_count,
-            status="completed",
+            status="running",
+            stage="review",
             matched_count=len(match_results.get("matched", [])),
             needs_review_count=len(match_results.get("needs_review", [])),
             unmatched_count=len(match_results.get("unmatched", [])),
@@ -325,6 +325,46 @@ def upload_template_and_messy(
             completed_at=datetime.utcnow(),
         )
         db.add(upload_batch)
+        audit_service.record_event(
+            db,
+            action=AuditAction.FILE_UPLOAD,
+            title="Uploaded VLOOKUP files",
+            details=(
+                f"Uploaded {template_file.filename} and {messy_file.filename}: "
+                f"{len(match_results.get('matched', []))} matched, "
+                f"{len(match_results.get('unmatched', []))} unmatched"
+            ),
+            user=user,
+            metadata={
+                "batch_id": batch_id,
+                "template_filename": template_file.filename,
+                "messy_filename": messy_file.filename,
+                "matched_count": len(match_results.get("matched", [])),
+                "unmatched_count": len(match_results.get("unmatched", [])),
+                "target_month": month_filter or None,
+            },
+            entity_type="vlookup_batch",
+            entity_id=batch_id,
+        )
+        audit_service.record_event(
+            db,
+            action=AuditAction.HOURS_RECONCILIATION,
+            title="VLOOKUP reconciliation completed",
+            details=(
+                f"Matched {len(match_results.get('matched', []))} of "
+                f"{len(template_records)} template candidate(s) from {messy_file.filename}"
+            ),
+            user=user,
+            metadata={
+                "batch_id": batch_id,
+                "matched_count": len(match_results.get("matched", [])),
+                "unmatched_count": len(match_results.get("unmatched", [])),
+                "needs_review_count": len(match_results.get("needs_review", [])),
+                "target_month": month_filter or None,
+            },
+            entity_type="vlookup_batch",
+            entity_id=batch_id,
+        )
         db.commit()
 
         return VLookupUploadResponse(
@@ -804,18 +844,49 @@ def _hours_for_export_month(match: VLookupMatchedRecord, month_key: str) -> int:
     return 0
 
 
-def _matched_hours_export_rows(
-    db: Session,
-    batch_id: Optional[str] = None,
-    include_review_pending: bool = False,
-    month_key: Optional[str] = None,
-) -> Tuple[str, List[Dict[str, Any]]]:
-    """
-    Build filled Hours Template rows.
+def _match_belongs_to_month(
+    match: VLookupMatchedRecord,
+    template: Optional[VLookupTemplateCandidate],
+    month_key: Optional[str],
+) -> bool:
+    if not month_key:
+        return True
+    messy = normalize_month_year(str(match.messy_month or ""))
+    tmpl = normalize_month_year(str(getattr(template, "month", None) or ""))
+    return messy == month_key or tmpl == month_key
 
-    Only review-complete matches: auto-matched + manually accepted.
-    Rejected, unmatched, and other-client people are excluded.
-    """
+
+def _dedupe_export_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep one row per Candidate ID + Client + Month (accepted beats matched)."""
+    status_rank = {"accepted": 2, "matched": 1}
+    chosen: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        candidate_id = str(row.get("Candidate ID") or "").strip().lower()
+        name = str(row.get("Candidate Name") or row.get("Source Name") or "").strip().lower()
+        client = str(row.get("Client Name") or row.get("Client Name (Source)") or "").strip().lower()
+        month = str(row.get("Month") or "").strip()
+        key = f"{candidate_id or name}::{client}::{month}"
+        prev = chosen.get(key)
+        if prev is None:
+            chosen[key] = row
+            continue
+        prev_rank = status_rank.get(str(prev.get("Match Status") or ""), 0)
+        next_rank = status_rank.get(str(row.get("Match Status") or ""), 0)
+        prev_conf = float(prev.get("Confidence") or 0)
+        next_conf = float(row.get("Confidence") or 0)
+        if next_rank > prev_rank or (next_rank == prev_rank and next_conf > prev_conf):
+            chosen[key] = row
+    return list(chosen.values())
+
+
+def _hours_export_rows(
+    db: Session,
+    *,
+    batch_id: Optional[str] = None,
+    statuses: Sequence[str],
+    month_key: Optional[str] = None,
+    require_template: bool = True,
+) -> Tuple[str, List[Dict[str, Any]], str]:
     latest = repo.latest_batch_id(db, batch_id)
     if not latest:
         raise HTTPException(status_code=404, detail="No matches found")
@@ -827,18 +898,20 @@ def _matched_hours_export_rows(
     if not requested_month and available_months:
         requested_month = available_months[-1]
 
-    statuses = ["matched", "accepted"]
-    if include_review_pending:
-        statuses.extend(["needs_review", "potential_duplicate", "conflicting"])
-
-    matches = repo.list_matches_for_download(db, latest, statuses)
+    matches = repo.list_matches_for_download(db, latest, statuses, requested_month)
     data: List[Dict[str, Any]] = []
     for match in matches:
         if match.review_action == "rejected" or match.match_status == "rejected":
             continue
-        if not match.template_candidate_id:
+        template = (
+            repo.get_template_by_id(db, match.template_candidate_id)
+            if match.template_candidate_id
+            else None
+        )
+        if require_template and not match.template_candidate_id:
             continue
-        template = repo.get_template_by_id(db, match.template_candidate_id)
+        if not _match_belongs_to_month(match, template, requested_month):
+            continue
         hours = _hours_for_export_month(match, requested_month)
         month_value = requested_month or (
             normalize_month_year(str(match.messy_month or ""))
@@ -850,8 +923,11 @@ def _matched_hours_export_rows(
         data.append(
             {
                 "Candidate ID": match.template_candidate_id_str or "",
-                "Candidate Name": match.template_candidate_name or "",
-                "Client Name": template.client_name if template else "",
+                "Candidate Name": match.template_candidate_name
+                or match.messy_name_original
+                or "",
+                "Client Name": (template.client_name if template else "")
+                or (match.messy_client_name or ""),
                 "Hours Worked": hours,
                 "Month": month_value,
                 "Match Status": match.match_status,
@@ -862,22 +938,40 @@ def _matched_hours_export_rows(
                 "Hours Note": explanation.get("hours_note") or "",
             }
         )
-    return latest, data
+    return latest, _dedupe_export_rows(data), requested_month or ""
 
 
-def download_matches(
+def _matched_hours_export_rows(
     db: Session,
     batch_id: Optional[str] = None,
     include_review_pending: bool = False,
     month_key: Optional[str] = None,
-) -> StreamingResponse:
-    latest, data = _matched_hours_export_rows(
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Build filled Hours Template rows for the selected month.
+
+    Only review-complete matches: auto-matched + manually accepted.
+    Unmatched stay in the database for audit and are not included here.
+    """
+    statuses = ["matched", "accepted"]
+    if include_review_pending:
+        statuses.extend(["needs_review", "potential_duplicate", "conflicting"])
+    latest, data, _month = _hours_export_rows(
         db,
         batch_id=batch_id,
-        include_review_pending=include_review_pending,
+        statuses=statuses,
         month_key=month_key,
+        require_template=True,
     )
-    _ = latest
+    return latest, data
+
+
+def _excel_download(
+    data: List[Dict[str, Any]],
+    filename: str,
+    *,
+    extra_cols: Optional[List[str]] = None,
+) -> StreamingResponse:
     df = pd.DataFrame(data)
     export_cols = [
         "Candidate ID",
@@ -886,15 +980,14 @@ def download_matches(
         "Hours Worked",
         "Month",
     ]
-    audit_cols = export_cols + [
+    audit_cols = export_cols + (extra_cols or [
         "Match Status",
         "Confidence",
         "Client Name (Source)",
         "Source Name",
         "Cumulative Hours (Client File)",
         "Hours Note",
-    ]
-
+    ])
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         (df[export_cols] if not df.empty else pd.DataFrame(columns=export_cols)).to_excel(
@@ -904,13 +997,72 @@ def download_matches(
             writer, sheet_name="Audit Detail", index=False
         )
     output.seek(0)
-
-    filename = f"hours_reconciled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def download_matches(
+    db: Session,
+    batch_id: Optional[str] = None,
+    include_review_pending: bool = False,
+    month_key: Optional[str] = None,
+    user: Optional[User] = None,
+) -> StreamingResponse:
+    latest, data = _matched_hours_export_rows(
+        db,
+        batch_id=batch_id,
+        include_review_pending=include_review_pending,
+        month_key=month_key,
+    )
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    month_part = f"_{normalize_month_year(str(month_key or ''))}" if month_key else ""
+    filename = f"hours_reconciled{month_part}_{stamp}.xlsx"
+    audit_service.record_event(
+        db,
+        action=AuditAction.FILE_DOWNLOAD,
+        title="Downloaded reconciled hours",
+        details=f"Downloaded {filename} with {len(data)} row(s) for batch {latest}",
+        user=user,
+        metadata={"batch_id": latest, "filename": filename, "row_count": len(data), "month": month_key},
+        entity_type="vlookup_batch",
+        entity_id=str(latest) if latest else None,
+    )
+    _mark_batch_completed(db, latest, user=user)
+    return _excel_download(data, filename)
+
+
+def download_unmatched(
+    db: Session,
+    batch_id: Optional[str] = None,
+    month_key: Optional[str] = None,
+    user: Optional[User] = None,
+) -> StreamingResponse:
+    latest, data, requested_month = _hours_export_rows(
+        db,
+        batch_id=batch_id,
+        statuses=["unmatched"],
+        month_key=month_key,
+        require_template=False,
+    )
+    _ = latest
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    month_part = f"_{requested_month}" if requested_month else ""
+    filename = f"hours_unmatched{month_part}_{stamp}.xlsx"
+    audit_service.record_event(
+        db,
+        action=AuditAction.FILE_DOWNLOAD,
+        title="Downloaded unmatched hours",
+        details=f"Downloaded {filename} with {len(data)} unmatched row(s)",
+        user=user,
+        metadata={"batch_id": latest, "filename": filename, "row_count": len(data), "month": requested_month},
+        entity_type="vlookup_batch",
+        entity_id=str(latest) if latest else None,
+    )
+    db.commit()
+    return _excel_download(data, filename)
 
 
 def publish_hours_from_batch(
@@ -1008,7 +1160,7 @@ def publish_hours_from_batch(
         notes=f"Published from VLOOKUP batch {latest}",
         rows=known_rows,
     )
-    detail = hours_service.create_version(db, payload, uploaded_by=uploaded_by)
+    detail = hours_service.create_version(db, payload, uploaded_by=uploaded_by, record_audit=False)
     return VLookupPublishHoursResponse(
         status="success",
         batch_id=latest,
@@ -1018,18 +1170,6 @@ def publish_hours_from_batch(
         month_key=primary_month,
         version_label=detail.version.version_label,
     )
-
-
-def _optional_decimal(value: Any):
-    if value is None:
-        return None
-    try:
-        text = str(value).strip()
-        if not text or text.lower() == "nan":
-            return None
-        return float(text)
-    except Exception:
-        return None
 
 
 def _with_hours_maps(
@@ -1132,3 +1272,192 @@ def _parse_tabular_file(file_content: bytes, filename: str) -> pd.DataFrame:
     if lower.endswith((".xlsx", ".xls")):
         return pd.read_excel(BytesIO(file_content))
     raise ValueError(f"Unsupported file format: {filename}")
+
+
+def _actor(user: Optional[User]) -> str:
+    if user is None:
+        return "system"
+    return getattr(user, "email", None) or str(user.id)
+
+
+def _write_vlookup_audit(
+    db: Session,
+    *,
+    action: AuditAction,
+    title: str,
+    details: str,
+    user: Optional[User],
+    batch: VLookupUploadBatch,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    metadata = {
+        "batch_id": batch.batch_id,
+        "filename": batch.filename,
+        "target_month": batch.target_month,
+        "cycle_id": batch.cycle_id,
+        "status": batch.status,
+        "stage": batch.stage,
+        **(extra or {}),
+    }
+    audit_repository.write_log(
+        db,
+        action=action,
+        title=title,
+        details=details,
+        user_display=(user.full_name if user and user.full_name else _actor(user)),
+        username=_actor(user),
+        metadata=metadata,
+        entity_type="vlookup_batch",
+        entity_id=batch.batch_id,
+        user_id=getattr(user, "id", None),
+    )
+
+
+def _draft_out(batch: VLookupUploadBatch) -> VLookupDraftOut:
+    return VLookupDraftOut(**repo.serialize_batch(batch))
+
+
+def _require_batch(db: Session, batch_id: str) -> VLookupUploadBatch:
+    batch = repo.get_batch(db, batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="VLOOKUP batch not found")
+    return batch
+
+
+def _mark_batch_completed(
+    db: Session,
+    batch_id: Optional[str],
+    user: Optional[User] = None,
+) -> None:
+    if not batch_id:
+        return
+    batch = repo.get_batch(db, batch_id)
+    if not batch or batch.status == "completed":
+        return
+    previous = batch.status
+    batch.status = "completed"
+    batch.stage = "completed"
+    batch.completed_at = datetime.utcnow()
+    _write_vlookup_audit(
+        db,
+        action=AuditAction.VLOOKUP_MATCH_COMPLETED,
+        title="VLOOKUP match completed",
+        details=(
+            f"VLOOKUP batch {batch.batch_id} completed "
+            f"(file: {batch.filename or 'n/a'}, previous status: {previous})."
+        ),
+        user=user,
+        batch=batch,
+        extra={"previous_status": previous, "new_status": "completed"},
+    )
+    db.commit()
+
+
+def cancel_batch(
+    db: Session,
+    batch_id: str,
+    user: User,
+    body: Optional[VLookupCancelBody] = None,
+) -> VLookupDraftOut:
+    batch = _require_batch(db, batch_id)
+    if batch.status == "draft":
+        return _draft_out(batch)
+    if batch.status == "failed":
+        raise HTTPException(status_code=409, detail="Failed VLOOKUP batches cannot be saved as drafts")
+    previous = batch.status
+    payload = body or VLookupCancelBody()
+    now = datetime.utcnow()
+    resume_state = dict(batch.resume_state or {})
+    resume_state.update(
+        {
+            "stage": batch.stage or "review",
+            "target_month": payload.month or batch.target_month,
+            "tab": payload.tab,
+            "filename": batch.filename,
+            "file_type": batch.file_type,
+            "matched_count": batch.matched_count,
+            "needs_review_count": batch.needs_review_count,
+            "unmatched_count": batch.unmatched_count,
+            "notes": payload.notes,
+        }
+    )
+    batch.status = "draft"
+    batch.stage = batch.stage or "review"
+    batch.cancelled_at = now
+    batch.cancelled_by = _actor(user)
+    batch.resume_state = resume_state
+    if payload.month:
+        batch.target_month = payload.month
+    _write_vlookup_audit(
+        db,
+        action=AuditAction.VLOOKUP_MATCH_CANCELLED,
+        title="VLOOKUP match cancelled",
+        details=(
+            f"VLOOKUP matching for {batch.filename or batch.batch_id} was cancelled and saved as a draft."
+        ),
+        user=user,
+        batch=batch,
+        extra={"previous_status": previous, "new_status": "draft"},
+    )
+    db.commit()
+    db.refresh(batch)
+    return _draft_out(batch)
+
+
+def list_drafts(db: Session) -> VLookupDraftListResponse:
+    rows = repo.list_draft_batches(db)
+    return VLookupDraftListResponse(drafts=[_draft_out(row) for row in rows])
+
+
+def get_draft(db: Session, batch_id: str) -> VLookupDraftOut:
+    batch = _require_batch(db, batch_id)
+    if batch.status != "draft":
+        raise HTTPException(status_code=404, detail="VLOOKUP draft not found")
+    return _draft_out(batch)
+
+
+def continue_draft(db: Session, batch_id: str, user: User) -> VLookupDraftOut:
+    batch = _require_batch(db, batch_id)
+    if batch.status in {"running", "completed"}:
+        return _draft_out(batch)
+    if batch.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot continue a VLOOKUP batch with status {batch.status}",
+        )
+    previous = batch.status
+    batch.status = "running"
+    batch.stage = batch.stage or "review"
+    _write_vlookup_audit(
+        db,
+        action=AuditAction.VLOOKUP_DRAFT_RESUMED,
+        title="VLOOKUP draft resumed",
+        details=f"VLOOKUP draft {batch.filename or batch.batch_id} was resumed.",
+        user=user,
+        batch=batch,
+        extra={"previous_status": previous, "new_status": "running"},
+    )
+    db.commit()
+    db.refresh(batch)
+    return _draft_out(batch)
+
+
+def discard_draft(db: Session, batch_id: str, user: User) -> Dict[str, str]:
+    batch = _require_batch(db, batch_id)
+    if batch.status != "draft":
+        raise HTTPException(status_code=409, detail="Only draft VLOOKUP batches can be discarded")
+    repo.delete_batch_data(db, batch_id)
+    audit_repository.write_log(
+        db,
+        action=AuditAction.SYSTEM,
+        title="VLOOKUP draft discarded",
+        details=f"VLOOKUP draft {batch.filename or batch_id} was discarded.",
+        user_display=(user.full_name if user.full_name else _actor(user)),
+        username=_actor(user),
+        metadata={"batch_id": batch_id, "filename": batch.filename},
+        entity_type="vlookup_batch",
+        entity_id=batch_id,
+        user_id=user.id,
+    )
+    db.commit()
+    return {"status": "deleted", "batch_id": batch_id}

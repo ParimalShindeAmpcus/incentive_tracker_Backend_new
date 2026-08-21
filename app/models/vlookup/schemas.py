@@ -140,3 +140,33 @@ class VLookupPublishHoursResponse(BaseModel):
     division: Optional[str] = None
     month_key: Optional[str] = None
     version_label: str = ""
+
+
+class VLookupDraftOut(BaseModel):
+    batch_id: str
+    status: str
+    stage: str = "review"
+    filename: Optional[str] = None
+    target_month: Optional[str] = None
+    cycle_id: Optional[int] = None
+    file_type: Optional[str] = None
+    uploaded_by: Optional[str] = None
+    cancelled_by: Optional[str] = None
+    cancelled_at: Optional[str] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    last_updated: Optional[str] = None
+    matched_count: int = 0
+    needs_review_count: int = 0
+    unmatched_count: int = 0
+    resume_state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class VLookupDraftListResponse(BaseModel):
+    drafts: List[VLookupDraftOut] = Field(default_factory=list)
+
+
+class VLookupCancelBody(BaseModel):
+    month: Optional[str] = None
+    tab: Optional[str] = None
+    notes: Optional[str] = None

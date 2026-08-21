@@ -7,6 +7,9 @@ from fastapi.responses import StreamingResponse
 
 from app.models.vlookup.schemas import (
     VLookupActionResponse,
+    VLookupCancelBody,
+    VLookupDraftListResponse,
+    VLookupDraftOut,
     VLookupHoursTemplateListResponse,
     VLookupMatchesByStatusResponse,
     VLookupMessyFileListResponse,
@@ -43,6 +46,7 @@ def upload(
         messy_file=messy_file,
         target_month=target_month,
         uploaded_by=getattr(user, "email", None) or str(user.id),
+        user=user,
     )
 
 
@@ -159,6 +163,38 @@ def rematch(
     return vlookup_service.rematch(db, match_id, body)
 
 
+@router.get("/drafts", response_model=VLookupDraftListResponse)
+def list_drafts(db: DbSession, user: CurrentUser) -> VLookupDraftListResponse:
+    _ = user
+    return vlookup_service.list_drafts(db)
+
+
+@router.get("/drafts/{batch_id}", response_model=VLookupDraftOut)
+def get_draft(batch_id: str, db: DbSession, user: CurrentUser) -> VLookupDraftOut:
+    _ = user
+    return vlookup_service.get_draft(db, batch_id)
+
+
+@router.post("/drafts/{batch_id}/continue", response_model=VLookupDraftOut)
+def continue_draft(batch_id: str, db: DbSession, user: CurrentUser) -> VLookupDraftOut:
+    return vlookup_service.continue_draft(db, batch_id, user)
+
+
+@router.delete("/drafts/{batch_id}")
+def discard_draft(batch_id: str, db: DbSession, user: CurrentUser) -> dict:
+    return vlookup_service.discard_draft(db, batch_id, user)
+
+
+@router.post("/batches/{batch_id}/cancel", response_model=VLookupDraftOut)
+def cancel_batch(
+    batch_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    body: Optional[VLookupCancelBody] = None,
+) -> VLookupDraftOut:
+    return vlookup_service.cancel_batch(db, batch_id, user, body)
+
+
 @router.get("/download")
 def download(
     db: DbSession,
@@ -167,12 +203,27 @@ def download(
     include_review_pending: bool = Query(False),
     month: Optional[str] = Query(None, description="YYYY-MM month to export hours for"),
 ) -> StreamingResponse:
-    _ = user
     return vlookup_service.download_matches(
         db,
         batch_id=batch_id,
         include_review_pending=include_review_pending,
         month_key=month,
+        user=user,
+    )
+
+
+@router.get("/download-unmatched")
+def download_unmatched(
+    db: DbSession,
+    user: CurrentUser,
+    batch_id: Optional[str] = Query(None),
+    month: Optional[str] = Query(None, description="YYYY-MM month to export unmatched rows for"),
+) -> StreamingResponse:
+    return vlookup_service.download_unmatched(
+        db,
+        batch_id=batch_id,
+        month_key=month,
+        user=user,
     )
 
 

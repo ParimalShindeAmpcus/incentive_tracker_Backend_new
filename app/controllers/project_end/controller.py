@@ -31,4 +31,4 @@ def create_version(
     db: DbSession,
     user: CurrentUser,
 ) -> ProjectEndVersionDetail:
-    return project_end_service.create_version(db, payload, uploaded_by=user.id)
+    return project_end_service.create_version(db, payload, uploaded_by=user.id, user=user)

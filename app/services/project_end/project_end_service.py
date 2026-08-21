@@ -11,7 +11,10 @@ from app.models.project_end.schemas import (
     ProjectEndVersionDetail,
     ProjectEndVersionOut,
 )
+from app.repositories.entities.audit import AuditAction
+from app.repositories.entities.user import User
 from app.repositories.project_end import project_end_repository
+from app.services.audit import audit_service
 
 
 def list_versions(db: Session, division: Optional[str] = None) -> List[ProjectEndVersionOut]:
@@ -33,6 +36,7 @@ def create_version(
     db: Session,
     payload: CreateProjectEndVersionRequest,
     uploaded_by: Optional[int] = None,
+    user: Optional[User] = None,
 ) -> ProjectEndVersionDetail:
     version = project_end_repository.create_version(
         db,
@@ -43,5 +47,16 @@ def create_version(
         uploaded_by=uploaded_by,
     )
     project_end_repository.create_records(db, version, [r.model_dump() for r in payload.records])
+    filename = payload.source_filename or payload.version_label or "project-end"
+    audit_service.record_event(
+        db,
+        action=AuditAction.FILE_UPLOAD,
+        title="Uploaded Project End schedule",
+        details=f"Imported {len(payload.records)} project-end record(s) from {filename}",
+        user=user,
+        metadata={"filename": filename, "record_count": len(payload.records), "version_id": version.id},
+        entity_type="project_end_version",
+        entity_id=str(version.id),
+    )
     db.commit()
     return get_version(db, version.id)

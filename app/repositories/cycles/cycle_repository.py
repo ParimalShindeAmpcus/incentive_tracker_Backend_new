@@ -8,6 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.repositories.entities.cycle import (
+    CycleApprovalResult,
     CycleChecklistItem,
     CycleHoursMatch,
     CycleManualAdjustment,
@@ -296,3 +297,47 @@ def summary_counts(db: Session, cycle_id: int) -> dict:
         "line_count": line_count,
         "total_amount": Decimal(str(total_amount or 0)),
     }
+
+
+def list_approval_results(db: Session, cycle_id: int) -> List[CycleApprovalResult]:
+    return (
+        db.query(CycleApprovalResult)
+        .filter(CycleApprovalResult.cycle_id == cycle_id)
+        .order_by(CycleApprovalResult.id)
+        .all()
+    )
+
+
+def has_approval_results(db: Session, cycle_id: int) -> bool:
+    return (
+        db.query(CycleApprovalResult.id)
+        .filter(CycleApprovalResult.cycle_id == cycle_id)
+        .first()
+        is not None
+    )
+
+
+def list_completed_cycles_missing_approval_results(db: Session) -> List[IncentiveCycle]:
+    completed = {CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED}
+    subq = db.query(CycleApprovalResult.cycle_id).distinct()
+    return (
+        db.query(IncentiveCycle)
+        .filter(IncentiveCycle.status.in_(completed), ~IncentiveCycle.id.in_(subq))
+        .order_by(IncentiveCycle.id)
+        .all()
+    )
+
+
+def replace_approval_results(
+    db: Session, cycle_id: int, rows: List[dict]
+) -> List[CycleApprovalResult]:
+    db.query(CycleApprovalResult).filter(CycleApprovalResult.cycle_id == cycle_id).delete(
+        synchronize_session=False
+    )
+    created: List[CycleApprovalResult] = []
+    for data in rows:
+        row = CycleApprovalResult(cycle_id=cycle_id, **data)
+        db.add(row)
+        created.append(row)
+    db.flush()
+    return created

@@ -11,6 +11,7 @@ from app.repositories.entities.cycle import (
     CyclePaymentStatus,
     CycleStatus,
     CycleValidationResult,
+    CycleApprovalResult,
     IncentiveCycle,
     MatchResult,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "CyclePaymentStatus",
     "CycleStatus",
     "CycleValidationResult",
+    "CycleApprovalResult",
     "IncentiveCycle",
     "MatchResult",
     "HoursBenchmark",

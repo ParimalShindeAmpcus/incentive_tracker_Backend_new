@@ -179,15 +179,69 @@ def list_months_for_batch(db: Session, batch_id: str) -> List[str]:
 
 
 def list_matches_for_download(
-    db: Session, batch_id: str, statuses: Sequence[str]
+    db: Session,
+    batch_id: str,
+    statuses: Sequence[str],
+    month_key: Optional[str] = None,
 ) -> List[VLookupMatchedRecord]:
+    stmt = (
+        select(VLookupMatchedRecord)
+        .where(VLookupMatchedRecord.upload_batch_id == batch_id)
+        .where(VLookupMatchedRecord.match_status.in_(list(statuses)))
+        .order_by(VLookupMatchedRecord.template_candidate_name)
+    )
+    stmt = _apply_month_filter(stmt, month_key)
+    return list(db.execute(stmt).scalars().unique().all())
+
+
+def list_draft_batches(db: Session) -> List[VLookupUploadBatch]:
     return list(
         db.execute(
-            select(VLookupMatchedRecord)
-            .where(VLookupMatchedRecord.upload_batch_id == batch_id)
-            .where(VLookupMatchedRecord.match_status.in_(list(statuses)))
-            .order_by(VLookupMatchedRecord.template_candidate_name)
+            select(VLookupUploadBatch)
+            .where(VLookupUploadBatch.status == "draft")
+            .order_by(desc(VLookupUploadBatch.cancelled_at), desc(VLookupUploadBatch.created_at))
         ).scalars().all()
+    )
+
+
+def serialize_batch(batch: VLookupUploadBatch) -> Dict[str, Any]:
+    return {
+        "batch_id": batch.batch_id,
+        "status": batch.status,
+        "stage": batch.stage or "review",
+        "filename": batch.filename,
+        "target_month": batch.target_month,
+        "cycle_id": batch.cycle_id,
+        "file_type": batch.file_type,
+        "uploaded_by": batch.uploaded_by,
+        "cancelled_by": batch.cancelled_by,
+        "cancelled_at": batch.cancelled_at.isoformat() if batch.cancelled_at else None,
+        "created_at": batch.created_at.isoformat() if batch.created_at else None,
+        "completed_at": batch.completed_at.isoformat() if batch.completed_at else None,
+        "last_updated": (
+            (batch.cancelled_at or batch.completed_at or batch.created_at).isoformat()
+            if (batch.cancelled_at or batch.completed_at or batch.created_at)
+            else None
+        ),
+        "matched_count": batch.matched_count,
+        "needs_review_count": batch.needs_review_count,
+        "unmatched_count": batch.unmatched_count,
+        "resume_state": batch.resume_state or {},
+    }
+
+
+def delete_batch_data(db: Session, batch_id: str) -> None:
+    db.query(VLookupMatchedRecord).filter(VLookupMatchedRecord.upload_batch_id == batch_id).delete(
+        synchronize_session=False
+    )
+    db.query(VLookupWeeklyHours).filter(VLookupWeeklyHours.upload_batch_id == batch_id).delete(
+        synchronize_session=False
+    )
+    db.query(VLookupTemplateCandidate).filter(
+        VLookupTemplateCandidate.upload_batch_id == batch_id
+    ).delete(synchronize_session=False)
+    db.query(VLookupUploadBatch).filter(VLookupUploadBatch.batch_id == batch_id).delete(
+        synchronize_session=False
     )
 
 
@@ -249,16 +303,8 @@ def serialize_match(
             "month": template.month if template else None,
             "hours_worked": template.template_hours if template else None,
             "recruiter_name": template.recruiter_name if template else None,
-            "team_lead_name": template.team_lead_name if template else None,
-            "manager_name": template.manager_name if template else None,
-            "crm_name": template.crm_name if template else None,
             "division": template.division if template else None,
             "contract_type": template.contract_type if template else None,
-            "start_date": template.start_date if template else None,
-            "end_date": template.end_date if template else None,
-            "pay_rate": float(template.pay_rate) if template and template.pay_rate else None,
-            "bill_rate": float(template.bill_rate) if template and template.bill_rate else None,
-            "margin_per_hour": float(template.margin_per_hour) if template and template.margin_per_hour else None,
         }
         if template
         else {
@@ -268,16 +314,8 @@ def serialize_match(
             "month": match.messy_month,
             "hours_worked": None,
             "recruiter_name": None,
-            "team_lead_name": None,
-            "manager_name": None,
-            "crm_name": None,
             "division": None,
             "contract_type": None,
-            "start_date": None,
-            "end_date": None,
-            "pay_rate": None,
-            "bill_rate": None,
-            "margin_per_hour": None,
         },
     }
 
@@ -291,16 +329,8 @@ def serialize_template_candidate(row: VLookupTemplateCandidate) -> Dict[str, Any
         "month": row.month,
         "hours_worked": row.template_hours,
         "recruiter_name": row.recruiter_name,
-        "team_lead_name": row.team_lead_name,
-        "manager_name": row.manager_name,
-        "crm_name": row.crm_name,
         "division": row.division,
         "contract_type": row.contract_type,
-        "start_date": row.start_date,
-        "end_date": row.end_date,
-        "pay_rate": float(row.pay_rate) if row.pay_rate is not None else None,
-        "bill_rate": float(row.bill_rate) if row.bill_rate is not None else None,
-        "margin_per_hour": float(row.margin_per_hour) if row.margin_per_hour is not None else None,
     }
 
 

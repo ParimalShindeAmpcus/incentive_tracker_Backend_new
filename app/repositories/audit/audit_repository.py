@@ -1,9 +1,9 @@
 """Audit repository — SQL only."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Union
 
-from sqlalchemy import String, cast, extract, or_
+from sqlalchemy import Date, String, cast, extract, or_
 from sqlalchemy.orm import Session
 
 from app.repositories.entities.audit import AuditAction, AuditLog
@@ -16,6 +16,8 @@ def list_logs(
     search: Optional[str] = None,
     year: Optional[int] = None,
     month: Optional[int] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
     limit: int = 500,
     skip: int = 0,
 ) -> List[AuditLog]:
@@ -24,11 +26,17 @@ def list_logs(
     if action:
         q = q.filter(AuditLog.action == AuditAction(action))
 
-    if year is not None:
-        q = q.filter(extract("year", AuditLog.created_at) == year)
-
-    if month is not None:
-        q = q.filter(extract("month", AuditLog.created_at) == month)
+    if from_date is not None or to_date is not None:
+        created_date = cast(AuditLog.created_at, Date)
+        if from_date is not None:
+            q = q.filter(created_date >= from_date)
+        if to_date is not None:
+            q = q.filter(created_date <= to_date)
+    else:
+        if year is not None:
+            q = q.filter(extract("year", AuditLog.created_at) == year)
+        if month is not None:
+            q = q.filter(extract("month", AuditLog.created_at) == month)
 
     if search:
         term = search.strip()

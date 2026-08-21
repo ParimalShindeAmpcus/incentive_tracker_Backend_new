@@ -19,6 +19,7 @@ from app.models.cycles.schemas import (
     CalculateResult,
     ChecklistOut,
     ChecklistUpdate,
+    CycleApprovalResultOut,
     CycleCreate,
     CycleOut,
     CycleSummary,
@@ -35,8 +36,12 @@ from app.models.incentives.schemas import IncentiveLineOut
 from app.repositories.candidates import candidate_repository
 from app.repositories.cycles import cycle_repository
 from app.repositories.entities.cycle import CycleStatus, MatchResult
+from app.repositories.entities.candidate import Candidate
+from app.repositories.entities.audit import AuditAction
+from app.repositories.entities.user import User
 from app.repositories.hours import hours_repository
 from app.repositories.incentives import incentive_repository
+from app.services.audit import audit_service
 from app.services.cycles.cycle_candidates import (
     candidate_matches_division,
     is_seed_candidate,
@@ -269,11 +274,14 @@ def update_payment_status(
     status_id: int,
     payload: PaymentStatusUpdate,
     user_id: Optional[int] = None,
+    user: Optional[User] = None,
 ) -> PaymentStatusOut:
-    _require_cycle(db, cycle_id)
+    cycle = _require_cycle(db, cycle_id)
     row = cycle_repository.get_payment_status(db, status_id)
     if row is None or row.cycle_id != cycle_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment status not found")
+    previous_status = row.status
+    actor_id = user.id if user is not None else user_id
     updated = cycle_repository.update_payment_status(
         db,
         row,
@@ -281,7 +289,26 @@ def update_payment_status(
         payment_received_date=payload.payment_received_date,
         payment_reference=payload.payment_reference,
         notes=payload.notes,
-        updated_by=user_id,
+        updated_by=actor_id,
+    )
+    candidate = candidate_repository.get_candidate(db, updated.candidate_id)
+    candidate_name = candidate.candidate_name if candidate else f"Candidate {updated.candidate_id}"
+    cycle_label = cycle.incentive_month or str(cycle.id)
+    audit_service.record_event(
+        db,
+        action=AuditAction.PAYMENT_UPDATE,
+        title=f"Updated payment status for {candidate_name}",
+        details=f"Changed payment status from {previous_status} to {updated.status} for {candidate_name} in cycle {cycle_label}",
+        user=user,
+        metadata={
+            "cycle_id": cycle.id,
+            "cycle": cycle_label,
+            "candidate_id": updated.candidate_id,
+            "previous_status": previous_status,
+            "status": updated.status,
+        },
+        entity_type="cycle",
+        entity_id=str(cycle.id),
     )
     db.commit()
     db.refresh(updated)
@@ -314,6 +341,7 @@ def approve_cycle(
     cycle_id: int,
     payload: ApproveRequest,
     user_id: Optional[int] = None,
+    user: Optional[User] = None,
 ) -> CycleOut:
     cycle = _require_cycle(db, cycle_id)
     if is_ampcus_client_division(cycle.division):
@@ -326,12 +354,139 @@ def approve_cycle(
         }
         if any(line.reason in blocking for line in cycle_repository.list_lines(db, cycle.id)):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ampcus Client cycle has unresolved placement validation errors")
+    actor_id = user.id if user is not None else user_id
     cycle.status = CycleStatus.APPROVED
     cycle.approved_at = datetime.now(timezone.utc)
     db.add(cycle)
+    db.flush()
+    snapshot_approval_results(
+        db,
+        cycle,
+        approved_by=actor_id,
+        comments=payload.comments if payload else None,
+    )
+    cycle_label = cycle.incentive_month or str(cycle.id)
+    audit_service.record_event(
+        db,
+        action=AuditAction.CYCLE_APPROVE,
+        title=f"Approved cycle {cycle_label}",
+        details=f"Finalized incentive cycle {cycle_label} ({cycle.division})",
+        user=user,
+        metadata={"cycle_id": cycle.id, "cycle": cycle_label, "division": cycle.division, "comments": payload.comments if payload else None},
+        entity_type="cycle",
+        entity_id=str(cycle.id),
+    )
     db.commit()
     db.refresh(cycle)
     return CycleOut.model_validate(cycle)
+
+
+def list_approval_results(db: Session, cycle_id: int) -> List[CycleApprovalResultOut]:
+    _require_cycle(db, cycle_id)
+    return [
+        CycleApprovalResultOut.model_validate(row)
+        for row in cycle_repository.list_approval_results(db, cycle_id)
+    ]
+
+
+def _team_label_from_candidate(cand: Optional[Candidate]) -> str:
+    if cand is None:
+        return ""
+    crm = (cand.crm or "").strip()
+    center_head = (cand.center_head or "").strip()
+    associate_director = (cand.associate_director or "").strip()
+    manager = (cand.manager or "").strip()
+    senior_manager = (cand.senior_manager or "").strip()
+    team_lead = (cand.team_lead or "").strip()
+    if crm:
+        return crm
+    if center_head:
+        return center_head
+    if associate_director:
+        return associate_director
+    parts = [p for p in (crm, center_head, associate_director, manager, senior_manager, team_lead) if p]
+    if len(parts) >= 2:
+        return f"{parts[0]} and {parts[1]}"
+    return parts[0] if parts else ""
+
+
+def snapshot_approval_results(
+    db: Session,
+    cycle,
+    *,
+    approved_by: Optional[int] = None,
+    comments: Optional[str] = None,
+) -> list:
+    lines = cycle_repository.list_lines(db, cycle.id)
+    candidate_ids = [line.candidate_id for line in lines if line.candidate_id]
+    candidates: dict[int, Candidate] = {}
+    if candidate_ids:
+        for cand in db.query(Candidate).filter(Candidate.id.in_(candidate_ids)).all():
+            candidates[cand.id] = cand
+
+    status_val = cycle.status.value if hasattr(cycle.status, "value") else str(cycle.status)
+    approved_at = cycle.approved_at or datetime.now(timezone.utc)
+    rows: list[dict] = []
+    for line in lines:
+        cand = candidates.get(line.candidate_id) if line.candidate_id else None
+        rows.append(
+            {
+                "incentive_line_id": line.id,
+                "candidate_id": line.candidate_id,
+                "cycle_name": cycle.name,
+                "division": cycle.division,
+                "incentive_month": cycle.incentive_month,
+                "cycle_start_date": cycle.cycle_start_date,
+                "cycle_end_date": cycle.cycle_end_date,
+                "cycle_status": status_val,
+                "candidate_name": line.candidate_name or (cand.candidate_name if cand else None),
+                "external_candidate_id": (
+                    (cand.start_id or cand.external_candidate_id) if cand else None
+                ),
+                "start_id": cand.start_id if cand else None,
+                "start_date": cand.start_date if cand else None,
+                "contract_type": cand.contract_type if cand else None,
+                "candidate_source": (
+                    (cand.candidate_source or cand.organization) if cand else None
+                ),
+                "organization": cand.organization if cand else None,
+                "team": _team_label_from_candidate(cand),
+                "role": line.role,
+                "person": line.person,
+                "incentive_type": line.incentive_type,
+                "rule_applied": line.rule_applied,
+                "eligible": bool(line.eligible),
+                "base_incentive": line.base_incentive or Decimal("0"),
+                "pro_rata_factor": line.pro_rata_factor if line.pro_rata_factor is not None else Decimal("1"),
+                "amount": line.amount or Decimal("0"),
+                "hours": line.hours,
+                "margin": line.margin,
+                "candidate_margin": cand.margin if cand else None,
+                "reason": line.reason,
+                "explanation_json": line.explanation_json,
+                "payment_status": line.payment_status or "UNPAID",
+                "crm": cand.crm if cand else None,
+                "center_head": cand.center_head if cand else None,
+                "associate_director": cand.associate_director if cand else None,
+                "manager": cand.manager if cand else None,
+                "senior_manager": cand.senior_manager if cand else None,
+                "team_lead": cand.team_lead if cand else None,
+                "approved_by": approved_by or cycle.created_by,
+                "approved_at": approved_at,
+                "comments": comments,
+            }
+        )
+    return cycle_repository.replace_approval_results(db, cycle.id, rows)
+
+
+def backfill_missing_approval_results(db: Session) -> int:
+    """Snapshot any already-approved cycles that predate cycle_approval_results."""
+    missing = cycle_repository.list_completed_cycles_missing_approval_results(db)
+    for cycle in missing:
+        snapshot_approval_results(db, cycle, approved_by=cycle.created_by)
+    if missing:
+        db.commit()
+    return len(missing)
 
 
 def _to_master_candidate(cand) -> MasterCandidate:
@@ -429,7 +584,13 @@ def _match_hours_rows_for_cycle(db: Session, cycle, parsed_rows: List[HoursMatch
     return match_rows, unique_matched, issues, coordinator_issues
 
 
-def upload_hours_file(db: Session, cycle_id: int, filename: str, content: bytes) -> HoursUploadOut:
+def upload_hours_file(
+    db: Session,
+    cycle_id: int,
+    filename: str,
+    content: bytes,
+    user: Optional[User] = None,
+) -> HoursUploadOut:
     cycle = _require_cycle(db, cycle_id)
     placement_only = is_ampcus_client_division(cycle.division)
     rows = parse_hours_template(content, filename, require_hours=not placement_only)
@@ -448,6 +609,27 @@ def upload_hours_file(db: Session, cycle_id: int, filename: str, content: bytes)
                     
         cycle_repository.replace_matches(db, cycle.id, match_rows)
         cycle_repository.sync_payment_statuses(db, cycle.id, list(set(filtered_matched_ids)))
+        cycle_label = cycle.incentive_month or str(cycle.id)
+        audit_service.record_event(
+            db,
+            action=AuditAction.FILE_UPLOAD,
+            title=f"Uploaded cycle hours for {cycle_label}",
+            details=(
+                f"Uploaded {filename} to cycle {cycle_label}: "
+                f"{len(matched_ids)} matched, {len(issues)} unmatched of {len(rows)} row(s)"
+            ),
+            user=user,
+            metadata={
+                "filename": filename,
+                "cycle_id": cycle.id,
+                "cycle": cycle_label,
+                "matched_count": len(matched_ids),
+                "unmatched_count": len(issues),
+                "row_count": len(rows),
+            },
+            entity_type="cycle",
+            entity_id=str(cycle.id),
+        )
         db.commit()
         return HoursUploadOut(
             cycle_id=cycle.id,
@@ -482,6 +664,22 @@ def upload_hours_file(db: Session, cycle_id: int, filename: str, content: bytes)
             for row in rows
         ],
     )
+    cycle_label = cycle.incentive_month or str(cycle.id)
+    audit_service.record_event(
+        db,
+        action=AuditAction.FILE_UPLOAD,
+        title=f"Uploaded cycle hours for {cycle_label}",
+        details=f"Uploaded {filename} to cycle {cycle_label} with {len(rows)} row(s)",
+        user=user,
+        metadata={
+            "filename": filename,
+            "cycle_id": cycle.id,
+            "cycle": cycle_label,
+            "row_count": len(rows),
+        },
+        entity_type="cycle",
+        entity_id=str(cycle.id),
+    )
     db.commit()
     return HoursUploadOut(
         cycle_id=cycle.id,
@@ -490,7 +688,7 @@ def upload_hours_file(db: Session, cycle_id: int, filename: str, content: bytes)
     )
 
 
-def calculate_cycle(db: Session, cycle_id: int) -> CalculateResult:
+def calculate_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> CalculateResult:
     cycle = _require_cycle(db, cycle_id)
     status_val = cycle.status.value if hasattr(cycle.status, "value") else str(cycle.status)
     if status_val.upper() in {CycleStatus.APPROVED.value, CycleStatus.PAID.value, CycleStatus.CLOSED.value}:
@@ -541,11 +739,31 @@ def calculate_cycle(db: Session, cycle_id: int) -> CalculateResult:
     )
     cycle.status = CycleStatus.CALCULATED
     db.add(cycle)
-    db.commit()
-    db.refresh(cycle)
     persisted = cycle_repository.list_lines(db, cycle.id)
     eligible = [line for line in persisted if line.eligible and Decimal(str(line.amount or 0)) > 0]
     total = sum((Decimal(str(line.amount or 0)) for line in eligible), Decimal("0"))
+    cycle_label = cycle.incentive_month or str(cycle.id)
+    audit_service.record_event(
+        db,
+        action=AuditAction.CALCULATION_RUN,
+        title=f"Ran cycle calculation for {cycle_label}",
+        details=(
+            f"Calculated incentives for {cycle_label} ({cycle.division}): "
+            f"{len(eligible)} eligible of {len(persisted)} line(s)"
+        ),
+        user=user,
+        metadata={
+            "cycle_id": cycle.id,
+            "cycle": cycle_label,
+            "division": cycle.division,
+            "line_count": len(persisted),
+            "eligible_line_count": len(eligible),
+        },
+        entity_type="cycle",
+        entity_id=str(cycle.id),
+    )
+    db.commit()
+    db.refresh(cycle)
     return CalculateResult(
         cycle=CycleOut.model_validate(cycle),
         stats=MatchStatsOut(**stats),
@@ -684,13 +902,35 @@ def _export_row(cycle, line, cand) -> list:
     ]
 
 
-def export_cycle(db: Session, cycle_id: int) -> StreamingResponse:
+def _export_row_from_snapshot(row) -> list:
+    role = row.role or ""
+    coord_type = "Crm" if role == "CRM" else ("Asso Director" if role == "Associate Director" else role)
+    incentive_type = "Recurring" if (row.incentive_type or "").upper() == "RECURRING" else "One-time"
+    start = _format_start_date(row.start_date)
+    margin_val: Any = ""
+    if row.margin is not None:
+        margin_val = float(row.margin)
+    elif row.candidate_margin is not None:
+        margin_val = float(row.candidate_margin)
+    month = f"{row.incentive_month}-01" if row.incentive_month else ""
+    return [
+        row.person,
+        coord_type,
+        row.start_id or row.external_candidate_id or "",
+        row.candidate_name,
+        start,
+        month,
+        row.contract_type or "",
+        margin_val,
+        float(row.hours or 0),
+        int(round(float(row.amount or 0))),
+        incentive_type,
+        row.candidate_source or row.organization or "",
+    ]
+
+
+def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> StreamingResponse:
     cycle = _require_cycle(db, cycle_id)
-    lines = cycle_repository.list_lines(db, cycle_id)
-    candidates = {
-        cand.id: cand
-        for cand in candidate_repository.list_all_candidates(db)
-    }
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Sheet1"
@@ -709,16 +949,41 @@ def export_cycle(db: Session, cycle_id: int) -> StreamingResponse:
         "Candidate Source",
     ]
     sheet.append(headers)
-    for line in lines:
-        if not line.eligible or Decimal(str(line.amount or 0)) <= 0:
-            continue
-        cand = candidates.get(line.candidate_id) if line.candidate_id else None
-        sheet.append(_export_row(cycle, line, cand))
+
+    snapshots = cycle_repository.list_approval_results(db, cycle_id)
+    if snapshots:
+        for row in snapshots:
+            if not row.eligible or Decimal(str(row.amount or 0)) <= 0:
+                continue
+            sheet.append(_export_row_from_snapshot(row))
+    else:
+        lines = cycle_repository.list_lines(db, cycle_id)
+        candidates = {
+            cand.id: cand
+            for cand in candidate_repository.list_all_candidates(db)
+        }
+        for line in lines:
+            if not line.eligible or Decimal(str(line.amount or 0)) <= 0:
+                continue
+            cand = candidates.get(line.candidate_id) if line.candidate_id else None
+            sheet.append(_export_row(cycle, line, cand))
 
     buffer = io.BytesIO()
     workbook.save(buffer)
     buffer.seek(0)
     filename = f"approved-cycle-{cycle.incentive_month}.xlsx"
+    cycle_label = cycle.incentive_month or str(cycle.id)
+    audit_service.record_event(
+        db,
+        action=AuditAction.FILE_DOWNLOAD,
+        title=f"Downloaded approved cycle Excel for {cycle_label}",
+        details=f"Downloaded {filename} for cycle {cycle_label}",
+        user=user,
+        metadata={"cycle_id": cycle.id, "cycle": cycle_label, "filename": filename},
+        entity_type="cycle",
+        entity_id=str(cycle.id),
+    )
+    db.commit()
     return StreamingResponse(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

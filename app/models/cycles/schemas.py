@@ -188,6 +188,46 @@ class ApproveRequest(BaseModel):
     comments: Optional[str] = None
 
 
+class CycleApprovalResultOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    cycle_id: int
+    incentive_line_id: Optional[int] = None
+    candidate_id: Optional[int] = None
+    cycle_name: str
+    division: str
+    incentive_month: str
+    cycle_start_date: Optional[date] = None
+    cycle_end_date: Optional[date] = None
+    cycle_status: str
+    candidate_name: Optional[str] = None
+    external_candidate_id: Optional[str] = None
+    start_id: Optional[str] = None
+    start_date: Optional[date] = None
+    contract_type: Optional[str] = None
+    candidate_source: Optional[str] = None
+    organization: Optional[str] = None
+    team: Optional[str] = None
+    role: str
+    person: str
+    incentive_type: str
+    rule_applied: Optional[str] = None
+    eligible: bool
+    base_incentive: Decimal
+    pro_rata_factor: Decimal
+    amount: Decimal
+    hours: Optional[Decimal] = None
+    margin: Optional[Decimal] = None
+    reason: Optional[str] = None
+    explanation_json: Optional[str] = None
+    payment_status: str
+    approved_by: Optional[int] = None
+    approved_at: Optional[datetime] = None
+    comments: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
 class CalculateRequest(BaseModel):
     force: bool = False
 

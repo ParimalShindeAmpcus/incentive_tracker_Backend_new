@@ -11,6 +11,7 @@ from app.models.cycles.schemas import (
     CalculateResult,
     ChecklistOut,
     ChecklistUpdate,
+    CycleApprovalResultOut,
     CycleCreate,
     CycleOut,
     CycleSummary,
@@ -112,7 +113,7 @@ def patch_payment_status(
     db: DbSession,
     user: CurrentUser,
 ) -> PaymentStatusOut:
-    return cycle_service.update_payment_status(db, cycle_id, status_id, payload, user_id=user.id)
+    return cycle_service.update_payment_status(db, cycle_id, status_id, payload, user=user)
 
 
 @router.get("/{cycle_id}/adjustments", response_model=List[AdjustmentOut])
@@ -137,22 +138,25 @@ async def upload_hours(
     user: CurrentUser,
     file: UploadFile = File(...),
 ) -> HoursUploadOut:
-    _ = user
     content = await file.read()
-    return cycle_service.upload_hours_file(db, cycle_id, file.filename or "hours.xlsx", content)
+    return cycle_service.upload_hours_file(db, cycle_id, file.filename or "hours.xlsx", content, user=user)
 
 
 @router.post("/{cycle_id}/approve", response_model=CycleOut)
 def approve(cycle_id: int, payload: ApproveRequest, db: DbSession, user: CurrentUser) -> CycleOut:
-    return cycle_service.approve_cycle(db, cycle_id, payload, user_id=user.id)
+    return cycle_service.approve_cycle(db, cycle_id, payload, user=user)
+
+
+@router.get("/{cycle_id}/approval-results", response_model=List[CycleApprovalResultOut])
+def get_approval_results(cycle_id: int, db: DbSession) -> List[CycleApprovalResultOut]:
+    return cycle_service.list_approval_results(db, cycle_id)
 
 
 @router.post("/{cycle_id}/calculate", response_model=CalculateResult)
 def calculate(cycle_id: int, db: DbSession, user: CurrentUser) -> CalculateResult:
-    _ = user
-    return cycle_service.calculate_cycle(db, cycle_id)
+    return cycle_service.calculate_cycle(db, cycle_id, user=user)
 
 
 @router.get("/{cycle_id}/export")
-def export_cycle(cycle_id: int, db: DbSession):
-    return cycle_service.export_cycle(db, cycle_id)
+def export_cycle(cycle_id: int, db: DbSession, user: CurrentUser):
+    return cycle_service.export_cycle(db, cycle_id, user=user)

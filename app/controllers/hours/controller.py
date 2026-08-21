@@ -46,7 +46,7 @@ def create_version(
     db: DbSession,
     user: CurrentUser,
 ) -> HoursVersionDetail:
-    return hours_service.create_version(db, payload, uploaded_by=user.id)
+    return hours_service.create_version(db, payload, uploaded_by=user.id, user=user)
 
 
 @router.patch("/rows/{row_id}", response_model=HoursRowOut)
@@ -56,8 +56,7 @@ def patch_hours_row(
     db: DbSession,
     user: CurrentUser,
 ) -> HoursRowOut:
-    _ = user
-    return hours_service.update_row_hours(db, row_id, payload)
+    return hours_service.update_row_hours(db, row_id, payload, user=user)
 
 
 @benchmarks_router.get("", response_model=List[HoursBenchmarkOut])

@@ -193,3 +193,47 @@ def init_db() -> None:
                     connection.execute(
                         text("ALTER TABLE audit_logs ALTER COLUMN action TYPE VARCHAR(50)")
                     )
+
+    # VLOOKUP: drop leftover columns that matching/export never used.
+    # create_all does not remove columns from older local databases.
+    def _drop_present(table: str, names: list[str]) -> None:
+        current = inspect(engine)
+        if table not in current.get_table_names():
+            return
+        existing = {column["name"] for column in current.get_columns(table)}
+        to_drop = [name for name in names if name in existing]
+        if not to_drop:
+            return
+        with engine.begin() as connection:
+            for name in to_drop:
+                if is_pg:
+                    connection.execute(text(f"ALTER TABLE {table} DROP COLUMN IF EXISTS {name}"))
+                else:
+                    connection.execute(text(f"ALTER TABLE {table} DROP COLUMN {name}"))
+
+    _drop_present(
+        "vlookup_template_candidates",
+        [
+            "pay_rate",
+            "bill_rate",
+            "margin_per_hour",
+            "team_lead_name",
+            "manager_name",
+            "crm_name",
+            "start_date",
+            "end_date",
+        ],
+    )
+    _drop_present("vlookup_matched_records", ["weekly_hours_ids"])
+    _drop_present("vlookup_upload_batches", ["error_message"])
+    json_type = "JSONB" if is_pg else "JSON"
+    _add_missing(
+        "vlookup_upload_batches",
+        {
+            "cancelled_by": "VARCHAR(255)",
+            "cancelled_at": ts,
+            "stage": "VARCHAR(40)",
+            "cycle_id": "INTEGER",
+            "resume_state": json_type,
+        },
+    )
