@@ -449,19 +449,6 @@ def upload_hours_file(db: Session, cycle_id: int, filename: str, content: bytes)
         cycle_repository.replace_matches(db, cycle.id, match_rows)
         cycle_repository.sync_payment_statuses(db, cycle.id, list(set(filtered_matched_ids)))
         db.commit()
-        if not matched_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "message": (
-                        "No candidates from the placement file matched Candidate Master"
-                        if is_ampcus_client_division(cycle.division)
-                        else "No candidates from the hours file matched Candidate Master"
-                    ),
-                    "issues": issues,
-                    "coordinator_issues": coordinator_issues,
-                },
-            )
         return HoursUploadOut(
             cycle_id=cycle.id,
             row_count=len(rows),

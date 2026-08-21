@@ -43,8 +43,7 @@ FIXED: Dict[str, int] = {
     "Center Head":        1750,
 }
 
-# Valid organizations per document: Bravens, Ampcus Inc., ITech
-VALID_ORGS = {"bravens", "ampcus inc", "ampcus inc.", "ampcus cyber", "itech"}
+VALID_ORGS = {"bravens", "ampcus inc", "ampcus inc.", "itech"}
 
 # Valid Sambhaji Nagar location keywords
 VALID_LOCATIONS = {"sambhaji nagar", "sambhajinagar", "sambhaji"}
@@ -183,8 +182,29 @@ def calculate_placement(
 
         fixed_amount = FIXED.get(role, 0)
         
-        lead_eligible = not blocked
-        lead_reason = blocked or "ELIGIBLE"
+        person_clean = person.strip().lower()
+        coord_rec = coordinators.get(person_clean)
+        
+        # Check coordinator master status
+        if not coord_rec:
+            lead_eligible = False
+            lead_reason = "COORDINATOR_NOT_IN_MASTER"
+        else:
+            coord_status = getattr(getattr(coord_rec, "employment_status", None), "value", getattr(coord_rec, "employment_status", "ACTIVE"))
+            coord_status_str = str(coord_status).upper()
+            if coord_status_str in {"LEFT", "NOTICE"}:
+                lead_eligible = False
+                lead_reason = "COORDINATOR_LEFT" if coord_status_str == "LEFT" else "COORDINATOR_ON_NOTICE"
+            elif blocked and blocked != "PAYMENT_PENDING":
+                lead_eligible = False
+                lead_reason = blocked
+            elif hours < Decimal("160"):
+                lead_eligible = False
+                lead_reason = "HOURS_UNDER_160"
+            else:
+                lead_eligible = True
+                lead_reason = "ELIGIBLE"
+
         lead_amount = fixed_amount if lead_eligible else 0
 
         lines.append(_line(c, role, person, lead_amount, hours, lead_eligible, lead_reason, "ONE_TIME"))
