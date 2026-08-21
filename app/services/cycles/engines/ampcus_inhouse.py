@@ -21,7 +21,19 @@ def is_ampcus_inhouse_division(division: Optional[str]) -> bool:
 
 
 def _line(c: Candidate, role: str, person: Optional[str], amount: int, eligible: bool, reason: str) -> LineDraft:
-    return LineDraft(c.id, c.candidate_name, role, (person or "—").strip(), "INHOUSE", "Ampcus Tech In-House 90-day rule", eligible, Decimal(amount), Decimal("1") if eligible else ZERO, Decimal(amount) if eligible else ZERO, ZERO, None, reason, [json.dumps({"placement_level": c.placement_level, "start_date": str(c.start_date) if c.start_date else None})])
+    details = {
+        "placement_level": getattr(c, "placement_level", None),
+        "start_date": str(getattr(c, "start_date", None)) if getattr(c, "start_date", None) else None,
+        "contract_type": getattr(c, "contract_type", None),
+        "candidate_source": getattr(c, "candidate_source", None) or getattr(c, "organization", None),
+        "candidate_id": getattr(c, "start_id", None) or getattr(c, "external_candidate_id", None) or str(c.id),
+        "external_candidate_id": getattr(c, "external_candidate_id", None),
+        "recruiter": getattr(c, "recruiter", None),
+        "manager": getattr(c, "manager", None),
+        "center_head": getattr(c, "center_head", None),
+        "avp": getattr(c, "avp", None),
+    }
+    return LineDraft(c.id, c.candidate_name, role, (person or "—").strip(), "INHOUSE", "Ampcus Tech In-House 90-day rule", eligible, Decimal(amount), Decimal("1") if eligible else ZERO, Decimal(amount) if eligible else ZERO, ZERO, None, reason, [json.dumps(details, default=str)])
 
 
 def _limit_roles_inhouse(people: Dict[str, Optional[str]], amounts: Dict[str, int]) -> Dict[str, Optional[str]]:

@@ -61,7 +61,7 @@ def paid_one_time_keys(db: Session, exclude_cycle_id: int) -> set[str]:
             IncentiveCycle.id != exclude_cycle_id,
             IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
             IncentiveLine.eligible.is_(True),
-            IncentiveLine.incentive_type.in_(["ONE_TIME", "SPECIAL", "FULL_TIME", "INHOUSE"]),
+            IncentiveLine.incentive_type.in_(["ONE_TIME", "SPECIAL", "FULL_TIME", "INHOUSE", "AMPCUS_CLIENT_MARKUP"]),
             IncentiveLine.amount > 0,
         )
         .all()

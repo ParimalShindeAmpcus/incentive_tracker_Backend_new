@@ -146,7 +146,48 @@ def get_summary(db: Session, cycle_id: int) -> CycleSummary:
 def list_lines(db: Session, cycle_id: int) -> List[IncentiveLineOut]:
     _require_cycle(db, cycle_id)
     rows = cycle_repository.list_lines(db, cycle_id)
-    return [IncentiveLineOut.model_validate(r) for r in rows]
+    
+    # Pre-fetch candidate information to dynamically populate fields
+    candidates = {}
+    candidate_ids = {r.candidate_id for r in rows if r.candidate_id is not None}
+    if candidate_ids:
+        for c in db.query(candidate_repository.Candidate).filter(candidate_repository.Candidate.id.in_(candidate_ids)).all():
+            candidates[c.id] = c
+            
+    out_lines = []
+    for r in rows:
+        line_out = IncentiveLineOut.model_validate(r)
+        cand = candidates.get(r.candidate_id) if r.candidate_id else None
+        if cand:
+            meta = _parse_explanation(r.explanation_json)
+            needs_update = not meta or any(
+                k not in meta for k in [
+                    "start_date", "contract_type", "candidate_source", 
+                    "candidate_id", "external_candidate_id",
+                    "recruiter", "team_lead", "manager", "crm", "center_head", "avp"
+                ]
+            )
+            if needs_update:
+                new_meta = {
+                    "start_date": cand.start_date.isoformat() if cand.start_date else None,
+                    "contract_type": cand.contract_type,
+                    "candidate_source": cand.candidate_source or cand.organization,
+                    "candidate_id": cand.start_id or cand.external_candidate_id or str(cand.id),
+                    "external_candidate_id": cand.external_candidate_id,
+                    "recruiter": cand.recruiter,
+                    "team_lead": cand.team_lead,
+                    "manager": cand.manager,
+                    "crm": cand.crm,
+                    "center_head": cand.center_head,
+                    "avp": cand.avp,
+                }
+                if isinstance(meta, dict):
+                    new_meta.update({k: v for k, v in meta.items() if k not in new_meta})
+                line_out.explanation_json = json.dumps([new_meta], default=str)
+                
+        out_lines.append(line_out)
+        
+    return out_lines
 
 
 def list_matches(db: Session, cycle_id: int) -> List[MatchOut]:

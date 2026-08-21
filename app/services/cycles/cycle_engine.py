@@ -137,11 +137,12 @@ def run_cycle_calculation(
             row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
         }
         coordinators = coordinator_index(db)
+        paid_keys = incentive_repository.paid_one_time_keys(db, cycle.id)
         lines = []
         pending = 0
         no_slab = 0
         for candidate in masters:
-            drafts = calculate_ampcus_client_placement(candidate, cycle_end=window.end, payment=payment_by_candidate.get(candidate.id), coordinators=coordinators)
+            drafts = calculate_ampcus_client_placement(candidate, cycle_end=window.end, payment=payment_by_candidate.get(candidate.id), coordinators=coordinators, paid_keys=paid_keys)
             if any(line.reason == "PAYMENT_PENDING" for line in drafts):
                 pending += 1
             if any(line.reason == "MARKUP_BELOW_INCENTIVE_THRESHOLD" for line in drafts):
@@ -573,6 +574,7 @@ def run_cycle_calculation(
                 cycle_end=window.end,
                 payment=payment_by_candidate.get(candidate.id),
                 coordinators=coordinators,
+                paid_keys=paid_keys,
             )
             if any(line.reason == "PAYMENT_PENDING" for line in drafts):
                 pending += 1

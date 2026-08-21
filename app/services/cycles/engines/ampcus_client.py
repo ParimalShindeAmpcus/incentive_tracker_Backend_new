@@ -21,15 +21,15 @@ from app.services.incentives.nashik_calculator import LineDraft
 ZERO = Decimal("0")
 ROLES = ("Recruiter", "Team Lead", "Manager", "CRM", "CH/VP")
 SLABS: Tuple[Tuple[Decimal, Decimal, Dict[str, int]], ...] = (
-    (Decimal("0"), Decimal("5"), {role: 0 for role in ROLES}),
+    (Decimal("0"), Decimal("4.99"), {role: 0 for role in ROLES}),
     (Decimal("5"), Decimal("10"), {"Recruiter": 2000, "Team Lead": 250, "Manager": 500, "CRM": 750, "CH/VP": 500}),
-    (Decimal("10"), Decimal("15"), {"Recruiter": 3000, "Team Lead": 250, "Manager": 500, "CRM": 750, "CH/VP": 1000}),
-    (Decimal("15"), Decimal("20"), {"Recruiter": 5000, "Team Lead": 500, "Manager": 1000, "CRM": 1000, "CH/VP": 1500}),
-    (Decimal("20"), Decimal("25"), {"Recruiter": 6000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 2000}),
-    (Decimal("25"), Decimal("30"), {"Recruiter": 7000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 2500}),
-    (Decimal("30"), Decimal("35"), {"Recruiter": 8000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 3000}),
-    (Decimal("35"), Decimal("40"), {"Recruiter": 9000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 3500}),
-    (Decimal("40"), Decimal("100"), {"Recruiter": 10000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 4000}),
+    (Decimal("10.01"), Decimal("15"), {"Recruiter": 3000, "Team Lead": 250, "Manager": 500, "CRM": 750, "CH/VP": 1000}),
+    (Decimal("15.01"), Decimal("20"), {"Recruiter": 5000, "Team Lead": 500, "Manager": 1000, "CRM": 1000, "CH/VP": 1500}),
+    (Decimal("20.01"), Decimal("25"), {"Recruiter": 6000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 2000}),
+    (Decimal("25.01"), Decimal("30"), {"Recruiter": 7000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 2500}),
+    (Decimal("30.01"), Decimal("35"), {"Recruiter": 8000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 3000}),
+    (Decimal("35.01"), Decimal("40"), {"Recruiter": 9000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 3500}),
+    (Decimal("40.01"), Decimal("100"), {"Recruiter": 10000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 4000}),
 )
 
 
@@ -46,11 +46,19 @@ def _is_not_applicable(person: Optional[str]) -> bool:
     return norm in {"na", "notapplicable", "none", ""}
 
 
+def normalize_person(value: Optional[str]) -> str:
+    return " ".join((value or "").split()).strip().lower()
+
+
 def resolve_slab(markup: Optional[Decimal]) -> Optional[Tuple[Decimal, Decimal, Dict[str, int]]]:
     if markup is None or markup < ZERO or markup > Decimal("100"):
         return None
+    
+    # Quantize to 2 decimal places to align with slab definitions
+    markup = markup.quantize(Decimal("0.01"))
+    
     for low, high, amounts in SLABS:
-        if (low == ZERO and low <= markup <= high) or (low < markup <= high):
+        if low <= markup <= high:
             return low, high, amounts
     return None
 
@@ -98,6 +106,7 @@ def calculate_placement(
     *, cycle_end: date,
     payment: Optional[object] = None,
     coordinators: Optional[Dict[str, CoordinatorRecord]] = None,
+    paid_keys: Optional[Set[str]] = None,
 ) -> List[LineDraft]:
     """Return five deterministic role lines for one placement snapshot."""
     people = _people(candidate)
@@ -108,7 +117,18 @@ def calculate_placement(
         "payment_status": payment_status,
         "payment_received_date": str(getattr(payment, "payment_received_date", None) or "") or None,
         "payment_reference": getattr(payment, "payment_reference", None),
-        "ownership_confirmed": candidate.ownership_confirmed,
+        "ownership_confirmed": getattr(candidate, "ownership_confirmed", False),
+        "start_date": getattr(candidate, "start_date", None).isoformat() if getattr(candidate, "start_date", None) else None,
+        "contract_type": getattr(candidate, "contract_type", None),
+        "candidate_source": getattr(candidate, "candidate_source", None) or getattr(candidate, "organization", None),
+        "candidate_id": getattr(candidate, "start_id", None) or getattr(candidate, "external_candidate_id", None) or str(candidate.id),
+        "external_candidate_id": getattr(candidate, "external_candidate_id", None),
+        "recruiter": getattr(candidate, "recruiter", None),
+        "team_lead": getattr(candidate, "team_lead", None),
+        "manager": getattr(candidate, "manager", None),
+        "crm": getattr(candidate, "crm", None),
+        "center_head": getattr(candidate, "center_head", None),
+        "avp": getattr(candidate, "avp", None),
     }
     def all_zero(reason: str, rule: str) -> List[LineDraft]:
         return [_line(candidate, role, people[role], ZERO, eligible=False, reason=reason, rule=rule, details=details) for role in ROLES]
@@ -131,17 +151,53 @@ def calculate_placement(
         return all_zero("MARKUP_NOT_AVAILABLE" if markup is None else "MARKUP_OUT_OF_RANGE", "Ampcus Client mark-up validation")
     low, high, amounts = slab
     details["incentive_slab"] = {"min_markup": str(low), "max_markup": str(high)}
-    if markup is not None and markup <= Decimal("5"):
+    if low == ZERO:
         return all_zero("MARKUP_BELOW_INCENTIVE_THRESHOLD", "Ampcus Client mark-up slab")
-    if any(not people[role] for role in ROLES):
-        return all_zero("MISSING_HIERARCHY", "Ampcus Client hierarchy validation")
 
     coordinators = coordinators or {}
+    paid_keys = paid_keys or set()
+    
+    # Enforce max-two-roles for all roles
+    ROLE_PRIORITY = ["Recruiter", "CH/VP", "CRM", "Manager", "Team Lead"]
+    
+    by_person: Dict[str, List[str]] = {}
+    for role in ROLES:
+        person = people[role]
+        if person and not _is_not_applicable(person):
+            norm = normalize_person(person)
+            by_person.setdefault(norm, []).append(role)
+            
+    allowed_roles = set()
+    for norm_name, roles_held in by_person.items():
+        if len(roles_held) <= 2:
+            allowed_roles.update(roles_held)
+        else:
+            # Keep top 2 priority roles
+            ordered = sorted(roles_held, key=lambda r: ROLE_PRIORITY.index(r))
+            allowed_roles.update(ordered[:2])
+
     lines: List[LineDraft] = []
     for role in ROLES:
         person = people[role]
         amount = Decimal(amounts[role])
         
+        # 1. Missing Hierarchy Check (Per-Role)
+        if not person or not str(person).strip():
+            lines.append(
+                _line(
+                    candidate,
+                    role,
+                    person,
+                    ZERO,
+                    eligible=False,
+                    reason="MISSING_HIERARCHY",
+                    rule="Ampcus Client hierarchy validation",
+                    details=details,
+                )
+            )
+            continue
+            
+        # 2. Not Applicable Check
         if _is_not_applicable(person):
             lines.append(
                 _line(
@@ -152,6 +208,40 @@ def calculate_placement(
                     eligible=False,
                     reason="ROLE_NOT_APPLICABLE",
                     rule="Ampcus Client hierarchy validation",
+                    details=details,
+                )
+            )
+            continue
+
+        # 3. Already Paid Check
+        person_clean = person.strip().lower()
+        key = f"{candidate.id}|AMPCUS_CLIENT_MARKUP|{role}|{person_clean}"
+        if key in paid_keys:
+            lines.append(
+                _line(
+                    candidate,
+                    role,
+                    person,
+                    ZERO,
+                    eligible=False,
+                    reason="ALREADY_PAID",
+                    rule="Ampcus Client duplicate payment prevention",
+                    details=details,
+                )
+            )
+            continue
+
+        # 4. Max Two Roles Enforced
+        if role not in allowed_roles:
+            lines.append(
+                _line(
+                    candidate,
+                    role,
+                    person,
+                    ZERO,
+                    eligible=False,
+                    reason="ROLE_LIMIT_EXCEEDED",
+                    rule="Ampcus Client role limit enforcement",
                     details=details,
                 )
             )
