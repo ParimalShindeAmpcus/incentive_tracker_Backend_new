@@ -8,6 +8,11 @@ from typing import Dict, List, Optional
 
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
+from app.services.cycles.recruiter_master import (
+    EXEMPTED_MISSING_RECRUITER_MASTER,
+    EXEMPTION_REASON_TEXT,
+    lookup_coordinator,
+)
 from app.services.incentives.nashik_calculator import LineDraft
 
 ZERO = Decimal("0")
@@ -38,6 +43,9 @@ def _line(c: Candidate, role: str, person: Optional[str], amount: int, eligible:
         "associate_director": getattr(c, "associate_director", None),
         "avp": getattr(c, "avp", None),
     }
+    explanation = [json.dumps(meta, default=str)]
+    if reason == EXEMPTED_MISSING_RECRUITER_MASTER:
+        explanation.append(EXEMPTION_REASON_TEXT)
     return LineDraft(
         candidate_id=getattr(c, "id", 0),
         candidate_name=getattr(c, "candidate_name", ""),
@@ -52,7 +60,7 @@ def _line(c: Candidate, role: str, person: Optional[str], amount: int, eligible:
         hours=Decimal(days),
         margin=None,
         reason=reason,
-        explanation=[json.dumps(meta, default=str)],
+        explanation=explanation,
     )
 
 
@@ -114,10 +122,10 @@ def calculate_placement(c: Candidate, *, cycle_end: date, coordinators: Dict[str
             lines.append(_line(c, role, person, 0, False, "ALREADY_PAID", days))
             continue
 
-        # W3: Check if coordinator exists in master
-        record = coordinators.get(person_clean)
+        # Presence in Recruiter Master (status is ignored here; LEFT/NOTICE use existing rules below)
+        record = lookup_coordinator(coordinators, person)
         if not record:
-            lines.append(_line(c, role, person, 0, False, "COORDINATOR_NOT_IN_MASTER", days))
+            lines.append(_line(c, role, person, 0, False, EXEMPTED_MISSING_RECRUITER_MASTER, days))
             continue
 
         # C1: Coordinator status check for ALL roles (not just Recruiter)

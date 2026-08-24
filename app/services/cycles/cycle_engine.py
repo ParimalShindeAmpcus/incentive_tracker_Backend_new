@@ -38,6 +38,7 @@ from app.services.cycles.engines.ampcus_client import (
     coordinator_index,
     is_ampcus_client_division,
 )
+from app.services.incentives.recruiter_master import missing_recruiter_master_validation
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
 from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
 from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, special_average, build_sn_validations
@@ -74,6 +75,7 @@ def _placement(cand: Candidate, hours: Decimal, window: CycleWindow) -> Placemen
         associate_director=cand.associate_director,
         center_head=cand.center_head,
         avp=cand.avp,
+        director=getattr(cand, "director", None),
         incentive_active=bool(cand.incentive_active),
         project_ended=end_date is not None and end_date <= window.end,
     )
@@ -156,7 +158,7 @@ def run_cycle_calculation(
         validations = [
             {"check_key": "payment_pending", "severity": "YELLOW" if pending else "GREEN", "message": "Placements awaiting first full-month client payment", "count": pending, "details_json": None},
             {"check_key": "no_incentive_slab", "severity": "YELLOW" if no_slab else "GREEN", "message": "Placements below the client mark-up threshold", "count": no_slab, "details_json": None},
-            {"check_key": "coordinator_not_in_master", "severity": "RED" if any(line.reason == "COORDINATOR_NOT_IN_MASTER" for line in lines) else "GREEN", "message": "Hierarchy person not found in Coordinator Master", "count": sum(1 for line in lines if line.reason == "COORDINATOR_NOT_IN_MASTER"), "details_json": None},
+            missing_recruiter_master_validation(lines),
             {"check_key": "coordinator_ineligible", "severity": "YELLOW" if any(line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"} for line in lines) else "GREEN", "message": "Coordinator on notice or left — incentive excluded", "count": sum(1 for line in lines if line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"}), "details_json": None},
         ]
         return lines, stats, [], validations
@@ -191,6 +193,7 @@ def run_cycle_calculation(
         validations = [
             {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
             {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
+            missing_recruiter_master_validation(lines),
         ]
         return lines, stats, [], validations
 
@@ -375,6 +378,7 @@ def run_cycle_calculation(
             "count": stats["inactive"],
             "details_json": None,
         },
+        missing_recruiter_master_validation(lines),
     ]
     return lines, stats, match_rows, validations
 
@@ -597,6 +601,7 @@ def run_cycle_calculation(
                 "count": no_slab,
                 "details_json": None,
             },
+            missing_recruiter_master_validation(lines),
         ]
         return lines, stats, match_rows, validations
 
@@ -621,6 +626,7 @@ def run_cycle_calculation(
             {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
             {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
             {"check_key": "already_paid", "severity": "YELLOW" if already_paid_count else "GREEN", "message": "One-time incentives already paid in a previous cycle", "count": already_paid_count, "details_json": None},
+            missing_recruiter_master_validation(lines),
         ]
         return lines, stats, match_rows, validations
 
@@ -704,7 +710,7 @@ def run_cycle_calculation(
                     default=str,
                 ),
             },
-        ] + sn_validations
+        ] + sn_validations + [missing_recruiter_master_validation(lines)]
 
     if is_nashik_division(cycle.division):
         for pk, hours in hours_by_pk.items():
@@ -808,6 +814,7 @@ def run_cycle_calculation(
                     default=str,
                 ),
             },
+            missing_recruiter_master_validation(lines),
         ]
         return lines, stats, match_rows, validations
 
@@ -860,6 +867,7 @@ def run_cycle_calculation(
             "count": stats["inactive"],
             "details_json": None,
         },
+        missing_recruiter_master_validation(lines),
     ]
 
     if is_sambhaji_nagar_division(cycle.division):

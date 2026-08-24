@@ -511,3 +511,54 @@ def test_recruiter_only_still_paid_when_active():
         employment_status=_status(("Only Rec", "ACTIVE")),
     )
     assert _amount(lines, "Recruiter", "Only Rec") == Decimal("2000")
+
+
+def test_missing_center_head_from_recruiter_master_exempts_only_that_role():
+    lines = calculate_nashik_placement(
+        _p(
+            recruiter="Rahul",
+            team_lead="Amit",
+            crm="Priya",
+            manager="Neha",
+            center_head="Suresh",
+        ),
+        WINDOW,
+        employment_status=_status(
+            ("Rahul", "ACTIVE"),
+            ("Amit", "ACTIVE"),
+            ("Priya", "ACTIVE"),
+            ("Neha", "ACTIVE"),
+        ),
+    )
+    ch = _by_role(lines, "Center Head")[0]
+    assert ch.eligible is False
+    assert ch.reason == "EXEMPTED_MISSING_RECRUITER_MASTER"
+    assert "Hierarchy person not found in Recruiter Master" in " ".join(ch.explanation)
+    assert _amount(lines, "Recruiter", "Rahul") == Decimal("2000")
+    assert _amount(lines, "Team Lead", "Amit") == TEAM_LEAD_BASE
+    assert _amount(lines, "CRM", "Priya") == LEADERSHIP_ONE_TIME["CRM"]
+    assert _amount(lines, "Manager", "Neha") == LEADERSHIP_ONE_TIME["Manager"]
+    assert any(l.role == "Center Head" and l.person == "Suresh" for l in lines)
+
+
+def test_multiple_missing_roles_exempt_only_those_people():
+    lines = calculate_nashik_placement(
+        _p(
+            recruiter="Rahul",
+            team_lead="Amit",
+            crm="Priya",
+            manager="Neha",
+            center_head="Suresh",
+        ),
+        WINDOW,
+        employment_status=_status(
+            ("Rahul", "ACTIVE"),
+            ("Priya", "ACTIVE"),
+            ("Suresh", "ACTIVE"),
+        ),
+    )
+    assert _by_role(lines, "Team Lead")[0].reason == "EXEMPTED_MISSING_RECRUITER_MASTER"
+    assert _by_role(lines, "Manager")[0].reason == "EXEMPTED_MISSING_RECRUITER_MASTER"
+    assert _amount(lines, "Recruiter", "Rahul") == Decimal("2000")
+    assert _amount(lines, "CRM", "Priya") == LEADERSHIP_ONE_TIME["CRM"]
+    assert _amount(lines, "Center Head", "Suresh") == LEADERSHIP_ONE_TIME["Center Head"]

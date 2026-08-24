@@ -17,7 +17,7 @@ From `app/repositories/entities/`:
 - **Recruiters:** `recruiter_master_versions`, `recruiter_statuses`
 - **Hours:** `hours_data_versions`, `hours_rows`, `hours_benchmarks`
 - **Project end:** `project_end_versions`, `project_end_records`
-- **Cycles:** `incentive_cycles`, `cycle_data_snapshots`, `cycle_hours_matches`, `cycle_validation_results`, `cycle_checklist_items`, `cycle_payment_statuses`, `cycle_manual_adjustments`, `cycle_approval_results`
+- **Cycles:** `incentive_cycles`, `cycle_data_snapshots`, `cycle_hours_matches`, `cycle_validation_results`, `cycle_checklist_items`, `cycle_payment_statuses`, `cycle_manual_adjustments`
 - **Incentives:** `incentive_lines`, `incentive_approvals`, `incentive_payments`, `paid_incentive_ledger`, `incentive_slabs`
 - **Audit:** `audit_logs`
 

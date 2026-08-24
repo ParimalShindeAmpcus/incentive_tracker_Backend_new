@@ -28,6 +28,33 @@ def create_cycle(db: Session, data: dict) -> IncentiveCycle:
     return cycle
 
 
+def resolve_cycle_status_filter(status: Optional[str]) -> Optional[List[CycleStatus]]:
+    """Map a UI/API status value to DB enums. None means no status filter.
+
+    Dashboard badges collapse MATCHED/VALIDATED into Draft and PAID/CLOSED into Approved.
+    """
+    if not status:
+        return None
+    key = str(status).strip().upper()
+    if not key or key in {"ALL", "*"}:
+        return None
+    groups = {
+        "DRAFT": [CycleStatus.DRAFT, CycleStatus.MATCHED, CycleStatus.VALIDATED],
+        "CALCULATED": [CycleStatus.CALCULATED],
+        "APPROVED": [CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED],
+        "PAID": [CycleStatus.PAID],
+        "CLOSED": [CycleStatus.CLOSED],
+        "MATCHED": [CycleStatus.MATCHED],
+        "VALIDATED": [CycleStatus.VALIDATED],
+    }
+    if key in groups:
+        return groups[key]
+    try:
+        return [CycleStatus(key)]
+    except ValueError:
+        return []
+
+
 def list_cycles(
     db: Session,
     *,
@@ -37,8 +64,11 @@ def list_cycles(
     q = db.query(IncentiveCycle)
     if division:
         q = q.filter(IncentiveCycle.division == division)
-    if status:
-        q = q.filter(IncentiveCycle.status == CycleStatus(status))
+    statuses = resolve_cycle_status_filter(status)
+    if statuses is not None:
+        if not statuses:
+            return []
+        q = q.filter(IncentiveCycle.status.in_(statuses))
     return q.order_by(IncentiveCycle.id.desc()).all()
 
 

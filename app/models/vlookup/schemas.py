@@ -142,6 +142,12 @@ class VLookupPublishHoursResponse(BaseModel):
     version_label: str = ""
 
 
+class VLookupCancelBody(BaseModel):
+    month: Optional[str] = None
+    tab: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class VLookupDraftOut(BaseModel):
     batch_id: str
     status: str
@@ -164,9 +170,3 @@ class VLookupDraftOut(BaseModel):
 
 class VLookupDraftListResponse(BaseModel):
     drafts: List[VLookupDraftOut] = Field(default_factory=list)
-
-
-class VLookupCancelBody(BaseModel):
-    month: Optional[str] = None
-    tab: Optional[str] = None
-    notes: Optional[str] = None

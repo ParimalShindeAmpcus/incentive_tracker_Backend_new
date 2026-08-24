@@ -166,14 +166,13 @@ class TestAdvancedMatching:
         """Two Hours Template IDs, one client-file person: neither should say 'not in file'."""
         results = matcher.match(
             [
-                _tpl(1, "Rahul Kumar", "Outcomes", month="2025-06"),
-                _tpl(2, "Rahul Kumar", "Outcomes", month="2025-06"),
+                _tpl(1, "Rahul Kumar", "Outcomes"),
+                _tpl(2, "Rahul Kumar", "Outcomes"),
             ],
             [
                 _group(
                     "Rahul Kumar",
                     "Capital One",
-                    month="2025-06",
                     hours=160.0,
                     monthly_hours={"2025-06": 160.0, "2025-07": 176.0},
                     weekly_by_month={

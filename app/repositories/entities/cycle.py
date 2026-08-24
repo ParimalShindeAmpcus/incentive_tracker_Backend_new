@@ -100,9 +100,7 @@ class IncentiveCycle(Base):
         foreign_keys="IncentiveLine.cycle_id",
     )
     approval_results: Mapped[List["CycleApprovalResult"]] = relationship(
-        "CycleApprovalResult",
-        back_populates="cycle",
-        cascade="all, delete-orphan",
+        "CycleApprovalResult", back_populates="cycle", cascade="all, delete-orphan"
     )
 
 
@@ -216,31 +214,26 @@ class CycleManualAdjustment(Base):
 
 
 class CycleApprovalResult(Base):
-    """Frozen payout snapshot written when a cycle approval workflow completes."""
+    """Frozen payout snapshot written when a cycle is approved."""
 
     __tablename__ = "cycle_approval_results"
-    __table_args__ = (
-        UniqueConstraint("cycle_id", "incentive_line_id", name="uq_cycle_approval_result_line"),
-    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     cycle_id: Mapped[int] = mapped_column(
         ForeignKey("incentive_cycles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     incentive_line_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("incentive_lines.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("incentive_lines.id", ondelete="SET NULL"), index=True
     )
     candidate_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("candidates.id", ondelete="SET NULL"), index=True
     )
-
     cycle_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    division: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    incentive_month: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    division: Mapped[str] = mapped_column(String(100), nullable=False)
+    incentive_month: Mapped[str] = mapped_column(String(7), nullable=False)
     cycle_start_date: Mapped[Optional[date]] = mapped_column(Date)
     cycle_end_date: Mapped[Optional[date]] = mapped_column(Date)
-    cycle_status: Mapped[str] = mapped_column(String(50), nullable=False, default="APPROVED")
-
+    cycle_status: Mapped[str] = mapped_column(String(50), nullable=False)
     candidate_name: Mapped[Optional[str]] = mapped_column(String(255))
     external_candidate_id: Mapped[Optional[str]] = mapped_column(String(100))
     start_id: Mapped[Optional[str]] = mapped_column(String(100))
@@ -249,7 +242,6 @@ class CycleApprovalResult(Base):
     candidate_source: Mapped[Optional[str]] = mapped_column(String(255))
     organization: Mapped[Optional[str]] = mapped_column(String(255))
     team: Mapped[Optional[str]] = mapped_column(String(255))
-
     role: Mapped[str] = mapped_column(String(100), nullable=False)
     person: Mapped[str] = mapped_column(String(255), nullable=False)
     incentive_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -264,14 +256,12 @@ class CycleApprovalResult(Base):
     reason: Mapped[Optional[str]] = mapped_column(String(500))
     explanation_json: Mapped[Optional[str]] = mapped_column(Text)
     payment_status: Mapped[str] = mapped_column(String(50), default="UNPAID", nullable=False)
-
     crm: Mapped[Optional[str]] = mapped_column(String(255))
     center_head: Mapped[Optional[str]] = mapped_column(String(255))
     associate_director: Mapped[Optional[str]] = mapped_column(String(255))
     manager: Mapped[Optional[str]] = mapped_column(String(255))
     senior_manager: Mapped[Optional[str]] = mapped_column(String(255))
     team_lead: Mapped[Optional[str]] = mapped_column(String(255))
-
     approved_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     comments: Mapped[Optional[str]] = mapped_column(Text)

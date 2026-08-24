@@ -24,6 +24,10 @@ from app.services.incentives.nashik_rules import (
     normalize_contract,
     normalize_person,
 )
+from app.services.incentives.recruiter_master import (
+    EXEMPTED_MISSING_RECRUITER_MASTER,
+    EXEMPTION_REASON_TEXT,
+)
 
 # Employment statuses that block incentive for a person (mirrors Client/Sambhaji).
 INELIGIBLE_EMPLOYMENT_STATUSES = {"LEFT", "NOTICE"}
@@ -50,6 +54,7 @@ class PlacementInput:
     associate_director: Optional[str]
     center_head: Optional[str]
     avp: Optional[str]
+    director: Optional[str] = None
     incentive_active: bool = True
     project_ended: bool = False
 
@@ -108,6 +113,7 @@ def _all_roles(p: PlacementInput) -> List[Tuple[str, str]]:
         ("Associate Director", p.associate_director),
         ("Center Head", p.center_head),
         ("AVP", p.avp),
+        ("Director", p.director),
     ]
     seen_roles: Set[str] = set()
     out: List[Tuple[str, str]] = []
@@ -127,18 +133,22 @@ def _employment_status(
     role: Optional[str] = None,
 ) -> str:
     """
-    Resolve ACTIVE|LEFT|NOTICE for a hierarchy participant.
+    Resolve ACTIVE|LEFT|NOTICE|MISSING for a hierarchy participant.
 
-    Primary key (Coordinator Master / cycle_engine): normalize_person(name).
-    Optional override key for role-scoped tests: "{role}|{person}".
+    When employment_status is None, unit tests without a Recruiter Master snapshot
+    keep the historical default of ACTIVE.
+    When a snapshot is provided, a person with no row is MISSING (not ACTIVE).
+    LEFT / NOTICE / Inactive rows in Recruiter Master still count as present.
     """
-    if not employment_status:
+    if employment_status is None:
         return "ACTIVE"
     key = normalize_person(person)
     if role:
         role_key = f"{role.strip().lower()}|{key}"
         if role_key in employment_status:
             return str(employment_status[role_key] or "ACTIVE").upper()
+    if key not in employment_status:
+        return "MISSING"
     return str(employment_status.get(key, "ACTIVE") or "ACTIVE").upper()
 
 
@@ -358,14 +368,19 @@ def calculate_nashik_placement(
     if not occupied:
         return _scope(p, "No hierarchy or recruiter assigned", ["No roles available for calculation"])
 
-    # 1) Status filter first — LEFT/NOTICE become ineligible lines, not candidates for top-2.
+    configured_roles = {"Recruiter", "Team Lead"} | set(LEADERSHIP_ONE_TIME)
+
+    # 1) Recruiter Master presence, then LEFT/NOTICE. Missing people do not compete for top-2.
+    missing_blocked: List[Tuple[str, str]] = []
     status_blocked: List[Tuple[str, str, str]] = []
     status_ok: List[Tuple[str, str]] = []
     for role, person in occupied:
         status = _employment_status(person, employment_status, role=role)
-        if status in INELIGIBLE_EMPLOYMENT_STATUSES:
+        if status == "MISSING":
+            missing_blocked.append((role, person))
+        elif status in INELIGIBLE_EMPLOYMENT_STATUSES:
             status_blocked.append((role, person, status))
-        else:
+        elif role in configured_roles:
             status_ok.append((role, person))
 
     # 2) Top-2 across ALL remaining roles (Recruiter included in the pool).
@@ -375,8 +390,36 @@ def calculate_nashik_placement(
 
     lines: List[LineDraft] = []
 
+    for role, person in missing_blocked:
+        if role in configured_roles:
+            incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, hours)
+        else:
+            incentive_type, base, factor, explanation = "ONE_TIME", Decimal("0"), Decimal("0"), []
+        lines.append(
+            _line(
+                p,
+                role=role,
+                person=person,
+                incentive_type=incentive_type,
+                rule_applied="Nashik — Recruiter Master presence",
+                eligible=False,
+                base=base,
+                factor=factor,
+                amount=Decimal("0"),
+                reason=EXEMPTED_MISSING_RECRUITER_MASTER,
+                explanation=[
+                    *explanation,
+                    EXEMPTION_REASON_TEXT,
+                    "Only this role is exempted; other hierarchy members continue",
+                    f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
+                ],
+            )
+        )
+
     # Emit excluded LEFT/NOTICE lines (hierarchy continues for others).
     for role, person, status in status_blocked:
+        if role not in configured_roles:
+            continue
         incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, hours)
         lines.append(
             _line(

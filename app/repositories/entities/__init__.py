@@ -4,6 +4,7 @@ from app.repositories.entities.audit import AuditAction, AuditLog
 from app.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
 from app.repositories.entities.candidate import Candidate, CandidateDataVersion
 from app.repositories.entities.cycle import (
+    CycleApprovalResult,
     CycleChecklistItem,
     CycleDataSnapshot,
     CycleHoursMatch,
@@ -11,7 +12,6 @@ from app.repositories.entities.cycle import (
     CyclePaymentStatus,
     CycleStatus,
     CycleValidationResult,
-    CycleApprovalResult,
     IncentiveCycle,
     MatchResult,
 )
@@ -43,6 +43,7 @@ __all__ = [
     "AuditLog",
     "Candidate",
     "CandidateDataVersion",
+    "CycleApprovalResult",
     "CycleChecklistItem",
     "CycleDataSnapshot",
     "CycleHoursMatch",
@@ -50,7 +51,6 @@ __all__ = [
     "CyclePaymentStatus",
     "CycleStatus",
     "CycleValidationResult",
-    "CycleApprovalResult",
     "IncentiveCycle",
     "MatchResult",
     "HoursBenchmark",

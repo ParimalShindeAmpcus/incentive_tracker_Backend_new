@@ -18,11 +18,8 @@ from app.models.hours.schemas import (
     VersionMetaOut,
 )
 from app.repositories.candidates import candidate_repository
-from app.repositories.entities.audit import AuditAction
 from app.repositories.entities.hours import HoursRow
-from app.repositories.entities.user import User
 from app.repositories.hours import hours_repository
-from app.services.audit import audit_service
 from app.services.vlookup.normalization import normalize_month_year
 
 
@@ -133,8 +130,6 @@ def create_version(
     db: Session,
     payload: CreateHoursVersionRequest,
     uploaded_by: Optional[int] = None,
-    user: Optional[User] = None,
-    record_audit: bool = True,
 ) -> HoursVersionDetail:
     # Normalize month keys before persist so Hours & Benchmark can query by YYYY-MM.
     normalized_rows: List[HoursRowIn] = []
@@ -181,23 +176,6 @@ def create_version(
             uploaded_by=uploaded_by,
         )
         hours_repository.create_rows(db, version, resolved_rows)
-        if record_audit:
-            filename = payload.source_filename or payload.version_label or "hours-upload"
-            audit_service.record_event(
-                db,
-                action=AuditAction.FILE_UPLOAD,
-                title="Uploaded hours dataset",
-                details=f"Imported {len(resolved_rows)} hours row(s) from {filename}",
-                user=user,
-                metadata={
-                    "filename": filename,
-                    "row_count": len(resolved_rows),
-                    "version_id": version.id,
-                    "division": payload.division,
-                },
-                entity_type="hours_version",
-                entity_id=str(version.id),
-            )
         db.commit()
     except Exception:
         db.rollback()
@@ -209,7 +187,6 @@ def update_row_hours(
     db: Session,
     row_id: int,
     payload: HoursRowHoursUpdate,
-    user: Optional[User] = None,
 ) -> HoursRowOut:
     row = hours_repository.get_row(db, row_id)
     if row is None:
@@ -220,32 +197,10 @@ def update_row_hours(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Hours Worked must be greater than or equal to 0",
         )
-    previous = row.hours_worked
     updated = hours_repository.update_row_hours(db, row, Decimal(hours_worked))
-    reloaded = hours_repository.get_row(db, updated.id) or updated
-    out = _row_out(reloaded)
-    audit_service.record_event(
-        db,
-        action=AuditAction.HOURS_RECONCILIATION,
-        title="Updated hours row",
-        details=(
-            f"Set hours for {out.candidate_name or 'candidate'} "
-            f"({out.external_candidate_id or out.candidate_id}) in {out.month_key or 'unknown month'} "
-            f"from {previous} to {out.hours_worked}"
-        ),
-        user=user,
-        metadata={
-            "row_id": out.id,
-            "candidate": out.candidate_name,
-            "month": out.month_key,
-            "hours": str(out.hours_worked),
-            "previous_hours": str(previous) if previous is not None else None,
-        },
-        entity_type="hours_row",
-        entity_id=str(out.id),
-    )
     db.commit()
     db.refresh(updated)
+    # Reload with candidate for enriched out
     reloaded = hours_repository.get_row(db, updated.id)
     return _row_out(reloaded or updated)
 

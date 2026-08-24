@@ -16,6 +16,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.coordinator import CoordinatorRecord
+from app.services.cycles.recruiter_master import (
+    EXEMPTED_MISSING_RECRUITER_MASTER,
+    EXEMPTION_REASON_TEXT,
+    lookup_coordinator,
+)
 from app.services.incentives.nashik_calculator import LineDraft
 
 ZERO = Decimal("0")
@@ -95,6 +100,10 @@ def _line(c: Candidate, role: str, person: Optional[str], amount: int, hours: De
             "start_date": c.start_date.isoformat() if c.start_date else None,
             "contract_type": c.contract_type or "",
             "candidate_source": c.candidate_source or "",
+            **({
+                "exemption_status": EXEMPTED_MISSING_RECRUITER_MASTER,
+                "exemption_reason": EXEMPTION_REASON_TEXT,
+            } if reason == EXEMPTED_MISSING_RECRUITER_MASTER else {}),
         })]
     )
 
@@ -122,11 +131,13 @@ def calculate_placement(
     requires_payment = hours < Decimal("160")
     completed_160 = hours >= Decimal("160")
 
-    # Recruiter employment status
-    recruiter_key = (c.recruiter or "").strip().lower()
-    coord_rec = coordinators.get(recruiter_key)
-    recruiter_status = getattr(coord_rec, "employment_status", "ACTIVE")
-    recruiter_status = getattr(recruiter_status, "value", str(recruiter_status)).upper()
+    # Recruiter employment status — missing from Recruiter Master is not LEFT/NOTICE
+    coord_rec = lookup_coordinator(coordinators, c.recruiter)
+    if (c.recruiter or "").strip() and not coord_rec:
+        recruiter_status = "MISSING"
+    else:
+        recruiter_status = getattr(coord_rec, "employment_status", "ACTIVE")
+        recruiter_status = getattr(recruiter_status, "value", str(recruiter_status)).upper()
 
     # Source / location validation
     org_val = str(c.organization or "").strip().lower()
@@ -152,7 +163,10 @@ def calculate_placement(
         blocked = "MARGIN_OR_HOURS_OUTSIDE_MATRIX"
 
     # Recruiter eligibility
-    if recruiter_status == "LEFT":
+    if recruiter_status == "MISSING":
+        recruiter_reason = EXEMPTED_MISSING_RECRUITER_MASTER
+        recruiter_ok = False
+    elif recruiter_status == "LEFT":
         recruiter_reason = "COORDINATOR_LEFT"
         recruiter_ok = False
     elif recruiter_status == "NOTICE":
@@ -162,7 +176,7 @@ def calculate_placement(
         recruiter_reason = blocked or "ELIGIBLE"
         recruiter_ok = bool(c.recruiter) and not blocked
 
-    recruiter_amount = 0 if blocked else amount
+    recruiter_amount = 0 if (blocked or recruiter_status == "MISSING") else amount
 
     lines: List[LineDraft] = [
         _line(c, "Recruiter", c.recruiter, recruiter_amount, hours, recruiter_ok, recruiter_reason)
@@ -176,19 +190,25 @@ def calculate_placement(
         "CRM":                c.crm,
         "Associate Director": c.associate_director,
         "Center Head":        c.center_head,
+        "Director":           getattr(c, "director", None),
     }.items():
         if not person or person.strip().lower() in {"not applicable", "n/a", "—", "-", ""}:
             continue
 
+        if role not in FIXED:
+            coord_rec = lookup_coordinator(coordinators, person)
+            if not coord_rec:
+                lines.append(_line(c, role, person, 0, hours, False, EXEMPTED_MISSING_RECRUITER_MASTER, "ONE_TIME"))
+            continue
+
         fixed_amount = FIXED.get(role, 0)
         
-        person_clean = person.strip().lower()
-        coord_rec = coordinators.get(person_clean)
+        coord_rec = lookup_coordinator(coordinators, person)
         
-        # Check coordinator master status
+        # Presence in Recruiter Master first; LEFT/NOTICE still use existing status rules
         if not coord_rec:
             lead_eligible = False
-            lead_reason = "COORDINATOR_NOT_IN_MASTER"
+            lead_reason = EXEMPTED_MISSING_RECRUITER_MASTER
         else:
             coord_status = getattr(getattr(coord_rec, "employment_status", None), "value", getattr(coord_rec, "employment_status", "ACTIVE"))
             coord_status_str = str(coord_status).upper()

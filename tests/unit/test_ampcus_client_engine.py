@@ -195,3 +195,31 @@ def test_already_paid_duplicate_prevention():
 
     assert ch_line.eligible is True
     assert ch_line.amount == 1500
+
+
+def test_missing_center_head_from_recruiter_master_exempts_only_that_role():
+    coords = active_coordinators("Recruiter", "Lead", "Manager", "CRM")  # Center Head / AVP absent
+    lines = calculate_placement(placement(), cycle_end=date(2026, 8, 31), payment=payment(), coordinators=coords)
+    rec = next(line for line in lines if line.role == "Recruiter")
+    tl = next(line for line in lines if line.role == "Team Lead")
+    mgr = next(line for line in lines if line.role == "Manager")
+    crm = next(line for line in lines if line.role == "CRM")
+    ch = next(line for line in lines if line.role == "CH/VP")
+    assert rec.eligible is True and rec.amount == Decimal("5000")
+    assert tl.eligible is True and tl.amount == Decimal("500")
+    assert mgr.eligible is True and mgr.amount == Decimal("1000")
+    assert crm.eligible is True and crm.amount == Decimal("1000")
+    assert ch.eligible is False
+    assert ch.reason == "EXEMPTED_MISSING_RECRUITER_MASTER"
+    assert ch.amount == Decimal("0")
+
+
+def test_left_and_notice_in_recruiter_master_are_not_treated_as_missing():
+    coords = active_coordinators("Recruiter", "Lead", "Manager", "CRM", "Center Head")
+    coords["lead"] = SimpleNamespace(employment_status="NOTICE")
+    coords["manager"] = SimpleNamespace(employment_status="LEFT")
+    lines = calculate_placement(placement(), cycle_end=date(2026, 8, 31), payment=payment(), coordinators=coords)
+    assert next(line for line in lines if line.role == "Team Lead").reason == "COORDINATOR_ON_NOTICE"
+    assert next(line for line in lines if line.role == "Manager").reason == "COORDINATOR_LEFT"
+    assert next(line for line in lines if line.role == "Recruiter").reason == "ELIGIBLE"
+    assert next(line for line in lines if line.role == "CH/VP").reason == "ELIGIBLE"

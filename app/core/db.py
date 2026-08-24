@@ -151,6 +151,54 @@ def init_db() -> None:
             "metadata": json_type,
         },
     )
+    _add_missing(
+        "vlookup_upload_batches",
+        {
+            "file_type": "VARCHAR(40)",
+            "filename": "VARCHAR(255)",
+            "total_records": "INTEGER",
+            "status": "VARCHAR(20)",
+            "error_message": "TEXT",
+            "matched_count": "INTEGER DEFAULT 0",
+            "needs_review_count": "INTEGER DEFAULT 0",
+            "unmatched_count": "INTEGER DEFAULT 0",
+            "duplicate_count": "INTEGER DEFAULT 0",
+            "conflicting_count": "INTEGER DEFAULT 0",
+            "target_month": "VARCHAR(20)",
+            "client_file_format": "VARCHAR(50)",
+            "parser_warnings": json_type,
+            "uploaded_by": "VARCHAR(255)",
+            "stage": "VARCHAR(40)",
+            "cycle_id": "INTEGER",
+            "cancelled_by": "VARCHAR(255)",
+            "cancelled_at": ts,
+            "resume_state": json_type,
+            "completed_at": ts,
+        },
+    )
+
+    def _sync_mapped_columns() -> None:
+        """Add any other model columns that create_all skipped on existing tables."""
+        inspector.clear_cache()
+        existing_tables = set(inspector.get_table_names())
+        with engine.begin() as connection:
+            for table in Base.metadata.sorted_tables:
+                if table.name not in existing_tables:
+                    continue
+                present = {column["name"] for column in inspector.get_columns(table.name)}
+                for column in table.columns:
+                    if column.name in present or column.primary_key:
+                        continue
+                    compiled = column.type.compile(dialect=engine.dialect)
+                    if_not_exists = "IF NOT EXISTS " if is_pg else ""
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table.name} ADD COLUMN {if_not_exists}{column.name} {compiled}"
+                        )
+                    )
+                    present.add(column.name)
+
+    _sync_mapped_columns()
     # Model uses native_enum=False (VARCHAR(50)); older DBs used PG enum audit_action_enum.
     if is_pg and "audit_logs" in inspector.get_table_names():
         with engine.begin() as connection:
@@ -193,47 +241,3 @@ def init_db() -> None:
                     connection.execute(
                         text("ALTER TABLE audit_logs ALTER COLUMN action TYPE VARCHAR(50)")
                     )
-
-    # VLOOKUP: drop leftover columns that matching/export never used.
-    # create_all does not remove columns from older local databases.
-    def _drop_present(table: str, names: list[str]) -> None:
-        current = inspect(engine)
-        if table not in current.get_table_names():
-            return
-        existing = {column["name"] for column in current.get_columns(table)}
-        to_drop = [name for name in names if name in existing]
-        if not to_drop:
-            return
-        with engine.begin() as connection:
-            for name in to_drop:
-                if is_pg:
-                    connection.execute(text(f"ALTER TABLE {table} DROP COLUMN IF EXISTS {name}"))
-                else:
-                    connection.execute(text(f"ALTER TABLE {table} DROP COLUMN {name}"))
-
-    _drop_present(
-        "vlookup_template_candidates",
-        [
-            "pay_rate",
-            "bill_rate",
-            "margin_per_hour",
-            "team_lead_name",
-            "manager_name",
-            "crm_name",
-            "start_date",
-            "end_date",
-        ],
-    )
-    _drop_present("vlookup_matched_records", ["weekly_hours_ids"])
-    _drop_present("vlookup_upload_batches", ["error_message"])
-    json_type = "JSONB" if is_pg else "JSON"
-    _add_missing(
-        "vlookup_upload_batches",
-        {
-            "cancelled_by": "VARCHAR(255)",
-            "cancelled_at": ts,
-            "stage": "VARCHAR(40)",
-            "cycle_id": "INTEGER",
-            "resume_state": json_type,
-        },
-    )

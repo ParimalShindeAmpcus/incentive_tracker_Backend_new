@@ -16,6 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
+from app.services.cycles.recruiter_master import (
+    EXEMPTED_MISSING_RECRUITER_MASTER,
+    EXEMPTION_REASON_TEXT,
+    lookup_coordinator,
+)
 from app.services.incentives.nashik_calculator import LineDraft
 
 ZERO = Decimal("0")
@@ -249,7 +254,7 @@ def calculate_placement(
             )
             continue
             
-        coord = coordinators.get((person or "").strip().lower())
+        coord = lookup_coordinator(coordinators, person)
         if not coord:
             lines.append(
                 _line(
@@ -258,9 +263,9 @@ def calculate_placement(
                     person,
                     ZERO,
                     eligible=False,
-                    reason="COORDINATOR_NOT_IN_MASTER",
-                    rule="Ampcus Client coordinator validation",
-                    details=details,
+                    reason=EXEMPTED_MISSING_RECRUITER_MASTER,
+                    rule="Ampcus Client Recruiter Master presence",
+                    details={**details, "exemption": EXEMPTION_REASON_TEXT},
                 )
             )
             continue
@@ -301,4 +306,16 @@ def calculate_placement(
 
 
 def coordinator_index(db: Session) -> Dict[str, CoordinatorRecord]:
-    return {row.normalized_name.strip().lower(): row for row in db.query(CoordinatorRecord).filter(CoordinatorRecord.is_deleted.is_(False)).all()}
+    """Index every non-deleted Recruiter Master row. LEFT / NOTICE / Inactive still count as present."""
+    out: Dict[str, CoordinatorRecord] = {}
+    rows = (
+        db.query(CoordinatorRecord)
+        .filter(CoordinatorRecord.is_deleted.is_(False))
+        .all()
+    )
+    for row in rows:
+        for raw in (row.normalized_name, row.full_name, row.email):
+            key = normalize_person(raw)
+            if key:
+                out[key] = row
+    return out

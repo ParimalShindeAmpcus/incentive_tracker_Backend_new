@@ -1,6 +1,5 @@
 """Audit HTTP routes."""
 
-from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Query
@@ -21,8 +20,6 @@ def get_logs(
     search: Optional[str] = Query(None),
     year: Optional[int] = Query(None, ge=1900, le=2100),
     month: Optional[int] = Query(None, ge=1, le=12),
-    from_date: Optional[date] = Query(None),
-    to_date: Optional[date] = Query(None),
     limit: int = Query(500, ge=1, le=1000),
     skip: int = Query(0, ge=0),
 ) -> List[AuditLogOut]:
@@ -32,8 +29,6 @@ def get_logs(
         search=search,
         year=year,
         month=month,
-        from_date=from_date,
-        to_date=to_date,
         limit=limit,
         skip=skip,
     )

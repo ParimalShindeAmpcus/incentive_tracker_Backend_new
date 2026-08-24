@@ -21,10 +21,8 @@ from app.controllers.project_end.controller import router as project_end_router
 from app.controllers.coordinators.controller import router as coordinators_router
 from app.controllers.reports.controller import router as reports_router
 from app.controllers.vlookup.controller import router as vlookup_router
-from app.core.db import init_db, get_engine
+from app.core.db import init_db
 from app.services.common.seed import seed_database
-from app.services.cycles.cycle_service import backfill_missing_approval_results
-from sqlalchemy.orm import sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +34,6 @@ async def lifespan(_: FastAPI):
         init_db()
         if settings.seed_on_startup:
             seed_database()
-        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
-        db = SessionLocal()
-        try:
-            backfill_missing_approval_results(db)
-        except Exception as backfill_exc:
-            logger.warning("Approval-results backfill skipped: %s", backfill_exc)
-            db.rollback()
-        finally:
-            db.close()
     except Exception as exc:
         # Keep /health available when DB is unreachable during local/test startup
         logger.warning("Startup init_db/seed skipped: %s", exc)

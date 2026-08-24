@@ -38,13 +38,8 @@ def get_candidate(candidate_id: int, db: DbSession) -> CandidateOut:
 
 
 @router.patch("/candidates/{candidate_id}", response_model=CandidateOut)
-def patch_candidate(
-    candidate_id: int,
-    payload: CandidateUpdate,
-    db: DbSession,
-    user: CurrentUser,
-) -> CandidateOut:
-    return candidate_service.update_candidate(db, candidate_id, payload, user=user)
+def patch_candidate(candidate_id: int, payload: CandidateUpdate, db: DbSession) -> CandidateOut:
+    return candidate_service.update_candidate(db, candidate_id, payload)
 
 
 @router.get("/candidate-data/versions", response_model=List[CandidateVersionOut])
@@ -63,5 +58,5 @@ def create_version(
     db: DbSession,
     user: CurrentUser,
 ) -> CandidateVersionCreateResponse:
-    return candidate_service.create_version(db, payload, uploaded_by=user.id, user=user)
+    return candidate_service.create_version(db, payload, uploaded_by=user.id)
 
