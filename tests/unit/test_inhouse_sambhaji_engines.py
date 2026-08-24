@@ -7,7 +7,28 @@ from app.services.cycles.engines.sambhaji_nagar import calculate_placement as sa
 
 
 def candidate(**overrides):
-    values = dict(id=1, candidate_name="C", start_date=date(2026, 1, 1), end_date=None, incentive_active=True, status="ACTIVE", placement_level="BELOW_MANAGER", recruiter="R", manager="M", center_head="CH", avp="AVP", team_lead="TL", senior_manager="SM", crm="CRM", associate_director="AD", margin=Decimal("10.01"))
+    values = dict(
+        id=1,
+        candidate_name="C",
+        start_date=date(2026, 1, 1),
+        end_date=None,
+        incentive_active=True,
+        status="ACTIVE",
+        placement_level="BELOW_MANAGER",
+        recruiter="R",
+        manager="M",
+        center_head="CH",
+        avp="AVP",
+        team_lead="TL",
+        senior_manager="SM",
+        crm="CRM",
+        associate_director="AD",
+        margin=Decimal("10.01"),
+        organization="Ampcus Inc",
+        candidate_source="Ampcus Inc",
+        recruiter_location="Sambhaji Nagar",
+        contract_type="C2C",
+    )
     values.update(overrides)
     return SimpleNamespace(**values)
 
