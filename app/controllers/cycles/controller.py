@@ -55,8 +55,8 @@ def patch_cycle(cycle_id: int, payload: CycleUpdate, db: DbSession) -> CycleOut:
 
 
 @router.delete("/{cycle_id}")
-def delete_cycle(cycle_id: int, db: DbSession) -> dict:
-    return cycle_service.delete_cycle(db, cycle_id)
+def delete_cycle(cycle_id: int, db: DbSession, user: CurrentUser) -> dict:
+    return cycle_service.delete_cycle(db, cycle_id, user=user)
 
 
 @router.get("/{cycle_id}/summary", response_model=CycleSummary)

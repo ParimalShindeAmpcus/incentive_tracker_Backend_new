@@ -119,7 +119,7 @@ def update_cycle(db: Session, cycle_id: int, payload: CycleUpdate) -> CycleOut:
     return CycleOut.model_validate(updated)
 
 
-def delete_cycle(db: Session, cycle_id: int) -> dict:
+def delete_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> dict:
     cycle = cycle_repository.get_cycle(db, cycle_id)
     if cycle is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cycle not found")
@@ -134,6 +134,23 @@ def delete_cycle(db: Session, cycle_id: int) -> dict:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Approved cycles cannot be deleted",
         )
+    cycle_label = cycle.incentive_month or str(cycle.id)
+    cycle_division = cycle.division
+    audit_service.record_event(
+        db,
+        action=AuditAction.CYCLE_CANCEL,
+        title=f"Cancelled cycle {cycle_label}",
+        details=f"Cancelled incentive cycle #{cycle_id} ({cycle_label}, {cycle_division}) in {status_val} status",
+        user=user,
+        metadata={
+            "cycle_id": cycle_id,
+            "cycle": cycle_label,
+            "division": cycle_division,
+            "previous_status": status_val,
+        },
+        entity_type="cycle",
+        entity_id=str(cycle_id),
+    )
     cycle_repository.delete_cycle(db, cycle)
     db.commit()
     return {"message": "deleted", "id": cycle_id}

@@ -86,6 +86,7 @@ def test_new_action_types_are_accepted(client, auth_headers):
         ("CANDIDATE_ADD", "Added 3 candidate(s)"),
         ("CANDIDATE_UPDATE", "Updated candidate Jane Doe"),
         ("CYCLE_APPROVE", "Approved cycle 2026-08"),
+        ("CYCLE_CANCEL", "Cancelled cycle 2026-08"),
         ("PAYMENT_UPDATE", "Updated payment status for Jane Doe"),
         ("COORDINATOR_DELETE", "Deleted left coordinator Jane Doe"),
     ):
@@ -131,3 +132,34 @@ def test_create_coordinator_writes_coordinator_add(client, auth_headers):
     assert matches, "creating a coordinator should write COORDINATOR_ADD"
     assert all(item["action"] == "COORDINATOR_ADD" for item in matches)
     assert any("Audit Trail Coordinator" in (item["title"] + item["details"]) for item in matches)
+
+
+def test_delete_cycle_writes_cycle_cancel(client, auth_headers):
+    # 1. Create a cycle
+    create_res = client.post(
+        "/api/v1/cycles",
+        json={
+            "incentive_month": "2026-09",
+            "division": "NASHIK",
+            "name": "September 2026 Nashik Cycle",
+        },
+        headers=auth_headers,
+    )
+    assert create_res.status_code == 200, create_res.text
+    cycle_id = create_res.json()["id"]
+
+    # 2. Delete (cancel) the cycle
+    del_res = client.delete(f"/api/v1/cycles/{cycle_id}", headers=auth_headers)
+    assert del_res.status_code == 200, del_res.text
+    assert del_res.json()["message"] == "deleted"
+
+    # 3. Verify audit log has CYCLE_CANCEL entry
+    logs_res = client.get(
+        "/api/v1/audit/logs",
+        params={"action": "CYCLE_CANCEL", "search": str(cycle_id)},
+        headers=auth_headers,
+    )
+    assert logs_res.status_code == 200
+    entries = logs_res.json()
+    assert len(entries) >= 1
+    assert any(e["action"] == "CYCLE_CANCEL" and str(cycle_id) in (e["title"] + e["details"] + str(e.get("metadata") or "")) for e in entries)
