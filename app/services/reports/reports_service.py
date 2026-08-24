@@ -126,8 +126,9 @@ def get_report(
     for item in raw:
         mapped = _to_row(item)
         if team and team != "ALL":
-            if mapped.team.strip() != team.strip():
+            if _team_label(item).strip() != team.strip():
                 continue
+        mapped.team = "—"
         rows.append(mapped)
 
     total = sum((Decimal(str(r.incentive_amount_inr)) for r in rows), Decimal("0"))
@@ -142,16 +143,16 @@ def list_teams(
     to_date: Optional[date] = None,
     approved_only: bool = True,
 ) -> ReportTeamsResponse:
-    report = get_report(
+    raw = reports_repository.list_report_dicts(
         db,
         division=division,
-        team=None,
         from_date=from_date,
         to_date=to_date,
         approved_only=approved_only,
     )
     names: Set[str] = set()
-    for r in report.rows:
-        if r.team and r.team.strip():
-            names.add(r.team.strip())
+    for row in raw:
+        team = _team_label(row)
+        if team:
+            names.add(team)
     return ReportTeamsResponse(teams=sorted(names, key=lambda s: s.lower()))

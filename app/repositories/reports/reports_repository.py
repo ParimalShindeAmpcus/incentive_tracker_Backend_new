@@ -22,7 +22,7 @@ def list_report_dicts(
     to_date: Optional[date] = None,
     approved_only: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Return flat dicts for report mapping (line + cycle + candidate fields)."""
+    """Return frozen approved-cycle rows for report mapping."""
     clauses = [
         "eligible = true",
         "amount > 0",
@@ -47,8 +47,36 @@ def list_report_dicts(
     where_sql = " AND ".join(clauses)
     sql = text(
         f"""
-        SELECT *
-        FROM master_reports_view
+        SELECT
+            incentive_line_id AS line_id,
+            person,
+            role,
+            candidate_name AS line_candidate_name,
+            amount,
+            hours,
+            margin AS line_margin,
+            incentive_type,
+            eligible,
+            cycle_id,
+            cycle_name,
+            division,
+            incentive_month,
+            cycle_status,
+            external_candidate_id,
+            candidate_name,
+            start_date,
+            contract_type,
+            candidate_source,
+            organization,
+            candidate_margin,
+            crm,
+            center_head,
+            associate_director,
+            manager,
+            senior_manager,
+            team_lead,
+            team
+        FROM cycle_approval_results
         WHERE {where_sql}
         ORDER BY incentive_month DESC, cycle_id DESC, line_id ASC
         """

@@ -406,8 +406,8 @@ def _team_label_from_candidate(cand: Optional[Candidate]) -> str:
     center_head = (cand.center_head or "").strip()
     associate_director = (cand.associate_director or "").strip()
     manager = (cand.manager or "").strip()
-    senior_manager = (cand.senior_manager or "").strip()
-    team_lead = (cand.team_lead or "").strip()
+    senior_manager = (getattr(cand, "senior_manager", None) or "").strip()
+    team_lead = (getattr(cand, "team_lead", None) or "").strip()
     if crm:
         return crm
     if center_head:
@@ -909,6 +909,7 @@ def _export_row(cycle, line, cand) -> list:
         int(round(float(line.amount or 0))),
         incentive_type,
         source,
+        "—" if getattr(cycle, "division", None) == "ampcusTechClient" else _team_label_from_candidate(cand),
     ]
 
 
@@ -936,6 +937,7 @@ def _export_row_from_snapshot(row) -> list:
         int(round(float(row.amount or 0))),
         incentive_type,
         row.candidate_source or row.organization or "",
+        "—" if row.division == "ampcusTechClient" else (row.team or ""),
     ]
 
 
@@ -957,6 +959,7 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
         "Incentive Amount (INR)",
         "Incentive Type",
         "Candidate Source",
+        "Team",
     ]
     sheet.append(headers)
 
