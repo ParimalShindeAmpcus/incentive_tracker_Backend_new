@@ -347,13 +347,6 @@ def approve_cycle(
     if is_ampcus_client_division(cycle.division):
         if cycle.status != CycleStatus.CALCULATED:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ampcus Client cycle must be calculated before finalization")
-        blocking = {
-            "CANDIDATE_NOT_STARTED", "OWNERSHIP_NOT_CONFIRMED", "CANDIDATE_INACTIVE",
-            "PROJECT_ENDED", "PAYMENT_PENDING", "MARKUP_NOT_AVAILABLE",
-            "MARKUP_OUT_OF_RANGE", "MISSING_HIERARCHY", "COORDINATOR_NOT_IN_MASTER",
-        }
-        if any(line.reason in blocking for line in cycle_repository.list_lines(db, cycle.id)):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ampcus Client cycle has unresolved placement validation errors")
     actor_id = user.id if user is not None else user_id
     cycle.status = CycleStatus.APPROVED
     cycle.approved_at = datetime.now(timezone.utc)
