@@ -19,6 +19,7 @@ class DivisionCardOut(BaseModel):
     name: str
     approved: int = 0
     active: int = 0
+    draft: int = 0
     cancelled: int = 0
     latest_month: Optional[str] = None
     latest_label: Optional[str] = None

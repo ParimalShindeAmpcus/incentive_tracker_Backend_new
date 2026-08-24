@@ -98,7 +98,8 @@ def get_dashboard(
     for code in ordered_codes:
         rows = by_div.get(code, [])
         approved = sum(1 for c in rows if c.status == CycleStatus.APPROVED)
-        active = sum(1 for c in rows if c.status in repo.ACTIVE_STATUSES)
+        active = sum(1 for c in rows if c.status == CycleStatus.CALCULATED)
+        draft = sum(1 for c in rows if c.status in repo.DRAFT_LIKE)
         latest = rows[0].incentive_month if rows else None
         next_key = _next_month_key(latest)
         div = db_divisions.get(code)
@@ -108,6 +109,7 @@ def get_dashboard(
                 name=DISPLAY_NAMES.get(code) or (div.name if div else code),
                 approved=approved,
                 active=active,
+                draft=draft,
                 cancelled=0,
                 latest_month=latest,
                 latest_label=_short_month_label(latest) if latest else "—",
