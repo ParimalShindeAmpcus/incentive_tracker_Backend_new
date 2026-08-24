@@ -1,4 +1,5 @@
 import csv, io
+from datetime import date
 from typing import Optional
 
 from openpyxl import load_workbook
@@ -15,7 +16,24 @@ from app.services.audit import audit_service
 
 def norm(value: str): return " ".join(value.strip().lower().split())
 def apply_status(record, status_value, exit_date):
-    record.employment_status = CoordinatorStatus.LEFT if exit_date else status_value
+    if exit_date:
+        # Check if exit_date is a string and parse it, or if it is already a date object
+        from datetime import datetime
+        d_val = exit_date
+        if isinstance(d_val, str):
+            try:
+                d_val = datetime.strptime(d_val, "%Y-%m-%d").date()
+            except ValueError:
+                try:
+                    d_val = datetime.fromisoformat(d_val).date()
+                except ValueError:
+                    pass
+        if isinstance(d_val, date) and d_val <= date.today():
+            record.employment_status = CoordinatorStatus.LEFT
+        else:
+            record.employment_status = status_value
+    else:
+        record.employment_status = status_value
     record.exit_date = exit_date
     record.incentive_eligible = record.employment_status == CoordinatorStatus.ACTIVE
 

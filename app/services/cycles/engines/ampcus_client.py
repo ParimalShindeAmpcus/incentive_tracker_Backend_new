@@ -119,6 +119,8 @@ def calculate_placement(
         "payment_reference": getattr(payment, "payment_reference", None),
         "ownership_confirmed": getattr(candidate, "ownership_confirmed", False),
         "start_date": getattr(candidate, "start_date", None).isoformat() if getattr(candidate, "start_date", None) else None,
+        "end_date": getattr(candidate, "end_date", None).isoformat() if getattr(candidate, "end_date", None) else None,
+        "project_ended": _project_ended(candidate, cycle_end),
         "contract_type": getattr(candidate, "contract_type", None),
         "candidate_source": getattr(candidate, "candidate_source", None) or getattr(candidate, "organization", None),
         "candidate_id": getattr(candidate, "start_id", None) or getattr(candidate, "external_candidate_id", None) or str(candidate.id),
