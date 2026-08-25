@@ -74,19 +74,6 @@ def create_cycle(db: Session, payload: CycleCreate, created_by: Optional[int] = 
     data["status"] = CycleStatus.DRAFT
     cycle = cycle_repository.create_cycle(db, data)
     cycle_repository.ensure_default_checklist(db, cycle.id)
-    if is_ampcus_client_division(cycle.division) or is_sambhaji_nagar_division(cycle.division):
-        candidates = candidate_repository.list_all_candidates(db)
-        ids: list[int] = []
-        for cand in candidates:
-            resolved = resolve_candidate_division(
-                organization=cand.organization,
-                recruiter_work_location=cand.recruiter_location,
-                contract_type=cand.contract_type,
-                master_division=cand.division,
-            )
-            if cycle.division and resolved.resolved_division == cycle.division:
-                ids.append(cand.id)
-        cycle_repository.ensure_payment_statuses(db, cycle.id, ids)
     db.commit()
     db.refresh(cycle)
     return CycleOut.model_validate(cycle)
@@ -909,7 +896,7 @@ def _export_row(cycle, line, cand) -> list:
         int(round(float(line.amount or 0))),
         incentive_type,
         source,
-        "—" if getattr(cycle, "division", None) == "ampcusTechClient" else _team_label_from_candidate(cand),
+        _team_label_from_candidate(cand),
     ]
 
 
@@ -937,7 +924,7 @@ def _export_row_from_snapshot(row) -> list:
         int(round(float(row.amount or 0))),
         incentive_type,
         row.candidate_source or row.organization or "",
-        "—" if row.division == "ampcusTechClient" else (row.team or ""),
+        row.team or "",
     ]
 
 
