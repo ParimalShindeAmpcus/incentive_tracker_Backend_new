@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.repositories.entities.organization import Division, Employee, Organization
+from app.repositories.entities.organization import Division, Organization
 
 
 def list_organizations(db: Session, active_only: bool = False) -> List[Organization]:
@@ -24,19 +24,6 @@ def list_divisions(
         q = q.filter(Division.organization_id == organization_id)
     if active_only:
         q = q.filter(Division.is_active.is_(True))
-    return q.all()
-
-
-def list_employees(
-    db: Session,
-    division_id: Optional[int] = None,
-    active_only: bool = False,
-) -> List[Employee]:
-    q = db.query(Employee).order_by(Employee.full_name)
-    if division_id is not None:
-        q = q.filter(Employee.division_id == division_id)
-    if active_only:
-        q = q.filter(Employee.is_active.is_(True))
     return q.all()
 
 

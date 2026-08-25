@@ -255,7 +255,8 @@ def calculate_placement(
             continue
             
         coord = lookup_coordinator(coordinators, person)
-        if not coord:
+        # No Recruiter Master uploaded at all -> skip the presence exemption entirely.
+        if coordinators and not coord:
             lines.append(
                 _line(
                     candidate,

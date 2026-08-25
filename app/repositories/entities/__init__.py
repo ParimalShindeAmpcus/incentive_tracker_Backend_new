@@ -6,7 +6,6 @@ from app.repositories.entities.candidate import Candidate, CandidateDataVersion
 from app.repositories.entities.cycle import (
     CycleApprovalResult,
     CycleChecklistItem,
-    CycleDataSnapshot,
     CycleHoursMatch,
     CycleManualAdjustment,
     CyclePaymentStatus,
@@ -17,19 +16,11 @@ from app.repositories.entities.cycle import (
 )
 from app.repositories.entities.hours import HoursBenchmark, HoursDataVersion, HoursRow
 from app.repositories.entities.incentive import (
-    IncentiveApproval,
     IncentiveLine,
-    IncentivePayment,
     IncentiveSlab,
-    PaidIncentiveLedger,
 )
-from app.repositories.entities.organization import Division, Employee, Organization
+from app.repositories.entities.organization import Division, Organization
 from app.repositories.entities.project_end import ProjectEndRecord, ProjectEndVersion
-from app.repositories.entities.recruiter import (
-    RecruiterMasterVersion,
-    RecruiterStatus,
-    RecruiterStatusEnum,
-)
 from app.repositories.entities.user import Role, User, user_roles
 from app.repositories.entities.vlookup import (
     VLookupMatchedRecord,
@@ -45,7 +36,6 @@ __all__ = [
     "CandidateDataVersion",
     "CycleApprovalResult",
     "CycleChecklistItem",
-    "CycleDataSnapshot",
     "CycleHoursMatch",
     "CycleManualAdjustment",
     "CyclePaymentStatus",
@@ -56,19 +46,12 @@ __all__ = [
     "HoursBenchmark",
     "HoursDataVersion",
     "HoursRow",
-    "IncentiveApproval",
     "IncentiveLine",
-    "IncentivePayment",
     "IncentiveSlab",
-    "PaidIncentiveLedger",
     "Division",
-    "Employee",
     "Organization",
     "ProjectEndRecord",
     "ProjectEndVersion",
-    "RecruiterMasterVersion",
-    "RecruiterStatus",
-    "RecruiterStatusEnum",
     "Role",
     "User",
     "user_roles",

@@ -135,12 +135,12 @@ def _employment_status(
     """
     Resolve ACTIVE|LEFT|NOTICE|MISSING for a hierarchy participant.
 
-    When employment_status is None, unit tests without a Recruiter Master snapshot
-    keep the historical default of ACTIVE.
-    When a snapshot is provided, a person with no row is MISSING (not ACTIVE).
+    When employment_status is None or empty (no Recruiter Master uploaded),
+    keep the historical default of ACTIVE — nobody is exempted.
+    When a non-empty snapshot is provided, a person with no row is MISSING (not ACTIVE).
     LEFT / NOTICE / Inactive rows in Recruiter Master still count as present.
     """
-    if employment_status is None:
+    if not employment_status:
         return "ACTIVE"
     key = normalize_person(person)
     if role:

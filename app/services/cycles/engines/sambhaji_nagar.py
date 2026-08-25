@@ -156,7 +156,7 @@ def calculate_placement(
 
     # Recruiter employment status — missing from Recruiter Master is not LEFT/NOTICE
     coord_rec = lookup_coordinator(coordinators, c.recruiter)
-    if (c.recruiter or "").strip() and not coord_rec:
+    if coordinators and (c.recruiter or "").strip() and not coord_rec:
         recruiter_status = "MISSING"
     else:
         recruiter_status = getattr(coord_rec, "employment_status", "ACTIVE")
@@ -250,7 +250,7 @@ def calculate_placement(
 
         if role not in FIXED:
             coord_rec = lookup_coordinator(coordinators, person)
-            if not coord_rec:
+            if coordinators and not coord_rec:
                 lines.append(_line(c, role, person, 0, hours, False, EXEMPTED_MISSING_RECRUITER_MASTER, "ONE_TIME"))
             continue
 

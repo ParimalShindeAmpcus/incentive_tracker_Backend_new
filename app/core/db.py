@@ -47,6 +47,34 @@ def init_db() -> None:
     dialect = engine.dialect.name
     is_pg = dialect == "postgresql"
 
+    # Obsolete tables removed from the codebase (2026-08). Dropped in FK-safe order
+    # so every environment converges on the new schema at startup.
+    _OBSOLETE_TABLES = (
+        "paid_incentive_ledger",
+        "incentive_approvals",
+        "cycle_data_snapshots",
+        "incentive_payments",
+        "recruiter_statuses",
+        "recruiter_master_versions",
+        "employees",
+    )
+    existing_tables = set(inspector.get_table_names())
+    if any(t in existing_tables for t in _OBSOLETE_TABLES):
+        with engine.begin() as connection:
+            if is_pg:
+                # incentive_cycles.recruiter_version_id used to reference recruiter_master_versions.
+                connection.execute(
+                    text(
+                        "ALTER TABLE incentive_cycles "
+                        "DROP CONSTRAINT IF EXISTS incentive_cycles_recruiter_version_id_fkey"
+                    )
+                )
+            for table in _OBSOLETE_TABLES:
+                connection.execute(text(f"DROP TABLE IF EXISTS {table}"))
+            if is_pg:
+                connection.execute(text("DROP TYPE IF EXISTS recruiter_status_enum"))
+        inspector.clear_cache()
+
     def _add_missing(table: str, additions: dict[str, str]) -> None:
         if table not in inspector.get_table_names():
             return

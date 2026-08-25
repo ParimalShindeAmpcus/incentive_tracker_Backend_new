@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -31,20 +31,3 @@ class Division(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="divisions")
-    employees: Mapped[List["Employee"]] = relationship("Employee", back_populates="division")
-
-
-class Employee(Base):
-    __tablename__ = "employees"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    division_id: Mapped[Optional[int]] = mapped_column(ForeignKey("divisions.id"))
-    employee_code: Mapped[Optional[str]] = mapped_column(String(100), index=True)
-    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    normalized_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    email: Mapped[Optional[str]] = mapped_column(String(255))
-    role_title: Mapped[Optional[str]] = mapped_column(String(100))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    division: Mapped[Optional[Division]] = relationship("Division", back_populates="employees")

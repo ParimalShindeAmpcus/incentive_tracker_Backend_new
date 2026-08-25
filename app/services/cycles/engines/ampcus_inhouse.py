@@ -122,9 +122,10 @@ def calculate_placement(c: Candidate, *, cycle_end: date, coordinators: Dict[str
             lines.append(_line(c, role, person, 0, False, "ALREADY_PAID", days))
             continue
 
-        # Presence in Recruiter Master (status is ignored here; LEFT/NOTICE use existing rules below)
+        # Presence in Recruiter Master (status is ignored here; LEFT/NOTICE use existing rules below).
+        # An entirely empty Recruiter Master means "no master uploaded" -> no exemption.
         record = lookup_coordinator(coordinators, person)
-        if not record:
+        if coordinators and not record:
             lines.append(_line(c, role, person, 0, False, EXEMPTED_MISSING_RECRUITER_MASTER, days))
             continue
 

@@ -61,9 +61,8 @@ class IncentiveCycle(Base):
     candidate_version_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("candidate_data_versions.id")
     )
-    recruiter_version_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("recruiter_master_versions.id")
-    )
+    # Legacy column kept for API compatibility; recruiter_master_versions table was removed.
+    recruiter_version_id: Mapped[Optional[int]] = mapped_column(Integer)
     hours_version_id: Mapped[Optional[int]] = mapped_column(ForeignKey("hours_data_versions.id"))
     project_end_version_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("project_end_versions.id")
@@ -75,9 +74,6 @@ class IncentiveCycle(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    snapshots: Mapped[List["CycleDataSnapshot"]] = relationship(
-        "CycleDataSnapshot", back_populates="cycle", cascade="all, delete-orphan"
-    )
     matches: Mapped[List["CycleHoursMatch"]] = relationship(
         "CycleHoursMatch", back_populates="cycle", cascade="all, delete-orphan"
     )
@@ -102,18 +98,6 @@ class IncentiveCycle(Base):
     approval_results: Mapped[List["CycleApprovalResult"]] = relationship(
         "CycleApprovalResult", back_populates="cycle", cascade="all, delete-orphan"
     )
-
-
-class CycleDataSnapshot(Base):
-    __tablename__ = "cycle_data_snapshots"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    cycle_id: Mapped[int] = mapped_column(ForeignKey("incentive_cycles.id"), nullable=False, index=True)
-    snapshot_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    cycle: Mapped[IncentiveCycle] = relationship("IncentiveCycle", back_populates="snapshots")
 
 
 class CycleHoursMatch(Base):

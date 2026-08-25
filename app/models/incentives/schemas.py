@@ -48,24 +48,3 @@ class IncentiveSlabOut(BaseModel):
     updated_by: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-
-class PaymentCreate(BaseModel):
-    incentive_line_id: int
-    amount: Decimal
-    payment_reference: Optional[str] = None
-    notes: Optional[str] = None
-    status: str = "PAID"
-
-
-class PaymentOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    incentive_line_id: int
-    amount: Decimal
-    payment_reference: Optional[str] = None
-    paid_by: Optional[int] = None
-    status: str
-    paid_at: Optional[datetime] = None
-    notes: Optional[str] = None

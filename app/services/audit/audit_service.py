@@ -1,12 +1,12 @@
 """Audit service."""
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy.orm import Session
 
 from app.models.audit.schemas import AuditLogCreate, AuditLogOut
 from app.repositories.audit import audit_repository
-from app.repositories.entities.audit import AuditAction
+from app.repositories.entities.audit import AuditAction, AuditLog
 from app.repositories.entities.user import User
 
 
@@ -45,6 +45,34 @@ def list_logs(
         skip=skip,
     )
     return [AuditLogOut.from_orm_row(r) for r in rows]
+
+
+def record_event(
+    db: Session,
+    *,
+    action: Union[AuditAction, str],
+    title: str,
+    details: str,
+    user: Optional[User] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+) -> AuditLog:
+    """Write an audit row in the caller's transaction. Does not commit."""
+    user_display = _user_display_from_user(user) if user is not None else "system"
+    username = _username_from_user(user) if user is not None else "system"
+    return audit_repository.write_log(
+        db,
+        action=action,
+        title=title,
+        details=details,
+        user_display=user_display,
+        username=username,
+        metadata=metadata,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        user_id=user.id if user is not None else None,
+    )
 
 
 def create_log(db: Session, payload: AuditLogCreate, user: User) -> AuditLogOut:
