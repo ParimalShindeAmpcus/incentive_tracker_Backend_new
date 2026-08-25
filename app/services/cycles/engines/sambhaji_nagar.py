@@ -64,6 +64,27 @@ def is_valid_sn_location(recruiter_location: Optional[str]) -> bool:
     return any(kw in loc for kw in VALID_LOCATIONS)
 
 
+def _limit_roles_sambhaji(people: Dict[str, Optional[str]], amounts: Dict[str, int]) -> set[str]:
+    """Apply max-two-roles rule: if one person holds multiple roles, keep only
+    the top 2 highest-payout roles for that person."""
+    by_person: Dict[str, List[str]] = {}
+    for role, person in people.items():
+        if person and person.strip() and person.strip().lower() not in {"not applicable", "n/a", "—", "-", ""}:
+            key = person.strip().lower()
+            by_person.setdefault(key, []).append(role)
+
+    excluded_roles: set[str] = set()
+    MAX_ROLES = 2
+    for person_key, roles in by_person.items():
+        if len(roles) <= MAX_ROLES:
+            continue
+        # Sort by payout descending, keep top 2
+        sorted_roles = sorted(roles, key=lambda r: amounts.get(r, 0), reverse=True)
+        for excess_role in sorted_roles[MAX_ROLES:]:
+            excluded_roles.add(excess_role)
+    return excluded_roles
+
+
 def matrix_amount(margin: Optional[Decimal], hours: Decimal) -> int:
     """Return INR incentive amount from TABLE 5."""
     if margin is None or hours < ZERO:
@@ -114,6 +135,8 @@ def calculate_placement(
     hours: Decimal,
     payment_status: str,
     coordinators: Dict[str, CoordinatorRecord],
+    paid_keys: Optional[set[str]] = None,
+    cycle_end: Optional[date] = None,
 ) -> List[LineDraft]:
     """
     Calculate all incentive lines for one Sambhaji Nagar candidate placement.
@@ -148,7 +171,10 @@ def calculate_placement(
 
     # Blocking checks
     blocked = ""
-    if org_val not in VALID_ORGS:
+    if cycle_end and c.start_date and c.start_date > cycle_end:
+        blocked = "NOT_YET_STARTED"
+        amount = 0
+    elif org_val not in VALID_ORGS:
         blocked = "INVALID_SOURCE"
         amount = 0
     elif not loc_valid:
@@ -162,8 +188,35 @@ def calculate_placement(
     elif not amount:
         blocked = "MARGIN_OR_HOURS_OUTSIDE_MATRIX"
 
+    base_recruiter_amount = 0 if blocked else amount
+
+    people = {
+        "Recruiter": c.recruiter,
+        "Team Lead": c.team_lead,
+        "Manager": c.manager,
+        "Senior Manager": c.senior_manager,
+        "CRM": c.crm,
+        "Associate Director": c.associate_director,
+        "Center Head": c.center_head,
+    }
+
+    amounts = {
+        "Recruiter": base_recruiter_amount,
+        "Team Lead": FIXED.get("Team Lead", 0),
+        "Manager": FIXED.get("Manager", 0),
+        "Senior Manager": FIXED.get("Senior Manager", 0),
+        "CRM": FIXED.get("CRM", 0),
+        "Associate Director": FIXED.get("Associate Director", 0),
+        "Center Head": FIXED.get("Center Head", 0),
+    }
+
+    excluded_roles = _limit_roles_sambhaji(people, amounts)
+
     # Recruiter eligibility
-    if recruiter_status == "MISSING":
+    if "Recruiter" in excluded_roles:
+        recruiter_reason = "EXCEEDED_MAX_ROLES"
+        recruiter_ok = False
+    elif recruiter_status == "MISSING":
         recruiter_reason = EXEMPTED_MISSING_RECRUITER_MASTER
         recruiter_ok = False
     elif recruiter_status == "LEFT":
@@ -176,7 +229,7 @@ def calculate_placement(
         recruiter_reason = blocked or "ELIGIBLE"
         recruiter_ok = bool(c.recruiter) and not blocked
 
-    recruiter_amount = 0 if (blocked or recruiter_status == "MISSING") else amount
+    recruiter_amount = amount if recruiter_ok else 0
 
     lines: List[LineDraft] = [
         _line(c, "Recruiter", c.recruiter, recruiter_amount, hours, recruiter_ok, recruiter_reason)
@@ -205,8 +258,18 @@ def calculate_placement(
         
         coord_rec = lookup_coordinator(coordinators, person)
         
-        # Presence in Recruiter Master first; LEFT/NOTICE still use existing status rules
-        if not coord_rec:
+        person_clean = person.strip().lower()
+        # Deduplication check
+        key = f"{c.id}|ONE_TIME|{role}|{person_clean}"
+        
+        # Check coordinator master status
+        if paid_keys and key in paid_keys:
+            lead_eligible = False
+            lead_reason = "ALREADY_PAID"
+        elif role in excluded_roles:
+            lead_eligible = False
+            lead_reason = "EXCEEDED_MAX_ROLES"
+        elif not coord_rec:
             lead_eligible = False
             lead_reason = EXEMPTED_MISSING_RECRUITER_MASTER
         else:
@@ -290,6 +353,7 @@ def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
         "sn_invalid_location": 0,
         "sn_full_time": 0,
         "sn_recruiter_left": 0,
+        "sn_not_yet_started": 0,
     }
     for line in lines:
         if line.role != "Recruiter":
@@ -308,6 +372,8 @@ def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
             counts["sn_full_time"] += 1
         elif line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"}:
             counts["sn_recruiter_left"] += 1
+        elif line.reason == "NOT_YET_STARTED":
+            counts["sn_not_yet_started"] += 1
 
     return [
         {"check_key": "sn_recruiter_eligible", "severity": "GREEN" if counts["sn_recruiter_eligible"] > 0 else "YELLOW",
@@ -324,4 +390,6 @@ def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
          "count": counts["sn_full_time"], "message": "Placements excluded: Full-Time contract", "details_json": None},
         {"check_key": "sn_recruiter_left", "severity": "YELLOW" if counts["sn_recruiter_left"] > 0 else "GREEN",
          "count": counts["sn_recruiter_left"], "message": "Placements excluded: Recruiter left / on notice", "details_json": None},
+        {"check_key": "sn_not_yet_started", "severity": "YELLOW" if counts["sn_not_yet_started"] > 0 else "GREEN",
+         "count": counts["sn_not_yet_started"], "message": "Placements excluded: Start date is after incentive month", "details_json": None},
     ]

@@ -292,6 +292,8 @@ def run_cycle_calculation(
                 hours=hours,
                 payment_status=str(getattr(payment_by_candidate.get(pk), "status", "PAYMENT_PENDING")),
                 coordinators=coordinator_index(db),
+                paid_keys=paid_keys,
+                cycle_end=window.end,
             )
             lines.extend(drafts)
             continue
@@ -652,6 +654,7 @@ def run_cycle_calculation(
                 hours=hours,
                 payment_status=str(getattr(payment_by_candidate.get(pk), "status", "PAYMENT_PENDING")),
                 coordinators=coordinators,
+                paid_keys=paid_keys,
             )
             lines.extend(drafts)
 
