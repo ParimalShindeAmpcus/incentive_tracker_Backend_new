@@ -6,6 +6,7 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.models.vlookup.schemas import (
+    ManualEditHoursBody,
     VLookupActionResponse,
     VLookupCancelBody,
     VLookupDraftListResponse,
@@ -15,6 +16,7 @@ from app.models.vlookup.schemas import (
     VLookupMessyFileListResponse,
     VLookupPublishHoursResponse,
     VLookupRematchBody,
+    VLookupRematchClientBody,
     VLookupReviewBody,
     VLookupStatsResponse,
     VLookupTemplateResponse,
@@ -90,6 +92,22 @@ def template_candidates(
     )
 
 
+@router.get("/client-file-candidates")
+def client_file_candidates(
+    db: DbSession,
+    user: CurrentUser,
+    q: Optional[str] = Query(None),
+    client: Optional[str] = Query(None),
+    batch_id: Optional[str] = Query(None),
+    limit: int = Query(25, ge=1, le=100),
+):
+    """Search candidates from the client hours file for rematch purposes."""
+    _ = user
+    return vlookup_service.search_client_file_candidates(
+        db, q=q, client=client, batch_id=batch_id, limit=limit
+    )
+
+
 @router.get("/hours-template", response_model=VLookupHoursTemplateListResponse)
 def hours_template(
     db: DbSession,
@@ -161,6 +179,19 @@ def rematch(
     if not body.reviewed_by:
         body.reviewed_by = getattr(user, "email", None) or str(user.id)
     return vlookup_service.rematch(db, match_id, body)
+
+
+@router.post("/matches/{match_id}/rematch-client", response_model=VLookupActionResponse)
+def rematch_client(
+    match_id: int,
+    body: VLookupRematchClientBody,
+    db: DbSession,
+    user: CurrentUser,
+) -> VLookupActionResponse:
+    """Rematch a template candidate to a different client file identity."""
+    if not body.reviewed_by:
+        body.reviewed_by = getattr(user, "email", None) or str(user.id)
+    return vlookup_service.rematch_client(db, match_id, body)
 
 
 @router.get("/drafts", response_model=VLookupDraftListResponse)
@@ -245,3 +276,16 @@ def publish_hours(
         month_key=month,
         uploaded_by=user.id,
     )
+
+
+@router.put("/matches/{match_id}/edit-hours", response_model=VLookupActionResponse)
+def edit_candidate_hours(
+    match_id: int,
+    body: ManualEditHoursBody,
+    db: DbSession,
+    user: CurrentUser,
+) -> VLookupActionResponse:
+    """Edit candidate hours manually for benchmark purposes."""
+    if not body.reviewed_by:
+        body.reviewed_by = getattr(user, "email", None) or str(user.id)
+    return vlookup_service.edit_candidate_hours(db, match_id, body, user)

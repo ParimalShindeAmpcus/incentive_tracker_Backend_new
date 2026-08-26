@@ -59,6 +59,13 @@ class VLookupRematchBody(BaseModel):
     accept: bool = True
 
 
+class VLookupRematchClientBody(BaseModel):
+    client_candidate_name: str = Field(..., description="Client file candidate name to link")
+    reviewed_by: Optional[str] = "accounts"
+    notes: Optional[str] = None
+    accept: bool = True
+
+
 class VLookupActionResponse(BaseModel):
     status: str = "success"
     match_id: int
@@ -170,3 +177,27 @@ class VLookupDraftOut(BaseModel):
 
 class VLookupDraftListResponse(BaseModel):
     drafts: List[VLookupDraftOut] = Field(default_factory=list)
+
+
+class ManualEditHoursBody(BaseModel):
+    candidate_id: Optional[str] = None
+    candidate_name: str
+    client_name: Optional[str] = None
+    month: str
+    total_hours: float = Field(..., gt=0)
+    weekly_breakdown: Dict[str, float] = Field(default_factory=dict)
+    notes: Optional[str] = None
+    reviewed_by: Optional[str] = "accounts"
+
+
+class ManualAddCandidateBody(BaseModel):
+    batch_id: str
+    candidate_id: Optional[str] = None
+    candidate_name: str
+    client_name: Optional[str] = None
+    month: str
+    total_hours: float = Field(..., gt=0)
+    weekly_breakdown: Dict[str, float] = Field(default_factory=dict)
+    notes: Optional[str] = None
+    reviewed_by: Optional[str] = "accounts"
+

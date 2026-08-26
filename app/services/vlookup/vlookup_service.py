@@ -559,6 +559,131 @@ def search_template_candidates(
     return VLookupTemplateSearchResponse(candidates=ranked)
 
 
+def search_client_file_candidates(
+    db: Session,
+    q: Optional[str] = None,
+    client: Optional[str] = None,
+    batch_id: Optional[str] = None,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """
+    Search for candidates in the client hours file (messy file) for rematch purposes.
+    Returns client-side identities with similarity ranking based on the query.
+    """
+    latest = repo.latest_batch_id(db, batch_id)
+    if not latest:
+        return {"candidates": []}
+    
+    # Get all weekly hours records from the client file
+    weekly_rows = db.query(VLookupWeeklyHours).filter(
+        VLookupWeeklyHours.upload_batch_id == latest
+    ).all()
+    
+    if not weekly_rows:
+        return {"candidates": []}
+    
+    # Aggregate by candidate name to get unique identities
+    from collections import defaultdict
+    candidate_map = defaultdict(lambda: {
+        "hours": 0,
+        "client": "",
+        "month": "",
+        "weeks": 0,
+        "normalized_name": "",
+    })
+    
+    for row in weekly_rows:
+        name = row.candidate_name_messy
+        candidate_map[name]["hours"] += row.hours_worked or 0
+        candidate_map[name]["client"] = row.client_name or candidate_map[name]["client"]
+        candidate_map[name]["month"] = row.month or candidate_map[name]["month"]
+        candidate_map[name]["weeks"] += 1
+        candidate_map[name]["normalized_name"] = row.normalized_name or normalize_name(name)
+    
+    # Convert to list format
+    client_candidates = [
+        {
+            "candidate_name": name,
+            "client_name": data["client"],
+            "month": data["month"],
+            "total_hours": int(data["hours"]),
+            "week_count": data["weeks"],
+            "normalized_name": data["normalized_name"],
+        }
+        for name, data in candidate_map.items()
+    ]
+    
+    query_name = (q or "").strip()
+    if not query_name:
+        # No query, return first N candidates
+        return {
+            "candidates": [
+                {
+                    **c,
+                    "why_suggested": f"{c['total_hours']}h across {c['week_count']} weeks",
+                    "confidence": 0,
+                    "identity_compatible": False,
+                }
+                for c in sorted(client_candidates, key=lambda x: x["candidate_name"])[:limit]
+            ]
+        }
+    
+    # Use the matcher to rank candidates by similarity
+    matcher = ReconciliationMatcher()
+    
+    # Prepare candidates in the format the matcher expects
+    template_format = [
+        {
+            "candidate_name": c["candidate_name"],
+            "client_name": c["client_name"],
+            "month": c["month"],
+        }
+        for c in client_candidates
+    ]
+    
+    # Rank using the matcher's similarity algorithm
+    ranked = matcher.rank_for_rematch(
+        messy_name=query_name,
+        template_candidates=template_format,
+        messy_client=client,
+        limit=limit,
+    )
+    
+    # Enrich with hours data
+    name_to_candidate = {c["candidate_name"]: c for c in client_candidates}
+    enriched = []
+    for r in ranked:
+        candidate_name = r.get("candidate_name")
+        if candidate_name in name_to_candidate:
+            original = name_to_candidate[candidate_name]
+            enriched.append({
+                "candidate_name": candidate_name,
+                "client_name": r.get("client_name"),
+                "month": r.get("month"),
+                "total_hours": original["total_hours"],
+                "week_count": original["week_count"],
+                "why_suggested": r.get("why_suggested", "Name similarity match"),
+                "confidence": r.get("confidence", 0),
+                "identity_compatible": r.get("identity_compatible", False),
+            })
+    
+    # Fallback: simple text search if matcher returns nothing
+    if not enriched:
+        like = query_name.lower()
+        enriched = [
+            {
+                **c,
+                "why_suggested": "Text contains search tokens",
+                "confidence": 0,
+                "identity_compatible": False,
+            }
+            for c in client_candidates
+            if like in (c["candidate_name"] or "").lower()
+        ][:limit]
+    
+    return {"candidates": enriched}
+
+
 def accept_match(
     db: Session, match_id: int, body: Optional[VLookupReviewBody] = None
 ) -> VLookupActionResponse:
@@ -713,6 +838,146 @@ def rematch(
     return VLookupActionResponse(
         match_id=match_id,
         message="Match updated",
+        template_candidate_id=template.candidate_id,
+        template_candidate_name=template.candidate_name,
+    )
+
+
+def rematch_client(
+    db: Session, match_id: int, body: "VLookupRematchClientBody"
+) -> VLookupActionResponse:
+    """
+    Rematch a template candidate to a different client file identity.
+    This is the correct Smart Match flow: template candidate -> client file candidate.
+    """
+    from app.models.vlookup.schemas import VLookupRematchClientBody
+    
+    match = repo.get_match(db, match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    if not match.template_candidate_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot rematch: no template candidate linked. This match has no master record.",
+        )
+    
+    # Get the template candidate to preserve it
+    template = repo.get_template_by_id(db, match.template_candidate_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template candidate not found")
+    
+    # Find the client file candidate's hours
+    batch_id = match.upload_batch_id
+    weekly_rows = db.query(VLookupWeeklyHours).filter(
+        VLookupWeeklyHours.upload_batch_id == batch_id,
+        VLookupWeeklyHours.candidate_name_messy == body.client_candidate_name,
+    ).all()
+    
+    if not weekly_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Client file candidate '{body.client_candidate_name}' not found in this batch",
+        )
+    
+    # Aggregate hours from the client file candidate
+    total_hours = sum(row.hours_worked or 0 for row in weekly_rows)
+    weekly_breakdown = {}
+    monthly_hours = defaultdict(float)
+    weekly_by_month = defaultdict(dict)
+    client_name = ""
+    messy_month = ""
+    
+    for row in weekly_rows:
+        week = row.week or "Week"
+        month = row.month or ""
+        hours = row.hours_worked or 0
+        
+        weekly_breakdown[week] = weekly_breakdown.get(week, 0) + hours
+        if month:
+            monthly_hours[month] += hours
+            if week not in weekly_by_month[month]:
+                weekly_by_month[month][week] = 0
+            weekly_by_month[month][week] += hours
+            messy_month = month
+        
+        if row.client_name and not client_name:
+            client_name = row.client_name
+    
+    # Update the match to point to the new client file identity
+    match.messy_name_original = body.client_candidate_name
+    match.messy_client_name = client_name
+    match.messy_month = messy_month
+    match.total_hours = int(total_hours)
+    match.weekly_breakdown = weekly_breakdown
+    match.monthly_hours = dict(monthly_hours)
+    match.weekly_by_month = {k: dict(v) for k, v in weekly_by_month.items()}
+    match.match_method = "manual_rematch"
+    match.review_action = "rematched_client"
+    match.confidence_score = 100.0
+    match.match_status = "accepted" if body.accept else "needs_review"
+    repo.touch_reviewed(match, reviewed_by=body.reviewed_by, notes=body.notes)
+    
+    # Update explanation
+    explanation = dict(match.match_explanation or {})
+    summary = (
+        f"Rematched: Template candidate '{template.candidate_name}' ({template.candidate_id}) "
+        f"linked to client file identity '{body.client_candidate_name}' ({total_hours}h)."
+    )
+    if body.notes:
+        summary = f"{summary} Note: {body.notes}"
+    
+    explanation["identity_summary"] = summary
+    explanation["identity_headline"] = f"Rematched: {template.candidate_name} → {body.client_candidate_name}"
+    explanation["manual_rematch"] = {
+        "template_candidate_id": template.candidate_id,
+        "template_candidate_name": template.candidate_name,
+        "client_candidate_name": body.client_candidate_name,
+        "client_name": client_name,
+        "total_hours": int(total_hours),
+        "reviewed_by": body.reviewed_by,
+        "notes": body.notes,
+    }
+    explanation["alternatives"] = []
+    explanation["audit"] = {
+        "what_happened": explanation["identity_headline"],
+        "why": summary,
+        "identity_status": match.match_status,
+        "validation_status": (explanation.get("validation") or {}).get("status"),
+        "validation_summary": (explanation.get("validation") or {}).get("summary"),
+        "has_alternatives": False,
+    }
+    match.match_explanation = explanation
+    
+    # Audit log
+    audit_service.record_event(
+        db,
+        action=AuditAction.HOURS_RECONCILIATION,
+        title="Template candidate rematched to client file identity",
+        details=(
+            f"Template candidate '{template.candidate_name}' ({template.candidate_id}) "
+            f"rematched to client file identity '{body.client_candidate_name}' "
+            f"with {total_hours}h by {body.reviewed_by}"
+        ),
+        user=None,
+        metadata={
+            "match_id": match_id,
+            "template_candidate_id": template.candidate_id,
+            "template_candidate_name": template.candidate_name,
+            "client_candidate_name": body.client_candidate_name,
+            "total_hours": int(total_hours),
+            "reviewed_by": body.reviewed_by,
+            "notes": body.notes,
+        },
+        entity_type="vlookup_match",
+        entity_id=str(match_id),
+    )
+    
+    db.commit()
+    
+    return VLookupActionResponse(
+        match_id=match_id,
+        message=f"Template candidate rematched to '{body.client_candidate_name}'",
         template_candidate_id=template.candidate_id,
         template_candidate_name=template.candidate_name,
     )
@@ -1461,3 +1726,265 @@ def discard_draft(db: Session, batch_id: str, user: User) -> Dict[str, str]:
     )
     db.commit()
     return {"status": "deleted", "batch_id": batch_id}
+
+
+
+def edit_candidate_hours(
+    db: Session,
+    match_id: int,
+    body: "ManualEditHoursBody",
+    user: User,
+) -> VLookupActionResponse:
+    """
+    Edit candidate hours manually for benchmark purposes.
+    Useful when hours were mistakenly not met and need adjustment.
+    
+    For unmatched candidates, automatically accepts the match after editing hours,
+    allowing the candidate to be exported for incentive processing.
+    """
+    from app.models.vlookup.schemas import ManualEditHoursBody
+    
+    match = repo.get_match(db, match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    was_unmatched = match.match_status == "unmatched"
+    
+    # Update hours
+    match.total_hours = int(round(body.total_hours))
+    
+    # Update weekly breakdown if provided
+    if body.weekly_breakdown:
+        match.weekly_breakdown = {
+            str(k): float(v) for k, v in body.weekly_breakdown.items()
+        }
+        # Recalculate month-by-month hours
+        month_hours = {}
+        for week, hours in body.weekly_breakdown.items():
+            # Assign to the specified month
+            month_hours[body.month] = month_hours.get(body.month, 0) + hours
+        match.monthly_hours = month_hours
+    else:
+        # Clear weekly breakdown, use total only
+        match.weekly_breakdown = {}
+        match.monthly_hours = {body.month: body.total_hours}
+    
+    # Update month if changed
+    if body.month:
+        match.messy_month = normalize_month_year(body.month) or body.month
+    
+    # Update review tracking
+    match.manually_reviewed = True
+    match.review_action = "manual_edit"
+    repo.touch_reviewed(match, reviewed_by=body.reviewed_by, notes=body.notes)
+    
+    # Update explanation
+    explanation = dict(match.match_explanation or {})
+    edit_note = (
+        f"Hours manually edited by {body.reviewed_by} for benchmark purposes. "
+        f"Total: {body.total_hours}h for {body.month}."
+    )
+    if body.notes:
+        edit_note = f"{edit_note} Note: {body.notes}"
+    
+    explanation["manual_edit"] = {
+        "edited_by": body.reviewed_by,
+        "timestamp": datetime.utcnow().isoformat(),
+        "total_hours": body.total_hours,
+        "month": body.month,
+        "notes": body.notes,
+        "reason": "benchmark_adjustment",
+    }
+    
+    # Auto-accept unmatched candidates after editing hours
+    if was_unmatched:
+        match.match_status = "accepted"
+        match.review_action = "accepted"
+        edit_note = (
+            f"{edit_note} Automatically accepted after manual hours edit - "
+            f"candidate can now be exported for incentive processing."
+        )
+        explanation["auto_accepted_after_edit"] = {
+            "accepted_at": datetime.utcnow().isoformat(),
+            "accepted_by": body.reviewed_by,
+            "reason": "unmatched_candidate_hours_manually_added",
+        }
+        explanation["identity_headline"] = f"Accepted: {match.template_candidate_name}"
+    
+    explanation["identity_summary"] = edit_note
+    match.match_explanation = explanation
+    
+    # Audit log
+    audit_title = "Candidate hours manually edited"
+    audit_details = (
+        f"Hours for {match.template_candidate_name or match.messy_name_original} "
+        f"edited to {body.total_hours}h for {body.month} by {body.reviewed_by}"
+    )
+    
+    if was_unmatched:
+        audit_title = "Unmatched candidate hours edited and accepted"
+        audit_details = f"{audit_details}. Automatically accepted for export."
+    
+    audit_service.record_event(
+        db,
+        action=AuditAction.HOURS_RECONCILIATION,
+        title=audit_title,
+        details=audit_details,
+        user=user,
+        metadata={
+            "match_id": match_id,
+            "candidate_name": match.template_candidate_name or match.messy_name_original,
+            "old_hours": match.total_hours,
+            "new_hours": body.total_hours,
+            "month": body.month,
+            "reviewed_by": body.reviewed_by,
+            "notes": body.notes,
+            "was_unmatched": was_unmatched,
+            "auto_accepted": was_unmatched,
+        },
+        entity_type="vlookup_match",
+        entity_id=str(match_id),
+    )
+    
+    db.commit()
+    
+    message = f"Hours updated to {body.total_hours}h for {body.month}"
+    if was_unmatched:
+        message = f"{message} and automatically accepted for export"
+    
+    return VLookupActionResponse(
+        match_id=match_id,
+        message=message,
+        template_candidate_id=match.template_candidate_id_str,
+        template_candidate_name=match.template_candidate_name,
+    )
+
+
+def manual_add_candidate(
+    db: Session,
+    body: "ManualAddCandidateBody",
+    user: User,
+) -> VLookupActionResponse:
+    """
+    Manually add a candidate with hours for benchmark purposes.
+    Creates a new matched record in the specified batch.
+    """
+    from app.models.vlookup.schemas import ManualAddCandidateBody
+    
+    batch_id = body.batch_id
+    batch = repo.get_batch(db, batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="VLOOKUP batch not found")
+    
+    # Normalize month
+    month_key = normalize_month_year(body.month) or body.month
+    
+    # Check if candidate already exists in template for this batch
+    template_candidate = None
+    if body.candidate_id:
+        existing_templates = repo.list_templates_for_batch(db, batch_id)
+        for t in existing_templates:
+            if t.candidate_id == body.candidate_id:
+                template_candidate = t
+                break
+    
+    # If not found, create a new template entry
+    if not template_candidate:
+        template_candidate = VLookupTemplateCandidate(
+            candidate_id=body.candidate_id or f"MANUAL-{uuid.uuid4().hex[:8].upper()}",
+            candidate_name=body.candidate_name,
+            client_name=body.client_name or "",
+            template_hours=int(round(body.total_hours)),
+            month=month_key,
+            contract_type="",
+            division="",
+            recruiter_name="",
+            upload_batch_id=batch_id,
+        )
+        db.add(template_candidate)
+        db.flush()
+    
+    # Calculate weekly breakdown by month
+    weekly_by_month = {}
+    if body.weekly_breakdown:
+        weekly_by_month[month_key] = {
+            str(k): float(v) for k, v in body.weekly_breakdown.items()
+        }
+    
+    # Create matched record
+    matched_record = VLookupMatchedRecord(
+        template_candidate_id=template_candidate.id,
+        template_candidate_name=body.candidate_name,
+        template_candidate_id_str=template_candidate.candidate_id,
+        messy_name_original=body.candidate_name,
+        messy_client_name=body.client_name or "",
+        messy_month=month_key,
+        weekly_breakdown=body.weekly_breakdown if body.weekly_breakdown else {},
+        weekly_by_month=weekly_by_month,
+        total_hours=int(round(body.total_hours)),
+        monthly_hours={month_key: body.total_hours},
+        confidence_score=100.0,
+        match_status="accepted",
+        match_method="manual",
+        match_explanation={
+            "identity_summary": (
+                f"Manually added by {body.reviewed_by} for benchmark purposes. "
+                f"Total: {body.total_hours}h for {month_key}."
+                + (f" Note: {body.notes}" if body.notes else "")
+            ),
+            "identity_headline": f"Manual: {body.candidate_name}",
+            "manual_add": {
+                "added_by": body.reviewed_by,
+                "timestamp": datetime.utcnow().isoformat(),
+                "total_hours": body.total_hours,
+                "month": month_key,
+                "notes": body.notes,
+                "reason": "benchmark_adjustment",
+            },
+        },
+        upload_batch_id=batch_id,
+        manually_reviewed=True,
+        review_action="manual_add",
+        reviewed_by=body.reviewed_by,
+        reviewed_at=datetime.utcnow(),
+        review_notes=body.notes,
+    )
+    db.add(matched_record)
+    
+    # Update batch counts
+    batch.matched_count = (batch.matched_count or 0) + 1
+    batch.total_records = (batch.total_records or 0) + 1
+    
+    # Audit log
+    audit_service.record_event(
+        db,
+        action=AuditAction.HOURS_RECONCILIATION,
+        title="Candidate manually added",
+        details=(
+            f"Candidate {body.candidate_name} manually added "
+            f"with {body.total_hours}h for {month_key} by {body.reviewed_by}"
+        ),
+        user=user,
+        metadata={
+            "batch_id": batch_id,
+            "candidate_id": template_candidate.candidate_id,
+            "candidate_name": body.candidate_name,
+            "client_name": body.client_name,
+            "total_hours": body.total_hours,
+            "month": month_key,
+            "reviewed_by": body.reviewed_by,
+            "notes": body.notes,
+        },
+        entity_type="vlookup_batch",
+        entity_id=batch_id,
+    )
+    
+    db.commit()
+    db.refresh(matched_record)
+    
+    return VLookupActionResponse(
+        match_id=matched_record.id,
+        message=f"Candidate {body.candidate_name} added with {body.total_hours}h for {month_key}",
+        template_candidate_id=template_candidate.candidate_id,
+        template_candidate_name=body.candidate_name,
+    )

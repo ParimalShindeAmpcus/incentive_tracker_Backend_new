@@ -160,10 +160,14 @@ def _parse_ampcus_qb_raw(text: str, target_month: Optional[str] = None) -> Dict[
         if not raw.startswith(",") and not raw.lower().startswith("service"):
             if raw.lower().startswith("total "):
                 continue
-            # Candidate section header — name before parenthesis
-            group = raw.split("(")[0].strip().strip('"')
+            # Candidate section header — name before parenthesis or entire line
+            # Format: "NAME (NAME FOR THE WEEK ENDING OF-)" or just "NAME"
+            if "(" in raw:
+                group = raw.split("(")[0].strip().strip('"')
+            else:
+                group = raw.strip().strip('"')
             cleaned = _clean_candidate_name(group)
-            if cleaned:
+            if cleaned and len(cleaned) > 3:  # Minimum viable name length
                 current_group_name = cleaned
             continue
 
@@ -186,7 +190,18 @@ def _parse_ampcus_qb_raw(text: str, target_month: Optional[str] = None) -> Dict[
             continue
 
         name_from_memo = _extract_name_from_memo(memo)
-        candidate_name = name_from_memo or current_group_name
+        # Prefer group header name if memo name appears truncated or is shorter
+        # This handles cases where QuickBooks export truncates long names in memo field
+        if name_from_memo and current_group_name:
+            # If memo name is significantly shorter or appears truncated, use group header
+            if len(name_from_memo) < len(current_group_name) and current_group_name.upper().startswith(name_from_memo.upper()):
+                candidate_name = current_group_name
+            else:
+                # Prefer the longer, more complete name
+                candidate_name = max(name_from_memo, current_group_name, key=len)
+        else:
+            candidate_name = name_from_memo or current_group_name
+        
         if not candidate_name or _is_noise_name(candidate_name):
             # Expected noise in QB exports — summarize once, do not spam UI
             skipped_non_candidate += 1
@@ -244,8 +259,12 @@ def _parse_ampcus_qb_dataframe(df: pd.DataFrame, target_month: Optional[str] = N
             for cell in row.tolist():
                 text = str(cell).strip()
                 if text and text.lower() not in ("nan", "none", "service") and not text.lower().startswith("total"):
-                    cleaned = _clean_candidate_name(text.split("(")[0])
-                    if cleaned and len(cleaned.split()) >= 1:
+                    # Extract name before parenthesis if present
+                    if "(" in text:
+                        cleaned = _clean_candidate_name(text.split("(")[0])
+                    else:
+                        cleaned = _clean_candidate_name(text)
+                    if cleaned and len(cleaned) > 3:  # Minimum viable name length
                         current_group_name = cleaned
                     break
             continue
@@ -259,7 +278,16 @@ def _parse_ampcus_qb_dataframe(df: pd.DataFrame, target_month: Optional[str] = N
         if hours is None or hours <= 0:
             continue
 
-        candidate_name = _extract_name_from_memo(memo) or current_group_name
+        name_from_memo = _extract_name_from_memo(memo)
+        # Prefer group header name if memo name appears truncated or is shorter
+        if name_from_memo and current_group_name:
+            if len(name_from_memo) < len(current_group_name) and current_group_name.upper().startswith(name_from_memo.upper()):
+                candidate_name = current_group_name
+            else:
+                candidate_name = max(name_from_memo, current_group_name, key=len)
+        else:
+            candidate_name = name_from_memo or current_group_name
+        
         if not candidate_name or _is_noise_name(candidate_name):
             continue
 
