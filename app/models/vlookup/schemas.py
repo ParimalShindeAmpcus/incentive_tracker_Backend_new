@@ -189,15 +189,3 @@ class ManualEditHoursBody(BaseModel):
     notes: Optional[str] = None
     reviewed_by: Optional[str] = "accounts"
 
-
-class ManualAddCandidateBody(BaseModel):
-    batch_id: str
-    candidate_id: Optional[str] = None
-    candidate_name: str
-    client_name: Optional[str] = None
-    month: str
-    total_hours: float = Field(..., gt=0)
-    weekly_breakdown: Dict[str, float] = Field(default_factory=dict)
-    notes: Optional[str] = None
-    reviewed_by: Optional[str] = "accounts"
-
