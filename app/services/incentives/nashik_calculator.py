@@ -57,6 +57,8 @@ class PlacementInput:
     director: Optional[str] = None
     incentive_active: bool = True
     project_ended: bool = False
+    # Leadership one-time uses this 160h check. Defaults to `hours` (monthly).
+    cumulative_hours: Optional[Decimal] = None
 
 
 @dataclass
@@ -183,6 +185,22 @@ def _overlaps(p: PlacementInput, window: CycleWindow) -> bool:
     return True
 
 
+def _monthly_hours(p: PlacementInput) -> Decimal:
+    return p.hours if p.hours is not None else Decimal("0")
+
+
+def _cumulative_hours(p: PlacementInput) -> Decimal:
+    if p.cumulative_hours is not None:
+        return p.cumulative_hours
+    return _monthly_hours(p)
+
+
+def _hours_for_role(role: str, p: PlacementInput) -> Decimal:
+    if role in LEADERSHIP_ONE_TIME:
+        return _cumulative_hours(p)
+    return _monthly_hours(p)
+
+
 def _line(
     p: PlacementInput,
     *,
@@ -196,6 +214,7 @@ def _line(
     amount: Decimal,
     reason: str,
     explanation: List[str],
+    hours: Optional[Decimal] = None,
 ) -> LineDraft:
     return LineDraft(
         candidate_id=p.candidate_pk,
@@ -208,7 +227,7 @@ def _line(
         base_incentive=money(base),
         pro_rata_factor=factor,
         amount=money(amount) if eligible else Decimal("0"),
-        hours=money(p.hours),
+        hours=money(hours if hours is not None else _hours_for_role(role, p)),
         margin=money(p.margin) if p.margin is not None else None,
         reason=reason,
         explanation=explanation,
@@ -284,7 +303,7 @@ def _role_amount(
             reason,
             [
                 f"Candidate → Division Nashik → Contract {normalize_contract(p.contract_type)}",
-                f"Hours = {hours} · Approved margin/hour = ${p.margin}",
+                f"Incentive month hours = {hours} · Approved margin/hour = ${p.margin}",
                 f"Applicable Incentive Slab = {category}",
                 f"Base Incentive = {_inr(base)}",
                 f"Pro-Rata Factor = {hours} / {STANDARD_HOURS} = {factor}",
@@ -299,9 +318,14 @@ def _role_amount(
             TEAM_LEAD_BASE,
             factor,
             amount,
-            "Full ₹250 for 160 hours" if hours >= STANDARD_HOURS else "Pro-rata for hours below 160",
+            (
+                "Full ₹250 for 160 hours"
+                if hours >= STANDARD_HOURS
+                else "Pro-rata for hours below 160"
+            ),
             [
                 f"Person role = Team Lead · Recurring",
+                f"Incentive month hours = {hours}",
                 f"{_inr(TEAM_LEAD_BASE)} × {hours} / {STANDARD_HOURS} = {_inr(amount)}",
             ],
         )
@@ -315,11 +339,11 @@ def _role_amount(
         (
             "Candidate completed 160 hours — one-time leadership incentive"
             if hours >= STANDARD_HOURS
-            else f"Only {hours} hours completed — 160 hours required (not pro-rated)"
+            else f"Only {hours} cumulative hours completed — 160 hours required (not pro-rated)"
         ),
         [
             f"Person role = {role} · One-Time",
-            f"160-hour requirement = {STANDARD_HOURS} · Hours completed = {hours}",
+            f"160-hour requirement = {STANDARD_HOURS} · Cumulative hours completed = {hours}",
             f"One-time amount {_inr(amount)} (not pro-rated)",
             "Previous payment check via approved-cycle history",
         ],
@@ -337,8 +361,9 @@ def calculate_nashik_placement(
     sourced from Coordinator Master via cycle_engine.coordinator_index.
     """
     paid_keys = paid_keys or set()
-    hours = p.hours if p.hours is not None else Decimal("0")
+    hours = _monthly_hours(p)
     p.hours = hours
+    cumulative = _cumulative_hours(p)
 
     if not p.incentive_active:
         return _scope(p, "Candidate is marked incentive-inactive", [
@@ -392,7 +417,8 @@ def calculate_nashik_placement(
 
     for role, person in missing_blocked:
         if role in configured_roles:
-            incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, hours)
+            role_hours = _hours_for_role(role, p)
+            incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, role_hours)
         else:
             incentive_type, base, factor, explanation = "ONE_TIME", Decimal("0"), Decimal("0"), []
         lines.append(
@@ -420,7 +446,8 @@ def calculate_nashik_placement(
     for role, person, status in status_blocked:
         if role not in configured_roles:
             continue
-        incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, hours)
+        role_hours = _hours_for_role(role, p)
+        incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, role_hours)
         lines.append(
             _line(
                 p,
@@ -447,7 +474,9 @@ def calculate_nashik_placement(
     for role, person in status_ok:
         if (role, normalize_person(person)) in selected_keys:
             continue
-        incentive_type, base, factor, _amount, _reason, explanation = _role_amount(p, role, hours)
+        incentive_type, base, factor, _amount, _reason, explanation = _role_amount(
+            p, role, _hours_for_role(role, p)
+        )
         lines.append(
             _line(
                 p,
@@ -511,7 +540,8 @@ def calculate_nashik_placement(
                     )
                 )
             else:
-                incentive_type, base, factor, amount, reason, explanation = _role_amount(p, role, hours)
+                role_hours = _hours_for_role(role, p)
+                incentive_type, base, factor, amount, reason, explanation = _role_amount(p, role, role_hours)
                 lines.append(
                     _line(
                         p,
@@ -534,8 +564,9 @@ def calculate_nashik_placement(
 
     # Normal path for selected roles.
     for role, person in selected:
-        incentive_type, base, factor, amount, reason, explanation = _role_amount(p, role, hours)
-        if role in LEADERSHIP_ONE_TIME and hours < STANDARD_HOURS:
+        role_hours = _hours_for_role(role, p)
+        incentive_type, base, factor, amount, reason, explanation = _role_amount(p, role, role_hours)
+        if role in LEADERSHIP_ONE_TIME and role_hours < STANDARD_HOURS:
             eligible = False
         elif role == "Recruiter" and base == 0 and incentive_type == "RECURRING":
             eligible = False
@@ -563,6 +594,8 @@ def calculate_nashik_placement(
                 reason=reason,
                 explanation=[
                     *explanation,
+                    f"Incentive month hours = {hours}",
+                    f"Cumulative hours = {cumulative}",
                     f"Selected roles (max {MAX_ROLES_PER_PERSON} per person): {selected_summary}",
                 ],
             )

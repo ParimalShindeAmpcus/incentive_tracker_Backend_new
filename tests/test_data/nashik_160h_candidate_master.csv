@@ -1,0 +1,2 @@
+external_candidate_id,start_id,candidate_name,client,contract_type,margin,recruiter,team_lead,manager,crm,senior_manager,avp,director,center_head,organization,candidate_source,recruiter_location,start_date,end_date,division,is_active,incentive_active
+NASHIK_TEST_160H_001,NASHIK_TEST_160H_001,Nashik Incentive Test Candidate,Acme Corp,C2C,8,TEST_RECRUITER_001,TEST_TL_001,TEST_MANAGER_001,TEST_CRM_001,TEST_SM_001,TEST_AVP_001,TEST_DIRECTOR_001,TEST_CENTERHEAD_001,Ampcus Inc,Ampcus Inc,Nashik,2026-01-01,,nashik,true,true

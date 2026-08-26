@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from sqlalchemy.orm import Session
 
 from app.repositories.candidates import candidate_repository
+from app.repositories.hours import hours_repository
 from app.repositories.cycles import cycle_repository
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.cycle import MatchResult
@@ -53,7 +54,12 @@ def _to_master(cand: Candidate) -> MasterCandidate:
     )
 
 
-def _placement(cand: Candidate, hours: Decimal, window: CycleWindow) -> PlacementInput:
+def _placement(
+    cand: Candidate,
+    hours: Decimal,
+    window: CycleWindow,
+    cumulative_hours: Optional[Decimal] = None,
+) -> PlacementInput:
     end_date = cand.end_date
     return PlacementInput(
         candidate_pk=cand.id,
@@ -78,6 +84,7 @@ def _placement(cand: Candidate, hours: Decimal, window: CycleWindow) -> Placemen
         director=getattr(cand, "director", None),
         incentive_active=bool(cand.incentive_active),
         project_ended=end_date is not None and end_date <= window.end,
+        cumulative_hours=cumulative_hours,
     )
 
 
@@ -308,8 +315,11 @@ def run_cycle_calculation(
                 )
             )
             continue
+        prior_hours = hours_repository.sum_published_hours_before_month(
+            db, pk, getattr(cycle, "incentive_month", None)
+        )
         drafts = calculate_nashik_placement(
-            _placement(cand, hours, window),
+            _placement(cand, hours, window, cumulative_hours=prior_hours + hours),
             window,
             paid_keys,
             employment_status=_nashik_employment_status(coordinator_index(db)),
@@ -731,8 +741,12 @@ def run_cycle_calculation(
                 )
                 continue
 
+            prior_hours = hours_repository.sum_published_hours_before_month(
+                db, pk, getattr(cycle, "incentive_month", None)
+            )
+            cumulative_hours = prior_hours + hours
             drafts = calculate_nashik_placement(
-                _placement(cand, hours, window),
+                _placement(cand, hours, window, cumulative_hours=cumulative_hours),
                 window,
                 paid_keys,
                 employment_status=nashik_status,
@@ -750,6 +764,8 @@ def run_cycle_calculation(
                     "person": draft.person,
                     "margin_per_hour": float(cand.margin) if cand.margin is not None else None,
                     "hours": float(hours),
+                    "monthly_hours": float(hours),
+                    "cumulative_hours": float(cumulative_hours),
                     "benchmark_hours": 160,
                     "base_incentive": float(draft.base_incentive),
                     "pro_rata_factor": float(draft.pro_rata_factor),

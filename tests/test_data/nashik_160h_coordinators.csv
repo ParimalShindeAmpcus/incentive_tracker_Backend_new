@@ -1,0 +1,9 @@
+Coordinator Name,Email,Organization,Role / Title,Employment Status,Exit Date,Bank Name,Account Number,IFSC Code
+TEST_RECRUITER_001,test.recruiter.001@nashik-qa.example.com,Ampcus Inc,Recruiter,ACTIVE,,HDFC,1000000001,HDFC0001601
+TEST_TL_001,test.tl.001@nashik-qa.example.com,Ampcus Inc,Team Lead,ACTIVE,,HDFC,1000000002,HDFC0001601
+TEST_MANAGER_001,test.manager.001@nashik-qa.example.com,Ampcus Inc,Manager,ACTIVE,,HDFC,1000000003,HDFC0001601
+TEST_CRM_001,test.crm.001@nashik-qa.example.com,Ampcus Inc,CRM,ACTIVE,,HDFC,1000000004,HDFC0001601
+TEST_SM_001,test.sm.001@nashik-qa.example.com,Ampcus Inc,Senior Manager,ACTIVE,,HDFC,1000000005,HDFC0001601
+TEST_AVP_001,test.avp.001@nashik-qa.example.com,Ampcus Inc,AVP,ACTIVE,,HDFC,1000000006,HDFC0001601
+TEST_DIRECTOR_001,test.director.001@nashik-qa.example.com,Ampcus Inc,Director,ACTIVE,,HDFC,1000000007,HDFC0001601
+TEST_CENTERHEAD_001,test.centerhead.001@nashik-qa.example.com,Ampcus Inc,Center Head,ACTIVE,,HDFC,1000000008,HDFC0001601

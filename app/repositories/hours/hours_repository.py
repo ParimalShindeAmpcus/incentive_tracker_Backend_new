@@ -3,6 +3,7 @@
 from decimal import Decimal
 from typing import List, Optional, Sequence
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.repositories.entities.hours import HoursBenchmark, HoursDataVersion, HoursRow
@@ -34,6 +35,41 @@ def get_latest_version_id_for_month(db: Session, month_key: str) -> Optional[int
         .first()
     )
     return int(row[0]) if row else None
+
+
+def sum_published_hours_before_month(
+    db: Session,
+    candidate_id: int,
+    month_key: Optional[str],
+) -> Decimal:
+    """
+    Sum published hours_rows for this candidate in months strictly before month_key.
+
+    When multiple versions exist for the same month, only the latest version_id
+    for that month is counted so republishing does not double-count.
+    month_key must be YYYY-MM for lexicographic ordering.
+    """
+    if not candidate_id or not month_key:
+        return Decimal("0")
+    month_versions = (
+        db.query(HoursRow.month_key, func.max(HoursRow.version_id))
+        .filter(HoursRow.candidate_id == candidate_id, HoursRow.month_key < month_key)
+        .group_by(HoursRow.month_key)
+        .all()
+    )
+    total = Decimal("0")
+    for prior_month, version_id in month_versions:
+        subtotal = (
+            db.query(func.coalesce(func.sum(HoursRow.hours_worked), 0))
+            .filter(
+                HoursRow.candidate_id == candidate_id,
+                HoursRow.month_key == prior_month,
+                HoursRow.version_id == version_id,
+            )
+            .scalar()
+        )
+        total += Decimal(str(subtotal or 0))
+    return total
 
 
 def list_rows_for_version(db: Session, version_id: int) -> List[HoursRow]:

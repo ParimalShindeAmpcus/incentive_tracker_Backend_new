@@ -34,6 +34,7 @@ LEADERSHIP_ONE_TIME = {
     "Manager": Decimal("1500"),
     "Senior Manager": Decimal("1500"),
     "Associate Director": Decimal("1750"),
+    "Director": Decimal("1750"),
     "Center Head": Decimal("1500"),
     "AVP": Decimal("2300"),
 }
@@ -42,6 +43,7 @@ LEADERSHIP_ONE_TIME = {
 ROLE_PRIORITY = [
     "AVP",
     "Associate Director",
+    "Director",
     "Senior Manager",
     "Center Head",
     "Manager",
