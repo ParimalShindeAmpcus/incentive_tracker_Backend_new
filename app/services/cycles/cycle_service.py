@@ -173,7 +173,8 @@ def list_lines(db: Session, cycle_id: int) -> List[IncentiveLineOut]:
                 k not in meta for k in [
                     "start_date", "contract_type", "candidate_source", 
                     "candidate_id", "external_candidate_id",
-                    "recruiter", "team_lead", "manager", "crm", "center_head", "avp"
+                    "recruiter", "team_lead", "manager", "senior_manager", "crm",
+                    "associate_director", "center_head", "avp", "director"
                 ]
             )
             if needs_update:
@@ -186,9 +187,12 @@ def list_lines(db: Session, cycle_id: int) -> List[IncentiveLineOut]:
                     "recruiter": cand.recruiter,
                     "team_lead": cand.team_lead,
                     "manager": cand.manager,
+                    "senior_manager": cand.senior_manager,
                     "crm": cand.crm,
+                    "associate_director": cand.associate_director,
                     "center_head": cand.center_head,
                     "avp": cand.avp,
+                    "director": cand.director,
                 }
                 if isinstance(meta, dict):
                     new_meta.update({k: v for k, v in meta.items() if k not in new_meta})

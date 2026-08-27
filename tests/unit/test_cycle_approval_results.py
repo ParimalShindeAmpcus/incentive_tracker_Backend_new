@@ -118,7 +118,7 @@ def test_backfill_snapshots_existing_approved_cycles():
 
 def test_approved_reports_read_snapshot_not_live_lines():
     db = _session()
-    cycle = _cycle(db)
+    cycle = _cycle(db, status=CycleStatus.APPROVED)
     line = _line(db, cycle, amount="3500")
     snapshot_approval_results(db, cycle)
     db.commit()

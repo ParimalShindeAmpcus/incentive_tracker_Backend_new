@@ -11,8 +11,9 @@ Strict rules per Incentive Calculation Process document:
 from __future__ import annotations
 
 import json
+from datetime import date
 from decimal import Decimal
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.coordinator import CoordinatorRecord

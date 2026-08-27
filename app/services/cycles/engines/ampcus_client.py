@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -24,17 +24,148 @@ from app.services.cycles.recruiter_master import (
 from app.services.incentives.nashik_calculator import LineDraft
 
 ZERO = Decimal("0")
-ROLES = ("Recruiter", "Team Lead", "Manager", "CRM", "CH/VP")
+ROLES = (
+    "Recruiter",
+    "Team Lead",
+    "Manager",
+    "Senior Manager",
+    "CRM",
+    "Associate Director",
+    "Center Head",
+    "AVP",
+    "Director",
+    "CH/VP",
+)
 SLABS: Tuple[Tuple[Decimal, Decimal, Dict[str, int]], ...] = (
     (Decimal("0"), Decimal("4.99"), {role: 0 for role in ROLES}),
-    (Decimal("5"), Decimal("10"), {"Recruiter": 2000, "Team Lead": 250, "Manager": 500, "CRM": 750, "CH/VP": 500}),
-    (Decimal("10.01"), Decimal("15"), {"Recruiter": 3000, "Team Lead": 250, "Manager": 500, "CRM": 750, "CH/VP": 1000}),
-    (Decimal("15.01"), Decimal("20"), {"Recruiter": 5000, "Team Lead": 500, "Manager": 1000, "CRM": 1000, "CH/VP": 1500}),
-    (Decimal("20.01"), Decimal("25"), {"Recruiter": 6000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 2000}),
-    (Decimal("25.01"), Decimal("30"), {"Recruiter": 7000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 2500}),
-    (Decimal("30.01"), Decimal("35"), {"Recruiter": 8000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 3000}),
-    (Decimal("35.01"), Decimal("40"), {"Recruiter": 9000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 3500}),
-    (Decimal("40.01"), Decimal("100"), {"Recruiter": 10000, "Team Lead": 500, "Manager": 1000, "CRM": 1500, "CH/VP": 4000}),
+    (
+        Decimal("5"),
+        Decimal("10"),
+        {
+            "Recruiter": 2000,
+            "Team Lead": 250,
+            "Manager": 500,
+            "Senior Manager": 500,
+            "CRM": 750,
+            "Associate Director": 500,
+            "Center Head": 500,
+            "AVP": 500,
+            "Director": 500,
+            "CH/VP": 500,
+        },
+    ),
+    (
+        Decimal("10.01"),
+        Decimal("15"),
+        {
+            "Recruiter": 3000,
+            "Team Lead": 250,
+            "Manager": 500,
+            "Senior Manager": 500,
+            "CRM": 750,
+            "Associate Director": 1000,
+            "Center Head": 1000,
+            "AVP": 1000,
+            "Director": 1000,
+            "CH/VP": 1000,
+        },
+    ),
+    (
+        Decimal("15.01"),
+        Decimal("20"),
+        {
+            "Recruiter": 5000,
+            "Team Lead": 500,
+            "Manager": 1000,
+            "Senior Manager": 1000,
+            "CRM": 1000,
+            "Associate Director": 1500,
+            "Center Head": 1500,
+            "AVP": 1500,
+            "Director": 1500,
+            "CH/VP": 1500,
+        },
+    ),
+    (
+        Decimal("20.01"),
+        Decimal("25"),
+        {
+            "Recruiter": 6000,
+            "Team Lead": 500,
+            "Manager": 1000,
+            "Senior Manager": 1000,
+            "CRM": 1500,
+            "Associate Director": 2000,
+            "Center Head": 2000,
+            "AVP": 2000,
+            "Director": 2000,
+            "CH/VP": 2000,
+        },
+    ),
+    (
+        Decimal("25.01"),
+        Decimal("30"),
+        {
+            "Recruiter": 7000,
+            "Team Lead": 500,
+            "Manager": 1000,
+            "Senior Manager": 1000,
+            "CRM": 1500,
+            "Associate Director": 2500,
+            "Center Head": 2500,
+            "AVP": 2500,
+            "Director": 2500,
+            "CH/VP": 2500,
+        },
+    ),
+    (
+        Decimal("30.01"),
+        Decimal("35"),
+        {
+            "Recruiter": 8000,
+            "Team Lead": 500,
+            "Manager": 1000,
+            "Senior Manager": 1000,
+            "CRM": 1500,
+            "Associate Director": 3000,
+            "Center Head": 3000,
+            "AVP": 3000,
+            "Director": 3000,
+            "CH/VP": 3000,
+        },
+    ),
+    (
+        Decimal("35.01"),
+        Decimal("40"),
+        {
+            "Recruiter": 9000,
+            "Team Lead": 500,
+            "Manager": 1000,
+            "Senior Manager": 1000,
+            "CRM": 1500,
+            "Associate Director": 3500,
+            "Center Head": 3500,
+            "AVP": 3500,
+            "Director": 3500,
+            "CH/VP": 3500,
+        },
+    ),
+    (
+        Decimal("40.01"),
+        Decimal("100"),
+        {
+            "Recruiter": 10000,
+            "Team Lead": 500,
+            "Manager": 1000,
+            "Senior Manager": 1000,
+            "CRM": 1500,
+            "Associate Director": 4000,
+            "Center Head": 4000,
+            "AVP": 4000,
+            "Director": 4000,
+            "CH/VP": 4000,
+        },
+    ),
 )
 
 
@@ -88,14 +219,86 @@ def _line(candidate: Candidate, role: str, person: Optional[str], amount: Decima
 
 
 def _people(candidate: Candidate) -> Dict[str, Optional[str]]:
-    # CH takes precedence over AVP/VP.  The slab is paid exactly once.
+    """Return dictionary of all hierarchy roles on the candidate."""
     return {
-        "Recruiter": candidate.recruiter,
-        "Team Lead": candidate.team_lead,
-        "Manager": candidate.manager,
-        "CRM": candidate.crm,
-        "CH/VP": candidate.center_head or candidate.avp,
+        "Recruiter": getattr(candidate, "recruiter", None),
+        "Team Lead": getattr(candidate, "team_lead", None),
+        "Manager": getattr(candidate, "manager", None),
+        "Senior Manager": getattr(candidate, "senior_manager", None),
+        "CRM": getattr(candidate, "crm", None),
+        "Associate Director": getattr(candidate, "associate_director", None),
+        "Center Head": getattr(candidate, "center_head", None),
+        "AVP": getattr(candidate, "avp", None),
+        "Director": getattr(candidate, "director", None),
     }
+
+
+def _roles_to_evaluate(candidate: Candidate) -> List[Tuple[str, Optional[str]]]:
+    """Return all roles that should be evaluated for this candidate.
+    
+    - Recruiter, Team Lead, and CRM are always evaluated (emitting MISSING_HIERARCHY if blank).
+    - Manager vs Senior Manager: if either or both are present, each present one is evaluated;
+      if neither is present, Manager is emitted as MISSING_HIERARCHY.
+    - Leadership (Center Head, Associate Director, AVP, Director, CH/VP):
+      if any are present, each present role is evaluated;
+      if all are absent, Center Head is emitted as MISSING_HIERARCHY.
+    - If candidate has a legacy CH/VP without explicit Center Head or AVP, CH/VP is evaluated.
+    """
+    out: List[Tuple[str, Optional[str]]] = []
+
+    recruiter = getattr(candidate, "recruiter", None)
+    team_lead = getattr(candidate, "team_lead", None)
+    manager = getattr(candidate, "manager", None)
+    senior_manager = getattr(candidate, "senior_manager", None)
+    crm = getattr(candidate, "crm", None)
+    associate_director = getattr(candidate, "associate_director", None)
+    center_head = getattr(candidate, "center_head", None)
+    avp = getattr(candidate, "avp", None)
+    director = getattr(candidate, "director", None)
+    ch_vp = getattr(candidate, "ch_vp", None)
+
+    # 1. Recruiter
+    out.append(("Recruiter", recruiter))
+
+    # 2. Team Lead
+    out.append(("Team Lead", team_lead))
+
+    # 3. Manager / Senior Manager
+    has_mgr = bool(manager and str(manager).strip())
+    has_sr_mgr = bool(senior_manager and str(senior_manager).strip())
+    if has_mgr:
+        out.append(("Manager", manager))
+    if has_sr_mgr:
+        out.append(("Senior Manager", senior_manager))
+    if not has_mgr and not has_sr_mgr:
+        out.append(("Manager", None))
+
+    # 4. CRM
+    out.append(("CRM", crm))
+
+    # 5. Leadership: Center Head / Associate Director / AVP / Director / CH/VP
+    has_ch = bool(center_head and str(center_head).strip())
+    has_ad = bool(associate_director and str(associate_director).strip())
+    has_avp = bool(avp and str(avp).strip())
+    has_dir = bool(director and str(director).strip())
+    has_ch_vp = bool(ch_vp and str(ch_vp).strip())
+
+    # If explicit CH/VP is specified or candidate was created with only CH/VP
+    if has_ch_vp and not (has_ch or has_ad or has_avp or has_dir):
+        out.append(("CH/VP", ch_vp))
+    else:
+        if has_ad:
+            out.append(("Associate Director", associate_director))
+        if has_ch:
+            out.append(("Center Head", center_head))
+        if has_avp:
+            out.append(("AVP", avp))
+        if has_dir:
+            out.append(("Director", director))
+        if not (has_ad or has_ch or has_avp or has_dir or has_ch_vp):
+            out.append(("Center Head", None))
+
+    return out
 
 
 def _inactive(candidate: Candidate) -> bool:
@@ -113,8 +316,8 @@ def calculate_placement(
     coordinators: Optional[Dict[str, CoordinatorRecord]] = None,
     paid_keys: Optional[Set[str]] = None,
 ) -> List[LineDraft]:
-    """Return five deterministic role lines for one placement snapshot."""
-    people = _people(candidate)
+    """Return deterministic role lines for one placement snapshot."""
+    role_pairs = _roles_to_evaluate(candidate)
     markup = candidate.margin
     payment_status = str(getattr(payment, "status", "PAYMENT_PENDING") or "PAYMENT_PENDING").upper()
     details = {
@@ -133,12 +336,15 @@ def calculate_placement(
         "recruiter": getattr(candidate, "recruiter", None),
         "team_lead": getattr(candidate, "team_lead", None),
         "manager": getattr(candidate, "manager", None),
+        "senior_manager": getattr(candidate, "senior_manager", None),
         "crm": getattr(candidate, "crm", None),
+        "associate_director": getattr(candidate, "associate_director", None),
         "center_head": getattr(candidate, "center_head", None),
         "avp": getattr(candidate, "avp", None),
+        "director": getattr(candidate, "director", None),
     }
     def all_zero(reason: str, rule: str) -> List[LineDraft]:
-        return [_line(candidate, role, people[role], ZERO, eligible=False, reason=reason, rule=rule, details=details) for role in ROLES]
+        return [_line(candidate, role, person, ZERO, eligible=False, reason=reason, rule=rule, details=details) for role, person in role_pairs]
 
     if not candidate.start_date:
         return all_zero("CANDIDATE_NOT_STARTED", "Ampcus Client eligibility")
@@ -165,11 +371,21 @@ def calculate_placement(
     paid_keys = paid_keys or set()
     
     # Enforce max-two-roles for all roles
-    ROLE_PRIORITY = ["Recruiter", "CH/VP", "CRM", "Manager", "Team Lead"]
+    ROLE_PRIORITY = [
+        "Recruiter",
+        "AVP",
+        "Associate Director",
+        "Center Head",
+        "Director",
+        "CH/VP",
+        "Senior Manager",
+        "Manager",
+        "CRM",
+        "Team Lead",
+    ]
     
     by_person: Dict[str, List[str]] = {}
-    for role in ROLES:
-        person = people[role]
+    for role, person in role_pairs:
         if person and not _is_not_applicable(person):
             norm = normalize_person(person)
             by_person.setdefault(norm, []).append(role)
@@ -180,13 +396,12 @@ def calculate_placement(
             allowed_roles.update(roles_held)
         else:
             # Keep top 2 priority roles
-            ordered = sorted(roles_held, key=lambda r: ROLE_PRIORITY.index(r))
+            ordered = sorted(roles_held, key=lambda r: ROLE_PRIORITY.index(r) if r in ROLE_PRIORITY else 99)
             allowed_roles.update(ordered[:2])
 
     lines: List[LineDraft] = []
-    for role in ROLES:
-        person = people[role]
-        amount = Decimal(amounts[role])
+    for role, person in role_pairs:
+        amount = Decimal(amounts.get(role, 0))
         
         # 1. Missing Hierarchy Check (Per-Role)
         if not person or not str(person).strip():

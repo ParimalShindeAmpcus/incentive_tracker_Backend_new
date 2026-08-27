@@ -12,7 +12,7 @@ def norm(value: str): return " ".join(value.strip().lower().split())
 def apply_status(record, status_value, exit_date):
     if exit_date:
         # Check if exit_date is a string and parse it, or if it is already a date object
-        from datetime import datetime
+        from datetime import datetime, date
         d_val = exit_date
         if isinstance(d_val, str):
             try:
