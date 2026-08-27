@@ -1094,19 +1094,31 @@ def list_messy_file(
     }
 
 
-def _hours_for_export_month(match: VLookupMatchedRecord, month_key: str) -> int:
+def _hours_for_export_month(match: VLookupMatchedRecord, month_key: str) -> float | int:
+    """
+    Return hours for export, preserving int/float format.
+    If hours are a whole number, return int. Otherwise return float.
+    """
     explanation = match.match_explanation or {}
     monthly = explanation.get("monthly_hours") or {}
+    
+    hours_value = None
     if month_key and monthly.get(month_key) is not None:
         try:
-            return int(round(float(monthly.get(month_key) or 0)))
+            hours_value = float(monthly.get(month_key) or 0)
         except (TypeError, ValueError):
             return 0
-    if month_key and normalize_month_year(str(match.messy_month or "")) == month_key:
-        return int(match.total_hours or 0)
-    if not month_key:
-        return int(match.total_hours or 0)
-    return 0
+    elif month_key and normalize_month_year(str(match.messy_month or "")) == month_key:
+        hours_value = float(match.total_hours or 0)
+    elif not month_key:
+        hours_value = float(match.total_hours or 0)
+    else:
+        return 0
+    
+    # Return int if it's a whole number, otherwise float
+    if hours_value is not None and hours_value == int(hours_value):
+        return int(hours_value)
+    return hours_value if hours_value is not None else 0
 
 
 def _match_belongs_to_month(
@@ -1425,7 +1437,7 @@ def publish_hours_from_batch(
         notes=f"Published from VLOOKUP batch {latest}",
         rows=known_rows,
     )
-    detail = hours_service.create_version(db, payload, uploaded_by=uploaded_by, record_audit=False)
+    detail = hours_service.create_version(db, payload, uploaded_by=uploaded_by)
     return VLookupPublishHoursResponse(
         status="success",
         batch_id=latest,
@@ -1750,24 +1762,49 @@ def edit_candidate_hours(
     
     was_unmatched = match.match_status == "unmatched"
     
-    # Update hours
-    match.total_hours = int(round(body.total_hours))
+    # Store old hours before updating
+    old_hours = match.total_hours
+    
+    # Update hours - store as int if whole number, float otherwise
+    if body.total_hours == int(body.total_hours):
+        match.total_hours = int(body.total_hours)
+        total_hours_for_json = int(body.total_hours)
+    else:
+        match.total_hours = int(round(body.total_hours))  # DB column is int
+        total_hours_for_json = body.total_hours  # Preserve float in JSON
+    
+    # Start building explanation updates
+    explanation = dict(match.match_explanation or {})
     
     # Update weekly breakdown if provided
     if body.weekly_breakdown:
         match.weekly_breakdown = {
             str(k): float(v) for k, v in body.weekly_breakdown.items()
         }
-        # Recalculate month-by-month hours
+        # Recalculate month-by-month hours and weekly_by_month
         month_hours = {}
+        weekly_by_month = {}
         for week, hours in body.weekly_breakdown.items():
             # Assign to the specified month
+            week_hours = float(hours) if hours != int(hours) else int(hours)
             month_hours[body.month] = month_hours.get(body.month, 0) + hours
-        match.monthly_hours = month_hours
+            if body.month not in weekly_by_month:
+                weekly_by_month[body.month] = {}
+            weekly_by_month[body.month][week] = week_hours
+        
+        # Convert month total to int if it's a whole number
+        if month_hours[body.month] == int(month_hours[body.month]):
+            month_hours[body.month] = int(month_hours[body.month])
+        
+        # Store in match_explanation for frontend
+        explanation["weekly_by_month"] = weekly_by_month
+        explanation["monthly_hours"] = month_hours
     else:
         # Clear weekly breakdown, use total only
         match.weekly_breakdown = {}
-        match.monthly_hours = {body.month: body.total_hours}
+        # Store in match_explanation
+        explanation["weekly_by_month"] = {}
+        explanation["monthly_hours"] = {body.month: total_hours_for_json}
     
     # Update month if changed
     if body.month:
@@ -1778,8 +1815,7 @@ def edit_candidate_hours(
     match.review_action = "manual_edit"
     repo.touch_reviewed(match, reviewed_by=body.reviewed_by, notes=body.notes)
     
-    # Update explanation
-    explanation = dict(match.match_explanation or {})
+    # Add manual edit info to explanation
     edit_note = (
         f"Hours manually edited by {body.reviewed_by} for benchmark purposes. "
         f"Total: {body.total_hours}h for {body.month}."
@@ -1812,6 +1848,8 @@ def edit_candidate_hours(
         explanation["identity_headline"] = f"Accepted: {match.template_candidate_name}"
     
     explanation["identity_summary"] = edit_note
+    
+    # Apply all explanation updates at once
     match.match_explanation = explanation
     
     # Audit log
@@ -1834,7 +1872,7 @@ def edit_candidate_hours(
         metadata={
             "match_id": match_id,
             "candidate_name": match.template_candidate_name or match.messy_name_original,
-            "old_hours": match.total_hours,
+            "old_hours": old_hours,
             "new_hours": body.total_hours,
             "month": body.month,
             "reviewed_by": body.reviewed_by,
