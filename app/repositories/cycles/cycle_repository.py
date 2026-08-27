@@ -358,6 +358,70 @@ def list_completed_cycles_missing_approval_results(db: Session) -> List[Incentiv
     )
 
 
+def sn_cumulative_hours_by_candidate(
+    db: Session,
+    candidate_ids: List[int],
+    exclude_cycle_id: int,
+    division: str = "sambhajiNagar",
+) -> dict:
+    """Return sum of accepted hours_worked per candidate_id from all finalized SN cycles.
+
+    Only APPROVED, PAID, and CLOSED cycles are included; the current (being-calculated)
+    cycle is excluded via ``exclude_cycle_id``.  Only accepted rows
+    (CycleHoursMatch.accepted=True) are summed.
+
+    Returns a dict of {candidate_id: Decimal(total_hours)}.
+    """
+    if not candidate_ids:
+        return {}
+
+    rows = (
+        db.query(CycleHoursMatch.candidate_id, func.sum(CycleHoursMatch.hours_worked))
+        .join(IncentiveCycle, IncentiveCycle.id == CycleHoursMatch.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.division == division,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            CycleHoursMatch.candidate_id.in_(candidate_ids),
+            CycleHoursMatch.accepted.is_(True),
+        )
+        .group_by(CycleHoursMatch.candidate_id)
+        .all()
+    )
+    return {cand_id: Decimal(str(total or 0)) for cand_id, total in rows}
+
+
+def sn_paid_recruiter_hours_by_candidate(
+    db: Session,
+    candidate_ids: List[int],
+    exclude_cycle_id: int,
+    division: str = "sambhajiNagar",
+) -> dict:
+    """Return sum of paid hours for the Recruiter role per candidate_id from all finalized SN cycles.
+
+    Only APPROVED, PAID, and CLOSED cycles are included.
+    We look at IncentiveLine where role = 'Recruiter' and eligible = True.
+    """
+    if not candidate_ids:
+        return {}
+
+    rows = (
+        db.query(IncentiveLine.candidate_id, func.sum(IncentiveLine.hours))
+        .join(IncentiveCycle, IncentiveCycle.id == IncentiveLine.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.division == division,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            IncentiveLine.candidate_id.in_(candidate_ids),
+            IncentiveLine.role == "Recruiter",
+            IncentiveLine.eligible.is_(True),
+        )
+        .group_by(IncentiveLine.candidate_id)
+        .all()
+    )
+    return {cand_id: Decimal(str(total or 0)) for cand_id, total in rows}
+
+
 def replace_approval_results(
     db: Session, cycle_id: int, rows: List[dict]
 ) -> List[CycleApprovalResult]:

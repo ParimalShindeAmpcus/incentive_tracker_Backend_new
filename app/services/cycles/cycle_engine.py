@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 from app.repositories.candidates import candidate_repository
 from app.repositories.hours import hours_repository
 from app.repositories.cycles import cycle_repository
+from app.repositories.cycles.cycle_repository import (
+    sn_cumulative_hours_by_candidate,
+    sn_paid_recruiter_hours_by_candidate,
+)
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.cycle import MatchResult
 from app.repositories.incentives import incentive_repository
@@ -294,6 +298,22 @@ def run_cycle_calculation(
             continue
         if is_sambhaji_nagar_division(cycle.division):
             payment_by_candidate = {row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)}
+            prior_hours_map = sn_cumulative_hours_by_candidate(
+                db, [pk], exclude_cycle_id=cycle.id, division=cycle.division
+            )
+            paid_hours_map = sn_paid_recruiter_hours_by_candidate(
+                db, [pk], exclude_cycle_id=cycle.id, division=cycle.division
+            )
+            prior_lifetime = prior_hours_map.get(pk, Decimal("0"))
+            prior_paid = paid_hours_map.get(pk, Decimal("0"))
+            
+            unpaid_prior = prior_lifetime - prior_paid
+            if unpaid_prior < 0:
+                unpaid_prior = Decimal("0")
+                
+            recruiter_matrix_hours = unpaid_prior + hours
+            leadership_lifetime_hours = prior_lifetime + hours
+
             drafts = calculate_sambhaji_placement(
                 cand,
                 hours=hours,
@@ -301,6 +321,8 @@ def run_cycle_calculation(
                 coordinators=coordinator_index(db),
                 paid_keys=paid_keys,
                 cycle_end=window.end,
+                recruiter_matrix_hours=recruiter_matrix_hours,
+                leadership_lifetime_hours=leadership_lifetime_hours,
             )
             lines.extend(drafts)
             continue
@@ -352,7 +374,7 @@ def run_cycle_calculation(
             lines.append(draft)
 
     if is_sambhaji_nagar_division(cycle.division):
-        lines = special_average(lines)
+        lines = special_average(lines, cycle_month=cycle.incentive_month)
 
     validations = [
         {
@@ -644,6 +666,14 @@ def run_cycle_calculation(
 
     if is_sambhaji_nagar_division(cycle.division):
         assert coordinators is not None
+        # Load cumulative hours from all finalized SN cycles (exclude current cycle)
+        active_pks = list(hours_by_pk.keys())
+        prior_hours_map = sn_cumulative_hours_by_candidate(
+            db, active_pks, exclude_cycle_id=cycle.id, division=cycle.division
+        )
+        paid_hours_map = sn_paid_recruiter_hours_by_candidate(
+            db, active_pks, exclude_cycle_id=cycle.id, division=cycle.division
+        )
         for pk, hours in hours_by_pk.items():
             cand = by_pk[pk]
             if cand.incentive_active is False:
@@ -659,18 +689,31 @@ def run_cycle_calculation(
                 )
                 continue
 
+            prior_lifetime = prior_hours_map.get(pk, Decimal("0"))
+            prior_paid = paid_hours_map.get(pk, Decimal("0"))
+            
+            unpaid_prior = prior_lifetime - prior_paid
+            if unpaid_prior < 0:
+                unpaid_prior = Decimal("0")
+                
+            recruiter_matrix_hours = unpaid_prior + hours
+            leadership_lifetime_hours = prior_lifetime + hours
+
             drafts = calculate_sambhaji_placement(
                 cand,
                 hours=hours,
                 payment_status=str(getattr(payment_by_candidate.get(pk), "status", "PAYMENT_PENDING")),
                 coordinators=coordinators,
                 paid_keys=paid_keys,
+                cycle_end=window.end,
+                recruiter_matrix_hours=recruiter_matrix_hours,
+                leadership_lifetime_hours=leadership_lifetime_hours,
             )
             lines.extend(drafts)
 
         sn_validations = build_sn_validations(lines)
         
-        return special_average(lines), stats, match_rows, [
+        return special_average(lines, cycle_month=cycle.incentive_month), stats, match_rows, [
             {
                 "check_key": "matched_name_and_id",
                 "severity": "GREEN",

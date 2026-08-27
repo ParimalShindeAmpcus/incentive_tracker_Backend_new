@@ -1,12 +1,21 @@
 """Sambhaji Nagar margin x hours engine.
 
-Strict rules per Incentive Calculation Process document:
+Business rules (per Incentive Calculation Process document + management amendments):
  - Applicable organisations: Bravens, Ampcus Inc., ITech
  - Applicable location: Sambhaji Nagar (recruiter_location)
  - Full-Time (FULLTIME) placements are excluded
- - For < 160 hours: ALL roles (Recruiter + Leadership) incentive released ONLY after client payment received
- - For 160+ hours: no payment gate
- - Recruiter Special Incentive: only for recruiters with 2+ placements >=160 hrs in same month
+ - Client payment received is required for ALL candidates (no hours-based exemption)
+ - Recruiter incentive amount bucket is determined by the candidate's CUMULATIVE UNPAID hours
+   (hours from prior finalized SN cycles where payment was not received + current cycle hours).
+   Once hours are paid, they are not counted again for the recruiter bucket.
+ - Leadership ONE_TIME incentive:
+     * Requires cumulative lifetime hours >= 160 (all past + current)
+     * Requires client payment received in the current cycle
+     * Both conditions must be satisfied; paid only once (dedup via paid_keys)
+ - Recruiter Special Incentive: only for recruiters with 2+ eligible placements in
+   the same cycle month (cycle_month used, not individual start dates)
+ - AVP and Center Head have the same fixed incentive amount
+ - Director and CRM have the same fixed incentive amount
 """
 from __future__ import annotations
 
@@ -28,6 +37,7 @@ ZERO = Decimal("0")
 
 # TABLE 5 - Sambhaji Nagar Incentive Matrix (Recruiter, per placement)
 # (margin_low, margin_high, (0-40h, 41-80h, 81-120h, 121-160h, 161+h))
+# Bucket is determined by CUMULATIVE hours across all finalized SN cycles + current cycle.
 BANDS: Tuple[Tuple[Decimal, Decimal, Tuple[int, int, int, int, int]], ...] = (
     (Decimal("1.00"),  Decimal("3.00"),  (500,  1000, 2000, 3000, 4000)),
     (Decimal("3.01"),  Decimal("5.00"),  (1000, 2000, 3000, 4000, 5000)),
@@ -40,6 +50,7 @@ BANDS: Tuple[Tuple[Decimal, Decimal, Tuple[int, int, int, int, int]], ...] = (
 )
 
 # TABLE 6 - ONE_TIME fixed incentives for leadership roles
+# AVP = Center Head amount (1750); Director = CRM amount (1000)
 FIXED: Dict[str, int] = {
     "Team Lead":           500,
     "Manager":            1000,
@@ -47,6 +58,8 @@ FIXED: Dict[str, int] = {
     "CRM":                1000,
     "Associate Director": 1750,
     "Center Head":        1750,
+    "AVP":                1750,   # same as Center Head
+    "Director":           1000,   # same as CRM
 }
 
 VALID_ORGS = {"bravens", "ampcus inc", "ampcus inc.", "itech"}
@@ -87,7 +100,11 @@ def _limit_roles_sambhaji(people: Dict[str, Optional[str]], amounts: Dict[str, i
 
 
 def matrix_amount(margin: Optional[Decimal], hours: Decimal) -> int:
-    """Return INR incentive amount from TABLE 5."""
+    """Return INR incentive amount from TABLE 5.
+
+    ``hours`` should be the candidate's CUMULATIVE hours across all finalized
+    SN cycles plus the current cycle, so that the correct bucket is applied.
+    """
     if margin is None or hours < ZERO:
         return 0
     if hours <= 40:
@@ -107,7 +124,8 @@ def matrix_amount(margin: Optional[Decimal], hours: Decimal) -> int:
 
 
 def _line(c: Candidate, role: str, person: Optional[str], amount: int, hours: Decimal,
-          eligible: bool, reason: str, kind: str = "RECURRING") -> LineDraft:
+          eligible: bool, reason: str, kind: str = "RECURRING",
+          cumulative_hours: Optional[Decimal] = None) -> LineDraft:
     return LineDraft(
         c.id, c.candidate_name, role, (person or "—").strip(), kind,
         "Sambhaji Nagar margin x hours", eligible, Decimal(amount),
@@ -116,13 +134,14 @@ def _line(c: Candidate, role: str, person: Optional[str], amount: int, hours: De
         [json.dumps({
             "margin": str(c.margin),
             "hours": str(hours),
+            "cumulative_hours": str(cumulative_hours) if cumulative_hours is not None else str(hours),
             "organization": c.organization or "",
             "recruiter_location": c.recruiter_location or "",
             "start_month": c.start_date.strftime("%Y-%m") if c.start_date else "",
             "start_date": c.start_date.isoformat() if c.start_date else None,
             "contract_type": c.contract_type or "",
             "candidate_source": c.candidate_source or "",
-            **({
+            **(  {
                 "exemption_status": EXEMPTED_MISSING_RECRUITER_MASTER,
                 "exemption_reason": EXEMPTION_REASON_TEXT,
             } if reason == EXEMPTED_MISSING_RECRUITER_MASTER else {}),
@@ -137,23 +156,38 @@ def calculate_placement(
     payment_status: str,
     coordinators: Dict[str, CoordinatorRecord],
     paid_keys: Optional[set[str]] = None,
-    cycle_end: Optional[date] = None,
+    cycle_end=None,
+    recruiter_matrix_hours: Optional[Decimal] = None,
+    leadership_lifetime_hours: Optional[Decimal] = None,
 ) -> List[LineDraft]:
     """
     Calculate all incentive lines for one Sambhaji Nagar candidate placement.
 
-    Rules from document:
+    Business rules:
     1. Organisation must be Bravens, Ampcus Inc., or ITech
     2. Recruiter location must be Sambhaji Nagar
     3. Full-Time contract type is excluded
-    4. Recruiter and Leadership recurring/fixed incentive
-       - <160 hrs: blocked until client payment received
-       - >=160 hrs: no payment gate
-    5. Recruiter LEFT/NOTICE: not eligible
+    4. Client payment received is required for ALL candidates (regardless of hours)
+    5. Recruiter incentive matrix bucket is determined by CUMULATIVE UNPAID hours
+       (prior finalized SN cycles where payment was pending + current cycle hours).
+       Once hours are paid, they are not accumulated again.
+    6. Leadership ONE_TIME incentive:
+       - Released only when cumulative lifetime hours >= 160
+       - Also requires client payment received in the current cycle
+       - Paid only once per candidate/role/person (dedup via paid_keys)
+    7. Recruiter LEFT/NOTICE: not eligible
+    8. AVP has same fixed amount as Center Head; Director has same fixed amount as CRM
+
+    Args:
+        hours: current cycle hours for this candidate
+        recruiter_matrix_hours: unpaid backlog hours + current cycle hours
+        leadership_lifetime_hours: total hours including all prior finalized SN cycles
     """
+    # Resolve hours
+    recruiter_hours: Decimal = recruiter_matrix_hours if recruiter_matrix_hours is not None else hours
+    lifetime_hours: Decimal = leadership_lifetime_hours if leadership_lifetime_hours is not None else hours
+
     paid = payment_status.upper() in {"RECEIVED", "PAYMENT_RECEIVED", "NOT_APPLICABLE"}
-    requires_payment = hours < Decimal("160")
-    completed_160 = hours >= Decimal("160")
 
     # Recruiter employment status — missing from Recruiter Master is not LEFT/NOTICE
     coord_rec = lookup_coordinator(coordinators, c.recruiter)
@@ -167,10 +201,10 @@ def calculate_placement(
     org_val = str(c.organization or "").strip().lower()
     loc_valid = is_valid_sn_location(c.recruiter_location)
 
-    # Recruiter incentive amount from matrix
-    amount = matrix_amount(c.margin, hours)
+    # Recruiter incentive amount from matrix — using UNPAID backlog hours for bucket selection
+    amount = matrix_amount(c.margin, recruiter_hours)
 
-    # Blocking checks
+    # Blocking checks (hard blocks abort both recruiter and leadership)
     blocked = ""
     if cycle_end and c.start_date and c.start_date > cycle_end:
         blocked = "NOT_YET_STARTED"
@@ -184,7 +218,8 @@ def calculate_placement(
     elif (c.contract_type or "").strip().upper() == "FULLTIME":
         blocked = "FULL_TIME"
         amount = 0
-    elif requires_payment and not paid:
+    elif not paid:
+        # Payment gate applies to ALL candidates regardless of hours worked
         blocked = "PAYMENT_PENDING"
     elif not amount:
         blocked = "MARGIN_OR_HOURS_OUTSIDE_MATRIX"
@@ -192,28 +227,23 @@ def calculate_placement(
     base_recruiter_amount = 0 if blocked else amount
 
     people = {
-        "Recruiter": c.recruiter,
-        "Team Lead": c.team_lead,
-        "Manager": c.manager,
-        "Senior Manager": c.senior_manager,
-        "CRM": c.crm,
+        "Recruiter":          c.recruiter,
+        "Team Lead":          c.team_lead,
+        "Manager":            c.manager,
+        "Senior Manager":     c.senior_manager,
+        "CRM":                c.crm,
         "Associate Director": c.associate_director,
-        "Center Head": c.center_head,
+        "Center Head":        c.center_head,
+        "AVP":                getattr(c, "avp", None),
+        "Director":           getattr(c, "director", None),
     }
 
-    amounts = {
-        "Recruiter": base_recruiter_amount,
-        "Team Lead": FIXED.get("Team Lead", 0),
-        "Manager": FIXED.get("Manager", 0),
-        "Senior Manager": FIXED.get("Senior Manager", 0),
-        "CRM": FIXED.get("CRM", 0),
-        "Associate Director": FIXED.get("Associate Director", 0),
-        "Center Head": FIXED.get("Center Head", 0),
-    }
+    amounts = {role: FIXED.get(role, 0) for role in people}
+    amounts["Recruiter"] = base_recruiter_amount
 
     excluded_roles = _limit_roles_sambhaji(people, amounts)
 
-    # Recruiter eligibility
+    # ── Recruiter eligibility ──────────────────────────────────────────────────
     if "Recruiter" in excluded_roles:
         recruiter_reason = "EXCEEDED_MAX_ROLES"
         recruiter_ok = False
@@ -233,10 +263,16 @@ def calculate_placement(
     recruiter_amount = amount if recruiter_ok else 0
 
     lines: List[LineDraft] = [
-        _line(c, "Recruiter", c.recruiter, recruiter_amount, hours, recruiter_ok, recruiter_reason)
+        # Pass recruiter_hours to BOTH the actual `hours` and `cumulative_hours` fields
+        # This ensures that when the line is paid, it registers as having paid the full accumulated amount
+        _line(c, "Recruiter", c.recruiter, recruiter_amount, recruiter_hours,
+              recruiter_ok, recruiter_reason, "RECURRING", recruiter_hours)
     ]
 
-    # Leadership ONE_TIME lines
+    # ── Leadership ONE_TIME lines ──────────────────────────────────────────────
+    # Eligibility requires BOTH:
+    #   (a) cumulative lifetime hours >= 160 (across all finalized SN cycles + current)
+    #   (b) client payment received in this cycle
     for role, person in {
         "Team Lead":          c.team_lead,
         "Manager":            c.manager,
@@ -244,89 +280,108 @@ def calculate_placement(
         "CRM":                c.crm,
         "Associate Director": c.associate_director,
         "Center Head":        c.center_head,
+        "AVP":                getattr(c, "avp", None),
         "Director":           getattr(c, "director", None),
     }.items():
         if not person or person.strip().lower() in {"not applicable", "n/a", "—", "-", ""}:
             continue
 
         if role not in FIXED:
-            coord_rec = lookup_coordinator(coordinators, person)
-            if coordinators and not coord_rec:
-                lines.append(_line(c, role, person, 0, hours, False, EXEMPTED_MISSING_RECRUITER_MASTER, "ONE_TIME"))
+            # Role exists on candidate but has no fixed amount — record for audit only
+            coord_rec_l = lookup_coordinator(coordinators, person)
+            if coordinators and not coord_rec_l:
+                lines.append(_line(c, role, person, 0, hours, False,
+                                   EXEMPTED_MISSING_RECRUITER_MASTER, "ONE_TIME", lifetime_hours))
             continue
 
-        fixed_amount = FIXED.get(role, 0)
-        
-        coord_rec = lookup_coordinator(coordinators, person)
-        
+        fixed_amount = FIXED[role]
+        coord_rec_l = lookup_coordinator(coordinators, person)
+
         person_clean = person.strip().lower()
-        # Deduplication check
+        # Deduplication key — prevents paying the same ONE_TIME twice across cycles
         key = f"{c.id}|ONE_TIME|{role}|{person_clean}"
-        
-        # Check coordinator master status
+
         if paid_keys and key in paid_keys:
             lead_eligible = False
             lead_reason = "ALREADY_PAID"
         elif role in excluded_roles:
             lead_eligible = False
             lead_reason = "EXCEEDED_MAX_ROLES"
-        elif not coord_rec:
+        elif not coord_rec_l:
             lead_eligible = False
             lead_reason = EXEMPTED_MISSING_RECRUITER_MASTER
         else:
-            coord_status = getattr(getattr(coord_rec, "employment_status", None), "value", getattr(coord_rec, "employment_status", "ACTIVE"))
+            coord_status = getattr(
+                getattr(coord_rec_l, "employment_status", None),
+                "value",
+                getattr(coord_rec_l, "employment_status", "ACTIVE"),
+            )
             coord_status_str = str(coord_status).upper()
-            if coord_status_str in {"LEFT", "NOTICE"}:
+            if coord_status_str == "LEFT":
                 lead_eligible = False
-                lead_reason = "COORDINATOR_LEFT" if coord_status_str == "LEFT" else "COORDINATOR_ON_NOTICE"
-            elif blocked and blocked != "PAYMENT_PENDING":
+                lead_reason = "COORDINATOR_LEFT"
+            elif coord_status_str == "NOTICE":
+                lead_eligible = False
+                lead_reason = "COORDINATOR_ON_NOTICE"
+            elif blocked and blocked not in {"PAYMENT_PENDING"}:
+                # Hard blocks (invalid org, location, full-time, not started)
                 lead_eligible = False
                 lead_reason = blocked
-            elif hours < Decimal("160"):
+            elif lifetime_hours < Decimal("160"):
+                # Cumulative hours across all SN cycles have not reached 160 yet
                 lead_eligible = False
-                lead_reason = "HOURS_UNDER_160"
+                lead_reason = "CUMULATIVE_HOURS_UNDER_160"
+            elif not paid:
+                # Payment not yet received — hold until payment arrives in a later cycle
+                lead_eligible = False
+                lead_reason = "PAYMENT_PENDING"
             else:
                 lead_eligible = True
                 lead_reason = "ELIGIBLE"
 
         lead_amount = fixed_amount if lead_eligible else 0
-
-        lines.append(_line(c, role, person, lead_amount, hours, lead_eligible, lead_reason, "ONE_TIME"))
+        lines.append(_line(c, role, person, lead_amount, lifetime_hours,
+                           lead_eligible, lead_reason, "ONE_TIME", lifetime_hours))
 
     return lines
 
 
-def special_average(lines: Sequence[LineDraft]) -> List[LineDraft]:
+def special_average(lines: Sequence[LineDraft], cycle_month: Optional[str] = None) -> List[LineDraft]:
     """
-    Recruiter Special Incentive (Multiple Placements, Same Month).
+    Recruiter Special Incentive (Multiple Placements, Same Cycle Month).
 
-    Per document:
-    - Only Recruiters with 2+ placements >= 160 hours.
-    - Bonus = average of all eligible placement incentives.
-    - Placements < 160 hours do NOT qualify.
+    Per business rule:
+    - Only Recruiters with 2+ eligible placements in the current incentive cycle
+      are eligible.
+    - Eligibility is determined by the CYCLE MONTH (not the candidate's start date).
+      Any recruiter with 2+ qualifying eligible placements processed in this cycle
+      gets the bonus.
+    - Bonus = average of all qualifying placement incentive amounts for that recruiter.
+    - Only Recruiters are eligible; Team Leads, Managers, CRM etc. are not.
     """
+    group_month = cycle_month or "UNKNOWN"
     groups: Dict[Tuple[str, str], List[LineDraft]] = {}
     for line in lines:
-        if line.role == "Recruiter" and line.eligible and line.hours >= Decimal("160"):
-            start_month = ""
-            if line.explanation:
-                try:
-                    meta = json.loads(line.explanation[0])
-                    start_month = meta.get("start_month", "")
-                except Exception:
-                    pass
-            if start_month:
-                groups.setdefault((line.person.strip().lower(), start_month), []).append(line)
+        if line.role == "Recruiter" and line.eligible:
+            groups.setdefault((line.person.strip().lower(), group_month), []).append(line)
 
     extras: List[LineDraft] = []
-    for (person_lower, start_month), items in groups.items():
+    for (person_lower, grp_month), items in groups.items():
         if len(items) >= 2:
             total = sum((item.amount for item in items), ZERO)
             avg = total / Decimal(len(items))
             first = items[0]
+            # Collect individual start months for audit trail only
+            individual_start_months = []
+            for item in items:
+                try:
+                    meta = json.loads(item.explanation[0]) if item.explanation else {}
+                    individual_start_months.append(meta.get("start_month", ""))
+                except Exception:
+                    individual_start_months.append("")
             extras.append(LineDraft(
                 first.candidate_id,
-                f"Special Bonus: {len(items)} placements ({first.person}) [{start_month}]",
+                f"Special Bonus: {len(items)} placements ({first.person}) [Cycle: {grp_month}]",
                 "Recruiter",
                 first.person,
                 "SPECIAL",
@@ -336,9 +391,10 @@ def special_average(lines: Sequence[LineDraft]) -> List[LineDraft]:
                 [json.dumps({
                     "placements": len(items),
                     "individual_incentives": [str(i.amount) for i in items],
+                    "individual_start_months": individual_start_months,
                     "average_bonus": str(avg),
-                    "start_month": start_month,
-                    "note": "Special incentive: average of 160+ hour placements starting in same month",
+                    "cycle_month": grp_month,
+                    "note": "Special incentive: average of all eligible placements in this incentive cycle",
                 })],
             ))
     return list(lines) + extras
@@ -355,6 +411,7 @@ def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
         "sn_full_time": 0,
         "sn_recruiter_left": 0,
         "sn_not_yet_started": 0,
+        "sn_cumulative_hours_under_160": 0,
     }
     for line in lines:
         if line.role != "Recruiter":
@@ -375,12 +432,14 @@ def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
             counts["sn_recruiter_left"] += 1
         elif line.reason == "NOT_YET_STARTED":
             counts["sn_not_yet_started"] += 1
+        elif line.reason == "CUMULATIVE_HOURS_UNDER_160":
+            counts["sn_cumulative_hours_under_160"] += 1
 
     return [
         {"check_key": "sn_recruiter_eligible", "severity": "GREEN" if counts["sn_recruiter_eligible"] > 0 else "YELLOW",
          "count": counts["sn_recruiter_eligible"], "message": "Sambhaji Nagar: Eligible recruiter placements", "details_json": None},
         {"check_key": "sn_payment_pending", "severity": "YELLOW" if counts["sn_payment_pending"] > 0 else "GREEN",
-         "count": counts["sn_payment_pending"], "message": "Placements awaiting client payment (<160 hrs)", "details_json": None},
+         "count": counts["sn_payment_pending"], "message": "Placements awaiting client payment (all hours)", "details_json": None},
         {"check_key": "sn_outside_matrix", "severity": "YELLOW" if counts["sn_outside_matrix"] > 0 else "GREEN",
          "count": counts["sn_outside_matrix"], "message": "Placements outside incentive matrix (margin/hours range)", "details_json": None},
         {"check_key": "sn_invalid_source", "severity": "RED" if counts["sn_invalid_source"] > 0 else "GREEN",
@@ -393,4 +452,6 @@ def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
          "count": counts["sn_recruiter_left"], "message": "Placements excluded: Recruiter left / on notice", "details_json": None},
         {"check_key": "sn_not_yet_started", "severity": "YELLOW" if counts["sn_not_yet_started"] > 0 else "GREEN",
          "count": counts["sn_not_yet_started"], "message": "Placements excluded: Start date is after incentive month", "details_json": None},
+        {"check_key": "sn_cumulative_hours_under_160", "severity": "YELLOW" if counts["sn_cumulative_hours_under_160"] > 0 else "GREEN",
+         "count": counts["sn_cumulative_hours_under_160"], "message": "Placements with cumulative hours < 160 (leadership ONE_TIME deferred)", "details_json": None},
     ]

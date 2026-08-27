@@ -602,11 +602,8 @@ def upload_hours_file(
         filtered_matched_ids = []
         for r in match_rows:
             if r["accepted"] and r["candidate_id"] is not None:
-                if is_sambhaji_nagar_division(cycle.division):
-                    if r.get("hours_worked", Decimal("0")) < Decimal("160"):
-                        filtered_matched_ids.append(r["candidate_id"])
-                else:
-                    filtered_matched_ids.append(r["candidate_id"])
+                # Payment status is required for ALL SN candidates regardless of hours
+                filtered_matched_ids.append(r["candidate_id"])
                     
         cycle_repository.replace_matches(db, cycle.id, match_rows)
         cycle_repository.sync_payment_statuses(db, cycle.id, list(set(filtered_matched_ids)))
