@@ -64,3 +64,40 @@ def paid_one_time_keys(db: Session, exclude_cycle_id: int) -> set[str]:
         person = (row.person or "").strip().lower()
         keys.add(f"{row.candidate_id}|{row.incentive_type}|{row.role}|{person}")
     return keys
+
+
+def sn_paid_special_bonuses(db: Session, exclude_cycle_id: int, division: str) -> dict:
+    from decimal import Decimal
+    import json
+    
+    rows = (
+        db.query(IncentiveLine)
+        .join(IncentiveCycle, IncentiveCycle.id == IncentiveLine.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            IncentiveCycle.division == division,
+            IncentiveLine.incentive_type == "SPECIAL",
+            IncentiveLine.role == "Recruiter",
+            IncentiveLine.eligible.is_(True),
+            IncentiveLine.amount > 0,
+        )
+        .all()
+    )
+    
+    paid: dict[tuple[str, str], Decimal] = {}
+    for r in rows:
+        person = (r.person or "").strip().lower()
+        start_month = ""
+        try:
+            if r.explanation:
+                meta = json.loads(r.explanation[0])
+                start_month = meta.get("start_month", "")
+        except Exception:
+            pass
+            
+        if start_month:
+            key = (person, start_month)
+            paid[key] = paid.get(key, Decimal("0")) + Decimal(str(r.amount or 0))
+            
+    return paid

@@ -46,7 +46,7 @@ from app.services.cycles.engines.ampcus_client import (
 from app.services.incentives.recruiter_master import missing_recruiter_master_validation
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
 from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
-from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, special_average, build_sn_validations
+from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations
 
 def _to_master(cand: Candidate) -> MasterCandidate:
     return MasterCandidate(
@@ -713,7 +713,25 @@ def run_cycle_calculation(
 
         sn_validations = build_sn_validations(lines)
         
-        return special_average(lines, cycle_month=cycle.incentive_month), stats, match_rows, [
+        # Calculate cross-candidate recruiter special incentives
+        all_sn_candidates = [c for c in masters if is_sambhaji_nagar_division(c.division)]
+        sn_pks = [c.id for c in all_sn_candidates]
+        all_prior_hours = sn_cumulative_hours_by_candidate(db, sn_pks, exclude_cycle_id=cycle.id, division=cycle.division)
+        
+        lifetime_hours_map = {}
+        for c in all_sn_candidates:
+            prior = all_prior_hours.get(c.id, Decimal("0"))
+            current = hours_by_pk.get(c.id, Decimal("0"))
+            lifetime_hours_map[c.id] = prior + current
+            
+        paid_specials = incentive_repository.sn_paid_special_bonuses(db, cycle.id, division=cycle.division)
+        
+        special_lines = calculate_special_incentives(
+            all_sn_candidates, lifetime_hours_map, paid_specials, cycle.incentive_month
+        )
+        lines.extend(special_lines)
+        
+        return lines, stats, match_rows, [
             {
                 "check_key": "matched_name_and_id",
                 "severity": "GREEN",

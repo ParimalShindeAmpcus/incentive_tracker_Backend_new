@@ -346,58 +346,67 @@ def calculate_placement(
     return lines
 
 
-def special_average(lines: Sequence[LineDraft], cycle_month: Optional[str] = None) -> List[LineDraft]:
+def calculate_special_incentives(
+    all_sn_candidates: List[Any],
+    lifetime_hours_map: Dict[int, Decimal],
+    paid_specials_map: Dict[Tuple[str, str], Decimal],
+    cycle_month: Optional[str]
+) -> List[LineDraft]:
     """
-    Recruiter Special Incentive (Multiple Placements, Same Cycle Month).
+    Recruiter Special Incentive (Multiple Placements, Same Start Month).
+    Calculates average bonus for recruiters who have >= 2 placements starting in the same month
+    that have achieved >= 160 cumulative hours.
+    """
+    from collections import defaultdict
+    import json
 
-    Per business rule:
-    - Only Recruiters with 2+ eligible placements in the current incentive cycle
-      are eligible.
-    - Eligibility is determined by the CYCLE MONTH (not the candidate's start date).
-      Any recruiter with 2+ qualifying eligible placements processed in this cycle
-      gets the bonus.
-    - Bonus = average of all qualifying placement incentive amounts for that recruiter.
-    - Only Recruiters are eligible; Team Leads, Managers, CRM etc. are not.
-    """
-    group_month = cycle_month or "UNKNOWN"
-    groups: Dict[Tuple[str, str], List[LineDraft]] = {}
-    for line in lines:
-        if line.role == "Recruiter" and line.eligible:
-            groups.setdefault((line.person.strip().lower(), group_month), []).append(line)
+    groups = defaultdict(list)
+    for c in all_sn_candidates:
+        if not c.recruiter or not c.start_date:
+            continue
+        lifetime_hours = lifetime_hours_map.get(c.id, ZERO)
+        if lifetime_hours < Decimal("160"):
+            continue
+        
+        person_lower = str(c.recruiter).strip().lower()
+        start_month = c.start_date.strftime("%Y-%m")
+        groups[(person_lower, start_month)].append(c)
 
     extras: List[LineDraft] = []
-    for (person_lower, grp_month), items in groups.items():
-        if len(items) >= 2:
-            total = sum((item.amount for item in items), ZERO)
-            avg = total / Decimal(len(items))
-            first = items[0]
-            # Collect individual start months for audit trail only
-            individual_start_months = []
-            for item in items:
-                try:
-                    meta = json.loads(item.explanation[0]) if item.explanation else {}
-                    individual_start_months.append(meta.get("start_month", ""))
-                except Exception:
-                    individual_start_months.append("")
-            extras.append(LineDraft(
-                first.candidate_id,
-                f"Special Bonus: {len(items)} placements ({first.person}) [Cycle: {grp_month}]",
-                "Recruiter",
-                first.person,
-                "SPECIAL",
-                "Sambhaji Nagar multiple-placement average",
-                True, avg, Decimal("1"), avg, ZERO, first.margin,
-                "Eligible recruiter multiple-placement average bonus",
-                [json.dumps({
-                    "placements": len(items),
-                    "individual_incentives": [str(i.amount) for i in items],
-                    "individual_start_months": individual_start_months,
-                    "average_bonus": str(avg),
-                    "cycle_month": grp_month,
-                    "note": "Special incentive: average of all eligible placements in this incentive cycle",
-                })],
-            ))
-    return list(lines) + extras
+    for (person_lower, start_month), candidates in groups.items():
+        if len(candidates) >= 2:
+            total_base = ZERO
+            for c in candidates:
+                base_amt = matrix_amount(c.margin, Decimal("160"))
+                total_base += Decimal(str(base_amt))
+            
+            avg_bonus = total_base / Decimal(len(candidates))
+            
+            previously_paid = paid_specials_map.get((person_lower, start_month), ZERO)
+            payable_now = avg_bonus - previously_paid
+            
+            if payable_now > ZERO:
+                first = candidates[0]
+                extras.append(LineDraft(
+                    first.start_id or first.external_candidate_id,
+                    f"Special Bonus: {len(candidates)} placements ({first.recruiter}) [Start: {start_month}]",
+                    "Recruiter",
+                    first.recruiter,
+                    "SPECIAL",
+                    "Sambhaji Nagar multiple-placement average",
+                    True, float(payable_now), Decimal("1"), float(payable_now), ZERO, first.margin,
+                    "Eligible recruiter multiple-placement average bonus",
+                    [json.dumps({
+                        "start_month": start_month,
+                        "placements": len(candidates),
+                        "average_bonus": float(avg_bonus),
+                        "previously_paid": float(previously_paid),
+                        "payable_now": float(payable_now),
+                        "cycle_month": cycle_month,
+                        "note": "Special incentive: average of 160+ hour placements starting in same month",
+                    })],
+                ))
+    return extras
 
 
 def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
