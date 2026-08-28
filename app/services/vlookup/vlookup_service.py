@@ -53,6 +53,58 @@ from app.services.vlookup.reconciliation_matcher import ReconciliationMatcher
 logger = logging.getLogger(__name__)
 
 
+def _candidate_lookup_keys(candidate) -> List[str]:
+    keys: List[str] = []
+    for value in (
+        getattr(candidate, "external_candidate_id", None),
+        getattr(candidate, "start_id", None),
+        getattr(candidate, "activity_id", None),
+    ):
+        key = str(value or "").strip().lower()
+        if key:
+            keys.append(key)
+    return keys
+
+
+def _restrict_templates_to_nashik_division(
+    db: Session,
+    templates: List[VLookupTemplateCandidate],
+) -> Tuple[List[VLookupTemplateCandidate], int]:
+    """Keep Hours Template rows that belong to Nashik (Organisation + Recruiter Location).
+
+    Rows that cannot be found in Candidate Master are kept so matching tests and
+    ad-hoc IDs still work. Known non-Nashik master records are excluded.
+    """
+    from app.services.incentives.nashik_rules import is_nashik_hours_scope
+
+    masters = candidate_repository.list_all_candidates(db)
+    if not masters:
+        return templates, 0
+
+    by_id: Dict[str, Any] = {}
+    for master in masters:
+        for key in _candidate_lookup_keys(master):
+            by_id.setdefault(key, master)
+
+    kept: List[VLookupTemplateCandidate] = []
+    skipped = 0
+    for template in templates:
+        cid = str(getattr(template, "candidate_id", "") or "").strip().lower()
+        master = by_id.get(cid)
+        if master is None:
+            kept.append(template)
+            continue
+        if is_nashik_hours_scope(
+            organization=master.organization,
+            candidate_source=master.candidate_source,
+            recruiter_location=master.recruiter_location,
+        ):
+            kept.append(template)
+        else:
+            skipped += 1
+    return kept, skipped
+
+
 def template_info() -> VLookupTemplateResponse:
     return VLookupTemplateResponse()
 
@@ -122,13 +174,34 @@ def upload_template_and_messy(
             )
             created += 1
 
+        nashik_scope_note = None
+        pending_templates, skipped_non_nashik = _restrict_templates_to_nashik_division(
+            db, pending_templates
+        )
+        created = len(pending_templates)
+        if skipped_non_nashik:
+            nashik_scope_note = (
+                "Smart Match is limited to the Nashik division. "
+                f"{skipped_non_nashik} Hours Template row(s) belonging to other divisions "
+                "(identified from Organisation and Recruiter Location) were excluded."
+            )
+
         if pending_templates:
             db.add_all(pending_templates)
             db.flush()
             template_records = pending_templates
 
         if not template_records:
-            raise HTTPException(status_code=400, detail="No valid template candidates found.")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No Nashik division candidates found in the Hours Template. "
+                    "Smart Match only processes candidates whose Organisation and "
+                    "Recruiter Location belong to Nashik."
+                    if skipped_non_nashik
+                    else "No valid template candidates found."
+                ),
+            )
 
         messy_content = messy_file.file.read()
         unfiltered = parse_client_hours_file(
@@ -306,6 +379,12 @@ def upload_template_and_messy(
         elif template_month:
             month_note = f"No month could be detected in the client file. Template month is {template_month}."
 
+        parser_warnings = (
+            (parsed.get("warnings") or [])
+            + ([month_note] if month_note else [])
+            + ([nashik_scope_note] if nashik_scope_note else [])
+        )
+
         upload_batch = VLookupUploadBatch(
             batch_id=batch_id,
             file_type="template_and_messy",
@@ -320,7 +399,7 @@ def upload_template_and_messy(
             conflicting_count=len(match_results.get("conflicting", [])),
             target_month=month_filter or None,
             client_file_format=parsed.get("format"),
-            parser_warnings=(parsed.get("warnings") or []) + ([month_note] if month_note else []),
+            parser_warnings=parser_warnings,
             uploaded_by=uploaded_by or "system",
             completed_at=datetime.utcnow(),
         )
@@ -386,7 +465,7 @@ def upload_template_and_messy(
             conflicting_count=len(match_results.get("conflicting", [])),
             accepted_count=len(match_results.get("accepted", [])),
             rejected_count=len(match_results.get("rejected", [])),
-            parser_warnings=(parsed.get("warnings") or []) + ([month_note] if month_note else []),
+            parser_warnings=parser_warnings,
             month_note=month_note,
             total_records=(
                 len(match_results.get("matched", []))

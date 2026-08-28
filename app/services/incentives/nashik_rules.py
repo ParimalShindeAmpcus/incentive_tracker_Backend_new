@@ -117,6 +117,18 @@ def is_nashik_office(recruiter_location: Optional[str]) -> bool:
     return not any(token in loc for token in blocked)
 
 
+def is_nashik_hours_scope(
+    *,
+    organization: Optional[str] = None,
+    candidate_source: Optional[str] = None,
+    recruiter_location: Optional[str] = None,
+) -> bool:
+    """True when Organisation + Recruiter Location belong to the Nashik division."""
+    return matches_nashik_company(candidate_source, organization) and is_nashik_office(
+        recruiter_location
+    )
+
+
 def is_nashik_division(code: Optional[str]) -> bool:
     return (code or "").strip().lower() in NASHIK_DIVISION_KEYS
 
