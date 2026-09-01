@@ -12,6 +12,7 @@ from app.services.incentives.nashik_rules import (
     LEADERSHIP_ONE_TIME,
     MAX_ROLES_PER_PERSON,
     NASHIK_CONTRACT_TYPES,
+    NASHIK_MONTHLY_DUPLICATE_ROLES,
     PROJECT_END_RECRUITER,
     ROLE_PRIORITY,
     STANDARD_HOURS,
@@ -83,6 +84,7 @@ class LineDraft:
     margin: Optional[Decimal]
     reason: str
     explanation: List[str] = field(default_factory=list)
+    incentive_month: Optional[str] = None  # YYYY-MM; used for Recruiter/Team Lead month uniqueness
 
     def explanation_json(self) -> str:
         if self.explanation and str(self.explanation[0]).lstrip().startswith("{"):
@@ -90,6 +92,15 @@ class LineDraft:
         return json.dumps(self.explanation)
 
     def paid_key(self) -> str:
+        if self.incentive_type == "RECURRING" and self.role in NASHIK_MONTHLY_DUPLICATE_ROLES:
+            return "|".join(
+                [
+                    str(self.candidate_id or ""),
+                    self.incentive_type,
+                    self.role,
+                    self.incentive_month or "",
+                ]
+            )
         return "|".join(
             [
                 str(self.candidate_id or ""),
@@ -364,6 +375,7 @@ def calculate_nashik_placement(
     hours = _monthly_hours(p)
     p.hours = hours
     cumulative = _cumulative_hours(p)
+    month_key = window.start.strftime("%Y-%m")
 
     if not p.incentive_active:
         return _scope(p, "Candidate is marked incentive-inactive", [
@@ -560,7 +572,7 @@ def calculate_nashik_placement(
                         ],
                     )
                 )
-        return _apply_duplicates(lines, paid_keys)
+        return _apply_duplicates(lines, paid_keys, month_key)
 
     # Normal path for selected roles.
     for role, person in selected:
@@ -601,21 +613,48 @@ def calculate_nashik_placement(
             )
         )
 
-    return _apply_duplicates(lines, paid_keys)
+    return _apply_duplicates(lines, paid_keys, month_key)
 
 
-def _apply_duplicates(lines: Iterable[LineDraft], paid_keys: Set[str]) -> List[LineDraft]:
+def _stamp_incentive_month(lines: Iterable[LineDraft], month_key: str) -> List[LineDraft]:
+    stamped: List[LineDraft] = []
+    for line in lines:
+        if not line.incentive_month:
+            line.incentive_month = month_key
+        stamped.append(line)
+    return stamped
+
+
+def _is_nashik_monthly_recurring(line: LineDraft) -> bool:
+    return line.incentive_type == "RECURRING" and line.role in NASHIK_MONTHLY_DUPLICATE_ROLES
+
+
+def _apply_duplicates(
+    lines: Iterable[LineDraft],
+    paid_keys: Set[str],
+    month_key: Optional[str] = None,
+) -> List[LineDraft]:
     seen: Set[str] = set()
     out: List[LineDraft] = []
-    for line in lines:
-        if line.incentive_type == "RECURRING" or not line.eligible:
+    for line in _stamp_incentive_month(lines, month_key or ""):
+        monthly = _is_nashik_monthly_recurring(line)
+        if not line.eligible:
+            out.append(line)
+            continue
+        if line.incentive_type == "RECURRING" and not monthly:
             out.append(line)
             continue
         key = line.paid_key()
         if key in paid_keys or key in seen:
             line.eligible = False
             line.amount = Decimal("0")
-            line.reason = "Duplicate — this one-time incentive was already paid in a previous cycle"
+            if monthly:
+                line.reason = (
+                    "Duplicate — this Recruiter/Team Lead incentive was already paid "
+                    "for this incentive month"
+                )
+            else:
+                line.reason = "Duplicate — this one-time incentive was already paid in a previous cycle"
             line.explanation = [*line.explanation, "Blocked by duplicate incentive history"]
             out.append(line)
             continue

@@ -66,6 +66,51 @@ def paid_one_time_keys(db: Session, exclude_cycle_id: int) -> set[str]:
     return keys
 
 
+def paid_nashik_recurring_month_keys(
+    db: Session,
+    exclude_cycle_id: int,
+    incentive_month: str,
+) -> set[str]:
+    """
+    Nashik Recruiter / Team Lead uniqueness is per candidate + role + incentive month.
+
+    Incentive month and division live on incentive_cycles, not incentive_lines, so a
+    table-level unique constraint cannot encode this rule without denormalizing those
+    columns (which would risk other divisions). This query is the duplicate check.
+    """
+    from app.services.incentives.nashik_rules import (
+        NASHIK_DIVISION_KEYS,
+        NASHIK_MONTHLY_DUPLICATE_ROLES,
+    )
+
+    if not incentive_month:
+        return set()
+
+    rows = (
+        db.query(IncentiveLine)
+        .join(IncentiveCycle, IncentiveCycle.id == IncentiveLine.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.status.in_(
+                [CycleStatus.CALCULATED, CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]
+            ),
+            IncentiveCycle.incentive_month == incentive_month,
+            IncentiveLine.eligible.is_(True),
+            IncentiveLine.incentive_type == "RECURRING",
+            IncentiveLine.role.in_(list(NASHIK_MONTHLY_DUPLICATE_ROLES)),
+            IncentiveLine.amount > 0,
+        )
+        .all()
+    )
+    keys: set[str] = set()
+    for row in rows:
+        division = (row.cycle.division or "").strip().lower()
+        if division not in NASHIK_DIVISION_KEYS:
+            continue
+        keys.add(f"{row.candidate_id}|{row.incentive_type}|{row.role}|{incentive_month}")
+    return keys
+
+
 def sn_paid_special_bonuses(db: Session, exclude_cycle_id: int, division: str) -> dict:
     from decimal import Decimal
     import json

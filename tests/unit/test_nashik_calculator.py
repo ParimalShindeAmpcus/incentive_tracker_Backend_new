@@ -115,6 +115,69 @@ def test_duplicate_special_blocked():
     assert rec.eligible is False
 
 
+def _payable(lines, role: str):
+    return [line for line in lines if line.role == role and line.eligible and line.amount > 0]
+
+
+def test_recruiter_same_month_duplicate_blocked():
+    first = calculate_nashik_placement(_placement(hours=Decimal("180")), WINDOW)
+    rec = next(line for line in first if line.role == "Recruiter" and line.eligible)
+    assert rec.incentive_type == "RECURRING"
+    second = calculate_nashik_placement(_placement(hours=Decimal("180")), WINDOW, {rec.paid_key()})
+    blocked = next(line for line in second if line.role == "Recruiter")
+    assert blocked.eligible is False
+    assert blocked.amount == Decimal("0")
+    assert "duplicate" in (blocked.reason or "").lower()
+
+
+def test_team_lead_same_month_duplicate_blocked():
+    first = calculate_nashik_placement(_placement(hours=Decimal("160")), WINDOW)
+    tl = next(line for line in first if line.role == "Team Lead" and line.eligible)
+    second = calculate_nashik_placement(_placement(hours=Decimal("160")), WINDOW, {tl.paid_key()})
+    blocked = next(line for line in second if line.role == "Team Lead")
+    assert blocked.eligible is False
+    assert blocked.amount == Decimal("0")
+    assert "duplicate" in (blocked.reason or "").lower()
+
+
+def test_recruiter_different_month_not_blocked():
+    july = CycleWindow(start=date(2026, 7, 1), end=date(2026, 7, 31))
+    august = CycleWindow(start=date(2026, 8, 1), end=date(2026, 8, 31))
+    first = calculate_nashik_placement(_placement(hours=Decimal("160")), july)
+    rec = next(line for line in first if line.role == "Recruiter" and line.eligible)
+    second = calculate_nashik_placement(_placement(hours=Decimal("160")), august, {rec.paid_key()})
+    assert len(_payable(second, "Recruiter")) == 1
+
+
+def test_team_lead_different_month_not_blocked():
+    july = CycleWindow(start=date(2026, 7, 1), end=date(2026, 7, 31))
+    august = CycleWindow(start=date(2026, 8, 1), end=date(2026, 8, 31))
+    first = calculate_nashik_placement(_placement(hours=Decimal("160")), july)
+    tl = next(line for line in first if line.role == "Team Lead" and line.eligible)
+    second = calculate_nashik_placement(_placement(hours=Decimal("160")), august, {tl.paid_key()})
+    assert len(_payable(second, "Team Lead")) == 1
+
+
+def test_recruiter_and_team_lead_duplicate_keys_are_independent():
+    first = calculate_nashik_placement(_placement(hours=Decimal("160")), WINDOW)
+    rec_key = next(line.paid_key() for line in first if line.role == "Recruiter" and line.eligible)
+    second = calculate_nashik_placement(_placement(hours=Decimal("160")), WINDOW, {rec_key})
+    assert _payable(second, "Recruiter") == []
+    assert len(_payable(second, "Team Lead")) == 1
+
+
+def test_different_candidate_same_month_not_blocked():
+    first = calculate_nashik_placement(_placement(candidate_pk=1, hours=Decimal("160")), WINDOW)
+    rec_key = next(line.paid_key() for line in first if line.role == "Recruiter" and line.eligible)
+    second = calculate_nashik_placement(
+        _placement(candidate_pk=2, name="Other", hours=Decimal("160")),
+        WINDOW,
+        {rec_key},
+    )
+    assert len(_payable(second, "Recruiter")) == 1
+    assert len(_payable(second, "Team Lead")) == 1
+
+
 def test_max_two_roles_per_person_includes_recruiter():
     lines = calculate_nashik_placement(
         _placement(recruiter="Alex", team_lead="Alex", crm="Alex", manager="Alex"),

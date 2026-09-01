@@ -344,14 +344,17 @@ def test_june_july_august_monthly_vs_cumulative_and_no_duplicate():
     _persist_payable_one_time(db, august_cycle, august_lines)
     second_august = _cycle(db, "2026-08")
     dup_lines, stats, _, _ = _run(db, second_august, 50)
-    assert stats["already_paid"] >= len(HIGHER_ROLES)
+    assert stats["already_paid"] >= len(HIGHER_ROLES) + 2
     for role in HIGHER_ROLES:
         assert _payable(dup_lines, role) == [], f"Approved August must block a second {role} incentive"
         blocked = [line for line in dup_lines if line.role == role]
         assert blocked, f"{role} line should still be emitted as ineligible duplicate"
         assert "duplicate" in (blocked[0].reason or "").lower()
-    assert len(_payable(dup_lines, "Recruiter")) == 1
-    assert len(_payable(dup_lines, "Team Lead")) == 1
+    for role in ("Recruiter", "Team Lead"):
+        assert _payable(dup_lines, role) == [], f"Approved August must block a second {role} incentive"
+        blocked = [line for line in dup_lines if line.role == role]
+        assert blocked, f"{role} line should still be emitted as ineligible duplicate"
+        assert "duplicate" in (blocked[0].reason or "").lower()
 
 
 def test_edge_49_hours_still_pays_recruiter_tl_prorata():

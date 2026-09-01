@@ -136,6 +136,15 @@ def _nashik_employment_status(coordinators: Optional[dict]) -> Dict[str, str]:
     return out
 
 
+def _paid_keys_for_cycle(db: Session, cycle) -> set[str]:
+    keys = incentive_repository.paid_one_time_keys(db, cycle.id)
+    if is_nashik_division(getattr(cycle, "division", None)):
+        month = getattr(cycle, "incentive_month", None) or ""
+        if month:
+            keys |= incentive_repository.paid_nashik_recurring_month_keys(db, cycle.id, month)
+    return keys
+
+
 def run_cycle_calculation(
     db: Session,
     cycle,
@@ -150,7 +159,7 @@ def run_cycle_calculation(
             row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
         }
         coordinators = coordinator_index(db)
-        paid_keys = incentive_repository.paid_one_time_keys(db, cycle.id)
+        paid_keys = _paid_keys_for_cycle(db, cycle)
         lines = []
         pending = 0
         no_slab = 0
@@ -181,7 +190,7 @@ def run_cycle_calculation(
         division_masters = [c for c in masters if is_ampcus_inhouse_division(c.division)]
         if division_masters:
             masters = division_masters
-        paid_keys = incentive_repository.paid_one_time_keys(db, cycle.id)
+        paid_keys = _paid_keys_for_cycle(db, cycle)
         coordinators = coordinator_index(db)
         lines = []
         not_90_days = 0
@@ -280,7 +289,7 @@ def run_cycle_calculation(
         hours_by_pk[decision.master.pk] += hours
         matched_pks[decision.master.pk] = decision.status
 
-    paid_keys = incentive_repository.paid_one_time_keys(db, cycle.id)
+    paid_keys = _paid_keys_for_cycle(db, cycle)
     lines: List[LineDraft] = list(ineligible)
     for pk, hours in hours_by_pk.items():
         cand = by_pk[pk]
@@ -477,7 +486,7 @@ def run_cycle_calculation(
         else None
     )
     nashik_status = _nashik_employment_status(coordinators) if is_nashik_division(cycle.division) else {}
-    paid_keys = incentive_repository.paid_one_time_keys(db, cycle.id)
+    paid_keys = _paid_keys_for_cycle(db, cycle)
 
     # 1) If hours were uploaded, match & resolve for every hours row.
     for row in hours_rows:

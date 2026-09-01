@@ -14,6 +14,8 @@ LOW_MARGIN_ONE_TIME = Decimal("2000")
 TEAM_LEAD_BASE = Decimal("250")
 PROJECT_END_RECRUITER = Decimal("2000")
 MAX_ROLES_PER_PERSON = 2
+# Recurring across months, but unique within a single incentive month.
+NASHIK_MONTHLY_DUPLICATE_ROLES = frozenset({"Recruiter", "Team Lead"})
 
 # Inclusive [min, max] USD/hour → 160-hour recruiter incentive INR
 RECRUITER_SLABS: List[Tuple[Decimal, Decimal, Decimal]] = [
