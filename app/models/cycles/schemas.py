@@ -148,6 +148,7 @@ class PaymentStatusOut(BaseModel):
     candidate_name: Optional[str] = None
     external_candidate_id: Optional[str] = None
     start_id: Optional[str] = None
+    activity_id: Optional[str] = None
     contract_type: Optional[str] = None
     markup_percent: Optional[Decimal] = None
     approved_markup_percentage: Optional[Decimal] = None

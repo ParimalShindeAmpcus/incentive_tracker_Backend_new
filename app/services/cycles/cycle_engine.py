@@ -15,6 +15,7 @@ from app.repositories.cycles import cycle_repository
 from app.repositories.cycles.cycle_repository import (
     sn_cumulative_hours_by_candidate,
     sn_paid_recruiter_hours_by_candidate,
+    sn_hours_already_approved_this_month,
 )
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.cycle import MatchResult
@@ -313,6 +314,13 @@ def run_cycle_calculation(
             paid_hours_map = sn_paid_recruiter_hours_by_candidate(
                 db, [pk], exclude_cycle_id=cycle.id, division=cycle.division
             )
+            already_approved_this_month_map = sn_hours_already_approved_this_month(
+                db, [pk], exclude_cycle_id=cycle.id, month=cycle.incentive_month, division=cycle.division
+            )
+            
+            already_approved = already_approved_this_month_map.get(pk, Decimal("0"))
+            leadership_hours = max(Decimal("0"), hours - already_approved)
+
             prior_lifetime = prior_hours_map.get(pk, Decimal("0"))
             prior_paid = paid_hours_map.get(pk, Decimal("0"))
             
@@ -321,7 +329,7 @@ def run_cycle_calculation(
                 unpaid_prior = Decimal("0")
                 
             recruiter_matrix_hours = unpaid_prior + hours
-            leadership_lifetime_hours = prior_lifetime + hours
+            leadership_lifetime_hours = prior_lifetime + leadership_hours
 
             drafts = calculate_sambhaji_placement(
                 cand,
@@ -332,6 +340,7 @@ def run_cycle_calculation(
                 cycle_end=window.end,
                 recruiter_matrix_hours=recruiter_matrix_hours,
                 leadership_lifetime_hours=leadership_lifetime_hours,
+                already_approved_this_month=already_approved_this_month_map.get(pk),
             )
             lines.extend(drafts)
             continue
@@ -683,7 +692,10 @@ def run_cycle_calculation(
         paid_hours_map = sn_paid_recruiter_hours_by_candidate(
             db, active_pks, exclude_cycle_id=cycle.id, division=cycle.division
         )
-        for pk, hours in hours_by_pk.items():
+        already_approved_this_month_map = sn_hours_already_approved_this_month(
+            db, active_pks, exclude_cycle_id=cycle.id, month=cycle.incentive_month, division=cycle.division
+        )
+        for pk, raw_hours in hours_by_pk.items():
             cand = by_pk[pk]
             if cand.incentive_active is False:
                 stats["inactive"] += 1
@@ -691,12 +703,16 @@ def run_cycle_calculation(
                     _ineligible_line(
                         candidate_pk=pk,
                         name=cand.candidate_name,
-                        hours=hours,
+                        hours=raw_hours,
                         reason="INACTIVE_CANDIDATE",
                         rule="INELIGIBLE",
                     )
                 )
                 continue
+
+            # Deduct hours already approved in a previous cycle for the exact same month ONLY for leadership
+            already_approved = already_approved_this_month_map.get(pk, Decimal("0"))
+            leadership_hours = max(Decimal("0"), raw_hours - already_approved)
 
             prior_lifetime = prior_hours_map.get(pk, Decimal("0"))
             prior_paid = paid_hours_map.get(pk, Decimal("0"))
@@ -705,18 +721,19 @@ def run_cycle_calculation(
             if unpaid_prior < 0:
                 unpaid_prior = Decimal("0")
                 
-            recruiter_matrix_hours = unpaid_prior + hours
-            leadership_lifetime_hours = prior_lifetime + hours
+            recruiter_matrix_hours = unpaid_prior + raw_hours
+            leadership_lifetime_hours = prior_lifetime + leadership_hours
 
             drafts = calculate_sambhaji_placement(
                 cand,
-                hours=hours,
+                hours=raw_hours,
                 payment_status=str(getattr(payment_by_candidate.get(pk), "status", "PAYMENT_PENDING")),
                 coordinators=coordinators,
                 paid_keys=paid_keys,
                 cycle_end=window.end,
                 recruiter_matrix_hours=recruiter_matrix_hours,
                 leadership_lifetime_hours=leadership_lifetime_hours,
+                already_approved_this_month=already_approved_this_month_map.get(pk),
             )
             lines.extend(drafts)
 

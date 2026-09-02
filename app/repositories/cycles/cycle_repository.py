@@ -435,3 +435,35 @@ def replace_approval_results(
         created.append(row)
     db.flush()
     return created
+
+
+def sn_hours_already_approved_this_month(
+    db: Session,
+    candidate_ids: List[int],
+    exclude_cycle_id: int,
+    month: str,
+    division: str = "sambhajiNagar",
+) -> dict:
+    """Return max accepted hours per candidate_id from finalized SN cycles in the SAME month."""
+    if not candidate_ids or not month:
+        return {}
+
+    rows = (
+        db.query(
+            CycleHoursMatch.candidate_id,
+            func.max(CycleHoursMatch.hours_worked)
+        )
+        .join(IncentiveCycle, IncentiveCycle.id == CycleHoursMatch.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.incentive_month == month,
+            IncentiveCycle.division == division,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            CycleHoursMatch.candidate_id.in_(candidate_ids),
+            CycleHoursMatch.accepted.is_(True),
+        )
+        .group_by(CycleHoursMatch.candidate_id)
+        .all()
+    )
+    return {cand_id: Decimal(str(max_hours or 0)) for cand_id, max_hours in rows}
+

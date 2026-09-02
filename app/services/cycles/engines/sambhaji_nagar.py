@@ -141,6 +141,8 @@ def _line(c: Candidate, role: str, person: Optional[str], amount: int, hours: De
             "start_date": c.start_date.isoformat() if c.start_date else None,
             "contract_type": c.contract_type or "",
             "candidate_source": c.candidate_source or "",
+            "external_candidate_id": c.activity_id or c.start_id or c.external_candidate_id or "",
+            "candidate_id": c.activity_id or c.start_id or c.external_candidate_id or "",
             **(  {
                 "exemption_status": EXEMPTED_MISSING_RECRUITER_MASTER,
                 "exemption_reason": EXEMPTION_REASON_TEXT,
@@ -159,6 +161,7 @@ def calculate_placement(
     cycle_end=None,
     recruiter_matrix_hours: Optional[Decimal] = None,
     leadership_lifetime_hours: Optional[Decimal] = None,
+    already_approved_this_month: Optional[Decimal] = None,
 ) -> List[LineDraft]:
     """
     Calculate all incentive lines for one Sambhaji Nagar candidate placement.
@@ -255,6 +258,9 @@ def calculate_placement(
         recruiter_ok = False
     elif recruiter_status == "NOTICE":
         recruiter_reason = "COORDINATOR_ON_NOTICE"
+        recruiter_ok = False
+    elif already_approved_this_month is not None and hours == already_approved_this_month and hours > ZERO:
+        recruiter_reason = "Already Paid in Previous Cycle"
         recruiter_ok = False
     else:
         recruiter_reason = blocked or "ELIGIBLE"
@@ -388,7 +394,7 @@ def calculate_special_incentives(
             if payable_now > ZERO:
                 first = candidates[0]
                 extras.append(LineDraft(
-                    first.start_id or first.external_candidate_id,
+                    first.id,
                     f"Special Bonus: {len(candidates)} placements ({first.recruiter}) [Start: {start_month}]",
                     "Recruiter",
                     first.recruiter,
@@ -404,6 +410,8 @@ def calculate_special_incentives(
                         "payable_now": float(payable_now),
                         "cycle_month": cycle_month,
                         "note": "Special incentive: average of 160+ hour placements starting in same month",
+                        "external_candidate_id": first.activity_id or first.start_id or first.external_candidate_id or "",
+                        "candidate_id": first.activity_id or first.start_id or first.external_candidate_id or "",
                     })],
                 ))
     return extras

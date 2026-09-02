@@ -182,8 +182,9 @@ def list_lines(db: Session, cycle_id: int) -> List[IncentiveLineOut]:
                     "start_date": cand.start_date.isoformat() if cand.start_date else None,
                     "contract_type": cand.contract_type,
                     "candidate_source": cand.candidate_source or cand.organization,
-                    "candidate_id": cand.start_id or cand.external_candidate_id or str(cand.id),
+                    "candidate_id": cand.activity_id or cand.start_id or cand.external_candidate_id or str(cand.id),
                     "external_candidate_id": cand.external_candidate_id,
+                    "activity_id": cand.activity_id,
                     "recruiter": cand.recruiter,
                     "team_lead": cand.team_lead,
                     "manager": cand.manager,
@@ -267,6 +268,7 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
                     "candidate_name": cand.candidate_name,
                     "external_candidate_id": cand.external_candidate_id,
                     "start_id": cand.start_id,
+                    "activity_id": cand.activity_id,
                     "contract_type": cand.contract_type,
                     "markup_percent": cand.markup_percent,
                     "approved_markup_percentage": cand.approved_markup_percentage,
@@ -442,7 +444,7 @@ def snapshot_approval_results(
                 "cycle_status": status_val,
                 "candidate_name": line.candidate_name or (cand.candidate_name if cand else None),
                 "external_candidate_id": (
-                    (cand.start_id or cand.external_candidate_id) if cand else None
+                    (cand.activity_id or cand.start_id or cand.external_candidate_id) if cand else None
                 ),
                 "start_id": cand.start_id if cand else None,
                 "start_date": cand.start_date if cand else None,
@@ -875,7 +877,7 @@ def _export_row(cycle, line, cand) -> list:
         margin_val = float(meta.get("margin_per_hour"))
     ext_id = ""
     if cand:
-        ext_id = cand.start_id or cand.external_candidate_id or ""
+        ext_id = cand.activity_id or cand.start_id or cand.external_candidate_id or ""
     if not ext_id:
         ext_id = str(meta.get("candidate_id") or meta.get("external_candidate_id") or "")
     source = ""
@@ -915,7 +917,7 @@ def _export_row_from_snapshot(row) -> list:
     return [
         row.person,
         coord_type,
-        row.start_id or row.external_candidate_id or "",
+        row.external_candidate_id or row.start_id or "",
         row.candidate_name,
         start,
         month,
@@ -937,7 +939,7 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
     headers = [
         "Coordinator Name",
         "Coordinator Type",
-        "Candidate ID",
+        "Activity ID" if is_sambhaji_nagar_division(cycle.division) else "Candidate ID",
         "Candidate Name",
         "Start Date",
         "Month",
