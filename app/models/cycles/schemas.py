@@ -152,6 +152,8 @@ class PaymentStatusOut(BaseModel):
     contract_type: Optional[str] = None
     markup_percent: Optional[Decimal] = None
     approved_markup_percentage: Optional[Decimal] = None
+    finder_fee_above_threshold: Optional[bool] = None
+    days_completed: Optional[Decimal] = None
 
 
 class PaymentStatusUpdate(BaseModel):
@@ -159,6 +161,7 @@ class PaymentStatusUpdate(BaseModel):
     payment_received_date: Optional[date] = None
     payment_reference: Optional[str] = None
     notes: Optional[str] = None
+    finder_fee_above_threshold: Optional[bool] = None
 
 
 class AdjustmentCreate(BaseModel):

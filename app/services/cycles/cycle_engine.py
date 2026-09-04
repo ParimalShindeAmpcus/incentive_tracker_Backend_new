@@ -47,7 +47,7 @@ from app.services.cycles.engines.ampcus_client import (
 from app.services.incentives.recruiter_master import missing_recruiter_master_validation
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
 from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
-from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations
+from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations, calculate_fte_placement, is_fte_contract
 
 def _to_master(cand: Candidate) -> MasterCandidate:
     return MasterCandidate(
@@ -697,6 +697,9 @@ def run_cycle_calculation(
         )
         for pk, raw_hours in hours_by_pk.items():
             cand = by_pk[pk]
+            # Skip FTE candidates — they are handled in the separate FTE block below
+            if is_fte_contract(cand.contract_type):
+                continue
             if cand.incentive_active is False:
                 stats["inactive"] += 1
                 lines.append(
@@ -734,6 +737,63 @@ def run_cycle_calculation(
                 recruiter_matrix_hours=recruiter_matrix_hours,
                 leadership_lifetime_hours=leadership_lifetime_hours,
                 already_approved_this_month=already_approved_this_month_map.get(pk),
+            )
+            lines.extend(drafts)
+
+        # Compute per-recruiter FTE placement count for this cycle month
+        fte_pks = [
+            pk for pk in hours_by_pk
+            if is_fte_contract(by_pk[pk].contract_type)
+        ]
+        # Map (recruiter_lower, start_month) -> count of FTE placements
+        from collections import Counter as _Counter
+        fte_month_counts: dict = _Counter()
+        for pk in fte_pks:
+            cand = by_pk[pk]
+            start_month = (
+                cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
+            )
+            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month)
+            fte_month_counts[recruiter_key] += 1
+
+        for pk in fte_pks:
+            cand = by_pk[pk]
+            if cand.incentive_active is False:
+                stats["inactive"] += 1
+                lines.append(
+                    _ineligible_line(
+                        candidate_pk=pk,
+                        name=cand.candidate_name,
+                        hours=hours_by_pk[pk],
+                        reason="INACTIVE_CANDIDATE",
+                        rule="INELIGIBLE",
+                    )
+                )
+                continue
+
+            days_completed = hours_by_pk[pk]  # "Hours Worked" column = days for FTE
+            payment_status_row = payment_by_candidate.get(pk)
+            payment_status = str(getattr(payment_status_row, "status", "PAYMENT_PENDING"))
+
+            # Retrieve finder_fee_above_threshold from the payment status row metadata
+            # The frontend stores this as a boolean on the payment status row.
+            finder_fee_above = bool(getattr(payment_status_row, "finder_fee_above_threshold", False))
+
+            start_month = (
+                cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
+            )
+            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month)
+            placement_count = fte_month_counts.get(recruiter_key, 1)
+
+            drafts = calculate_fte_placement(
+                cand,
+                days_completed=days_completed,
+                payment_status=payment_status,
+                coordinators=coordinators,
+                paid_keys=paid_keys,
+                cycle_end=window.end,
+                finder_fee_above_threshold=finder_fee_above,
+                placement_count_this_month=placement_count,
             )
             lines.extend(drafts)
 

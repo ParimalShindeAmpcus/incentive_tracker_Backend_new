@@ -35,7 +35,7 @@ from app.models.cycles.schemas import (
 from app.models.incentives.schemas import IncentiveLineOut
 from app.repositories.candidates import candidate_repository
 from app.repositories.cycles import cycle_repository
-from app.repositories.entities.cycle import CycleStatus, MatchResult
+from app.repositories.entities.cycle import CycleStatus, MatchResult, CycleHoursMatch
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.audit import AuditAction
 from app.repositories.entities.user import User
@@ -259,6 +259,11 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
     cycle = _require_cycle(db, cycle_id)
     rows = cycle_repository.list_payment_statuses(db, cycle_id)
     out: List[PaymentStatusOut] = []
+    
+    # Pre-fetch hours for efficiency
+    hours_rows = db.query(CycleHoursMatch).filter(CycleHoursMatch.cycle_id == cycle_id).all()
+    hours_map = {h.candidate_id: h.hours_worked for h in hours_rows if h.candidate_id is not None}
+    
     for row in rows:
         cand = candidate_repository.get_candidate(db, row.candidate_id)
         payload = PaymentStatusOut.model_validate(row).model_dump()
@@ -274,6 +279,12 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
                     "approved_markup_percentage": cand.approved_markup_percentage,
                 }
             )
+        
+        # Determine candidate ID for hours mapping (use cand.id if available, fallback to row.candidate_id)
+        cid = cand.id if cand else row.candidate_id
+        if cid in hours_map and hours_map[cid] is not None:
+            payload["days_completed"] = hours_map[cid]
+            
         out.append(PaymentStatusOut(**payload))
     return out
 
@@ -300,6 +311,7 @@ def update_payment_status(
         payment_reference=payload.payment_reference,
         notes=payload.notes,
         updated_by=actor_id,
+        finder_fee_above_threshold=payload.finder_fee_above_threshold,
     )
     candidate = candidate_repository.get_candidate(db, updated.candidate_id)
     candidate_name = candidate.candidate_name if candidate else f"Candidate {updated.candidate_id}"

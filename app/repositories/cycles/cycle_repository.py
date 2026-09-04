@@ -232,6 +232,7 @@ def update_payment_status(
     payment_reference: Optional[str] = None,
     notes: Optional[str],
     updated_by: Optional[int],
+    finder_fee_above_threshold: Optional[bool] = None,
 ) -> CyclePaymentStatus:
     row.status = status
     if payment_received_date is not None:
@@ -240,6 +241,8 @@ def update_payment_status(
         row.payment_reference = payment_reference
     if notes is not None:
         row.notes = notes
+    if finder_fee_above_threshold is not None:
+        row.finder_fee_above_threshold = finder_fee_above_threshold
     row.updated_by = updated_by
     db.add(row)
     db.flush()
