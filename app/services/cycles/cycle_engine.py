@@ -18,7 +18,8 @@ from app.repositories.cycles.cycle_repository import (
     sn_hours_already_approved_this_month,
 )
 from app.repositories.entities.candidate import Candidate
-from app.repositories.entities.cycle import MatchResult
+from app.repositories.entities.cycle import CycleStatus, IncentiveCycle, MatchResult
+from app.repositories.entities.incentive import IncentiveLine
 from app.repositories.incentives import incentive_repository
 from app.services.cycles.hours_name_matcher import (
     ID_FALLBACK,
@@ -48,6 +49,34 @@ from app.services.incentives.recruiter_master import missing_recruiter_master_va
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
 from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
 from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations, calculate_fte_placement, is_fte_contract
+from app.services.cycles.engines.nashik_fte import calculate_nashik_fte_placement
+
+
+def _prior_nashik_fte_recruiter_paid(db: Session, candidate_id: int, exclude_cycle_id: int) -> Decimal:
+    """Sum previously approved Nashik FTE recruiter amounts for installment tracking."""
+    rows = (
+        db.query(IncentiveLine)
+        .join(IncentiveCycle, IncentiveCycle.id == IncentiveLine.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            IncentiveLine.candidate_id == candidate_id,
+            IncentiveLine.role == "Recruiter",
+            IncentiveLine.eligible.is_(True),
+            IncentiveLine.incentive_type.in_(["FULL_TIME", "ONE_TIME"]),
+            IncentiveLine.amount > 0,
+        )
+        .all()
+    )
+    total = Decimal("0")
+    for row in rows:
+        # IncentiveLine stores JSON text on explanation_json (not .explanation).
+        explanation = row.explanation_json or ""
+        blob = explanation if isinstance(explanation, str) else str(explanation)
+        if "nashik_fte" in blob or '"candidate_type": "FTE"' in blob or '"candidate_type":"FTE"' in blob:
+            total += Decimal(str(row.amount or 0))
+    return total
+
 
 def _to_master(cand: Candidate) -> MasterCandidate:
     return MasterCandidate(
@@ -479,7 +508,7 @@ def run_cycle_calculation(
 
     # If payment statuses are required, load them once.
     payment_by_candidate: Dict[int, object] = {}
-    if is_ampcus_client_division(cycle.division) or is_sambhaji_nagar_division(cycle.division):
+    if is_ampcus_client_division(cycle.division) or is_sambhaji_nagar_division(cycle.division) or is_nashik_division(cycle.division):
         payment_by_candidate = {
             row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
         }
@@ -873,8 +902,14 @@ def run_cycle_calculation(
         ] + sn_validations + [missing_recruiter_master_validation(lines)]
 
     if is_nashik_division(cycle.division):
+        assert coordinators is not None
+        from collections import Counter as _Counter
+
+        # W2/C2C — existing Nashik calculator (unchanged). Skip FTE rows.
         for pk, hours in hours_by_pk.items():
             cand = by_pk[pk]
+            if is_fte_contract(cand.contract_type):
+                continue
             if cand.incentive_active is False:
                 stats["inactive"] += 1
                 lines.append(
@@ -901,6 +936,7 @@ def run_cycle_calculation(
             for draft in drafts:
                 payload = {
                     "division": "Nashik",
+                    "candidate_type": "W2/C2C",
                     "contract_type": cand.contract_type,
                     "start_date": cand.start_date.isoformat() if cand.start_date else None,
                     "candidate_id": cand.start_id or cand.external_candidate_id,
@@ -923,6 +959,56 @@ def run_cycle_calculation(
                     "notes": draft.explanation,
                 }
                 draft.explanation = [json.dumps(payload)]
+                if (not draft.eligible) and "already paid" in (draft.reason or "").lower():
+                    stats["already_paid"] += 1
+                lines.append(draft)
+
+        # FTE — separate Nashik FTE flow (hours-file candidates only).
+        fte_pks = [pk for pk in hours_by_pk if is_fte_contract(by_pk[pk].contract_type)]
+        fte_month_counts: dict = _Counter()
+        for pk in fte_pks:
+            cand = by_pk[pk]
+            start_month = (
+                cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
+            )
+            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month)
+            fte_month_counts[recruiter_key] += 1
+
+        for pk in fte_pks:
+            cand = by_pk[pk]
+            hours = hours_by_pk[pk]
+            if cand.incentive_active is False:
+                stats["inactive"] += 1
+                lines.append(
+                    _ineligible_line(
+                        candidate_pk=pk,
+                        name=cand.candidate_name,
+                        hours=hours,
+                        reason="INACTIVE_CANDIDATE",
+                        rule="INELIGIBLE",
+                    )
+                )
+                continue
+
+            payment_status_row = payment_by_candidate.get(pk)
+            payment_status = str(getattr(payment_status_row, "status", "PAYMENT_PENDING"))
+            start_month = (
+                cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
+            )
+            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month)
+            placement_count = fte_month_counts.get(recruiter_key, 1)
+            prior_paid = _prior_nashik_fte_recruiter_paid(db, pk, cycle.id)
+
+            drafts = calculate_nashik_fte_placement(
+                cand,
+                payment_status=payment_status,
+                coordinators=coordinators,
+                paid_keys=paid_keys,
+                cycle_end=window.end,
+                placement_count_this_month=placement_count,
+                prior_recruiter_paid_amount=prior_paid,
+            )
+            for draft in drafts:
                 if (not draft.eligible) and "already paid" in (draft.reason or "").lower():
                     stats["already_paid"] += 1
                 lines.append(draft)
@@ -961,6 +1047,20 @@ def run_cycle_calculation(
                 "severity": "YELLOW" if stats["inactive"] else "GREEN",
                 "message": "Inactive Candidate",
                 "count": stats["inactive"],
+                "details_json": None,
+            },
+            {
+                "check_key": "nashik_fte",
+                "severity": "GREEN",
+                "message": "Nashik FTE candidates from hours file",
+                "count": len(fte_pks),
+                "details_json": None,
+            },
+            {
+                "check_key": "already_paid",
+                "severity": "YELLOW" if stats["already_paid"] else "GREEN",
+                "message": "Incentives already paid in a previous cycle",
+                "count": stats["already_paid"],
                 "details_json": None,
             },
             {

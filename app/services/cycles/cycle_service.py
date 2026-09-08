@@ -50,7 +50,14 @@ from app.services.cycles.cycle_candidates import (
 from app.services.cycles.cycle_engine import run_cycle_calculation
 from app.services.cycles.engines.ampcus_client import coordinator_index, is_ampcus_client_division
 from app.services.cycles.engines.ampcus_inhouse import is_ampcus_inhouse_division
-from app.services.cycles.engines.sambhaji_nagar import is_sambhaji_nagar_division
+from app.services.cycles.engines.sambhaji_nagar import is_fte_contract, is_sambhaji_nagar_division
+from app.services.incentives.nashik_rules import is_nashik_division
+from app.services.cycles.engines.nashik_fte import (
+    days_completed_from_start,
+    finder_fee_above_from_master,
+    finder_fee_label,
+    ninety_day_eligible_date,
+)
 from app.services.cycles.division_resolver import resolve_candidate_division
 from app.services.cycles.hours_name_matcher import HoursMatchRow
 from app.services.cycles.hours_name_matcher import (
@@ -64,7 +71,7 @@ from app.services.cycles.hours_name_matcher import (
     build_name_index,
     match_hours_row,
 )
-from app.services.cycles.hours_template_parser import parse_hours_template
+from app.services.cycles.hours_template_parser import assert_rows_match_cycle_month, parse_hours_template
 from app.services.incentives.nashik_calculator import CycleWindow
 
 
@@ -259,13 +266,34 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
     cycle = _require_cycle(db, cycle_id)
     rows = cycle_repository.list_payment_statuses(db, cycle_id)
     out: List[PaymentStatusOut] = []
-    
+    nashik = is_nashik_division(cycle.division)
+    as_of = cycle.cycle_end_date or date.today()
+
+    # Nashik FTE already marked payment-received in a prior approved cycle:
+    # hide from payment UI (do not ask to mark again). Status is carried forward
+    # on hours upload / calculate so incentive calc still sees RECEIVED.
+    hide_fte_ids: set[int] = set()
+    if nashik:
+        hide_fte_ids = set(
+            cycle_repository.prior_nashik_fte_payment_received_ids(
+                db, exclude_cycle_id=cycle_id
+            ).keys()
+        )
+
     # Pre-fetch hours for efficiency
     hours_rows = db.query(CycleHoursMatch).filter(CycleHoursMatch.cycle_id == cycle_id).all()
     hours_map = {h.candidate_id: h.hours_worked for h in hours_rows if h.candidate_id is not None}
-    
+
     for row in rows:
         cand = candidate_repository.get_candidate(db, row.candidate_id)
+        if (
+            nashik
+            and row.candidate_id in hide_fte_ids
+            and cand is not None
+            and is_fte_contract(cand.contract_type)
+        ):
+            continue
+
         payload = PaymentStatusOut.model_validate(row).model_dump()
         if cand is not None:
             payload.update(
@@ -277,14 +305,24 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
                     "contract_type": cand.contract_type,
                     "markup_percent": cand.markup_percent,
                     "approved_markup_percentage": cand.approved_markup_percentage,
+                    "start_date": cand.start_date,
+                    "finder_fees": getattr(cand, "finder_fees", None) or "NONE",
+                    "finder_fee_label": finder_fee_label(cand) if nashik else None,
                 }
             )
-        
-        # Determine candidate ID for hours mapping (use cand.id if available, fallback to row.candidate_id)
+            if nashik and is_fte_contract(cand.contract_type):
+                # Nashik FTE: Finder Fee + days come from Candidate Master (not re-entered).
+                payload["finder_fee_above_threshold"] = finder_fee_above_from_master(cand)
+                payload["days_completed"] = days_completed_from_start(cand.start_date, as_of)
+                eligible_on = ninety_day_eligible_date(cand.start_date)
+                payload["ninety_day_eligible_date"] = eligible_on
+
+        # Sambhaji / others: days from hours template when present
         cid = cand.id if cand else row.candidate_id
-        if cid in hours_map and hours_map[cid] is not None:
-            payload["days_completed"] = hours_map[cid]
-            
+        if not (nashik and cand is not None and is_fte_contract(cand.contract_type)):
+            if cid in hours_map and hours_map[cid] is not None:
+                payload["days_completed"] = hours_map[cid]
+
         out.append(PaymentStatusOut(**payload))
     return out
 
@@ -608,19 +646,27 @@ def upload_hours_file(
 ) -> HoursUploadOut:
     cycle = _require_cycle(db, cycle_id)
     placement_only = is_ampcus_client_division(cycle.division)
-    rows = parse_hours_template(content, filename, require_hours=not placement_only)
+    try:
+        rows = parse_hours_template(content, filename, require_hours=not placement_only)
+        assert_rows_match_cycle_month(rows, cycle.incentive_month)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    if placement_only or is_sambhaji_nagar_division(cycle.division):
+    if placement_only or is_sambhaji_nagar_division(cycle.division) or is_nashik_division(cycle.division):
         match_rows, matched_ids, issues, coordinator_issues = _match_hours_rows_for_cycle(db, cycle, rows)
-        
+
         filtered_matched_ids = []
         for r in match_rows:
             if r["accepted"] and r["candidate_id"] is not None:
-                # Payment status is required for ALL SN candidates regardless of hours
+                # Payment status is required for SN / Nashik FTE flow (and Ampcus Client placements)
                 filtered_matched_ids.append(r["candidate_id"])
-                    
+
         cycle_repository.replace_matches(db, cycle.id, match_rows)
         cycle_repository.sync_payment_statuses(db, cycle.id, list(set(filtered_matched_ids)))
+        if is_nashik_division(cycle.division):
+            cycle_repository.apply_nashik_fte_prior_payment_carryforward(
+                db, cycle.id, candidate_ids=list(set(filtered_matched_ids))
+            )
         cycle_label = cycle.incentive_month or str(cycle.id)
         audit_service.record_event(
             db,
@@ -643,6 +689,11 @@ def upload_hours_file(
             entity_id=str(cycle.id),
         )
         db.commit()
+        payment_hint = (
+            "Review FTE payment received status before calculation."
+            if is_nashik_division(cycle.division)
+            else "Review payment status before calculation."
+        )
         return HoursUploadOut(
             cycle_id=cycle.id,
             row_count=len(rows),
@@ -652,7 +703,7 @@ def upload_hours_file(
             coordinator_issues=coordinator_issues,
             message=(
                 f"Matched {len(matched_ids)} candidate(s) from {len(rows)} uploaded row(s). "
-                "Review payment status before calculation."
+                f"{payment_hint}"
             ),
         )
 
@@ -708,6 +759,9 @@ def calculate_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Approved cycles cannot be recalculated",
         )
+    if is_nashik_division(cycle.division):
+        # Ensure prior-month FTE payment-received carries into this cycle before calc.
+        cycle_repository.apply_nashik_fte_prior_payment_carryforward(db, cycle.id)
     hours_rows = _hours_rows_for_cycle(db, cycle)
     if is_ampcus_client_division(cycle.division):
         payment_rows = cycle_repository.list_payment_statuses(db, cycle.id)
@@ -948,11 +1002,13 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Sheet1"
+    nashik = is_nashik_division(cycle.division)
     headers = [
         "Coordinator Name",
         "Coordinator Type",
         "Activity ID" if is_sambhaji_nagar_division(cycle.division) else "Candidate ID",
         "Candidate Name",
+        *(["Candidate Type"] if nashik else []),
         "Start Date",
         "Month",
         "Contract Type",
@@ -970,7 +1026,13 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
         for row in snapshots:
             if not row.eligible or Decimal(str(row.amount or 0)) <= 0:
                 continue
-            sheet.append(_export_row_from_snapshot(row))
+            base = _export_row_from_snapshot(row)
+            if nashik:
+                ct = str(row.contract_type or "").upper()
+                candidate_type = "FTE" if ct in {"FULLTIME", "FULL_TIME", "FT", "FTE"} else "W2/C2C"
+                # Insert Candidate Type after Candidate Name (index 3)
+                base = base[:4] + [candidate_type] + base[4:]
+            sheet.append(base)
     else:
         lines = cycle_repository.list_lines(db, cycle_id)
         candidates = {
@@ -981,7 +1043,16 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
             if not line.eligible or Decimal(str(line.amount or 0)) <= 0:
                 continue
             cand = candidates.get(line.candidate_id) if line.candidate_id else None
-            sheet.append(_export_row(cycle, line, cand))
+            base = _export_row(cycle, line, cand)
+            if nashik:
+                explanation = line.explanation_json or ""
+                if "nashik_fte" in explanation or '"candidate_type": "FTE"' in explanation:
+                    candidate_type = "FTE"
+                else:
+                    ct = str((cand.contract_type if cand else "") or "").upper()
+                    candidate_type = "FTE" if ct in {"FULLTIME", "FULL_TIME", "FT", "FTE"} else "W2/C2C"
+                base = base[:4] + [candidate_type] + base[4:]
+            sheet.append(base)
 
     buffer = io.BytesIO()
     workbook.save(buffer)

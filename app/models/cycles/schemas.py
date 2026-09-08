@@ -154,6 +154,10 @@ class PaymentStatusOut(BaseModel):
     approved_markup_percentage: Optional[Decimal] = None
     finder_fee_above_threshold: Optional[bool] = None
     days_completed: Optional[Decimal] = None
+    start_date: Optional[date] = None
+    finder_fees: Optional[str] = None
+    finder_fee_label: Optional[str] = None
+    ninety_day_eligible_date: Optional[date] = None
 
 
 class PaymentStatusUpdate(BaseModel):

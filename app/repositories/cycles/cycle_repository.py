@@ -219,6 +219,92 @@ def sync_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) 
     return created
 
 
+def prior_nashik_fte_payment_received_ids(
+    db: Session,
+    *,
+    exclude_cycle_id: int,
+    candidate_ids: Optional[List[int]] = None,
+) -> dict[int, CyclePaymentStatus]:
+    """
+    Map candidate_id → prior payment-status row where Nashik FTE payment was already
+    marked RECEIVED in an approved/paid/closed prior cycle.
+    """
+    from app.repositories.entities.candidate import Candidate
+    from app.services.cycles.engines.sambhaji_nagar import is_fte_contract
+    from app.services.incentives.nashik_rules import is_nashik_division
+
+    q = (
+        db.query(CyclePaymentStatus, IncentiveCycle, Candidate)
+        .join(IncentiveCycle, IncentiveCycle.id == CyclePaymentStatus.cycle_id)
+        .join(Candidate, Candidate.id == CyclePaymentStatus.candidate_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            CyclePaymentStatus.status.in_(["RECEIVED", "PAYMENT_RECEIVED"]),
+        )
+        .order_by(IncentiveCycle.incentive_month.desc(), CyclePaymentStatus.id.desc())
+    )
+    if candidate_ids:
+        q = q.filter(CyclePaymentStatus.candidate_id.in_(candidate_ids))
+
+    found: dict[int, CyclePaymentStatus] = {}
+    for pay_row, cycle, cand in q.all():
+        if not is_nashik_division(cycle.division):
+            continue
+        if not is_fte_contract(cand.contract_type):
+            continue
+        if pay_row.candidate_id in found:
+            continue
+        found[pay_row.candidate_id] = pay_row
+    return found
+
+
+def apply_nashik_fte_prior_payment_carryforward(
+    db: Session,
+    cycle_id: int,
+    *,
+    candidate_ids: Optional[List[int]] = None,
+) -> set[int]:
+    """
+    Nashik FTE: if payment was already marked RECEIVED in a prior approved cycle
+    and hierarchy one-time was paid, carry RECEIVED into the current cycle and
+    return those candidate IDs (hidden from payment-marking UI).
+
+    Payment-received without hierarchy payout yet still carries RECEIVED so
+    calculation stays correct, and those candidates are also hidden from re-marking.
+    """
+    prior_received = prior_nashik_fte_payment_received_ids(
+        db, exclude_cycle_id=cycle_id, candidate_ids=candidate_ids
+    )
+    if not prior_received:
+        return set()
+
+    # Do not ask to mark payment again once it was received in a prior approved cycle.
+    hide_ids = set(prior_received.keys())
+
+    current_rows = {
+        row.candidate_id: row
+        for row in list_payment_statuses(db, cycle_id)
+        if row.candidate_id in hide_ids
+    }
+    for cid, prior_row in prior_received.items():
+        row = current_rows.get(cid)
+        if row is None:
+            continue
+        status_u = str(row.status or "").upper()
+        if status_u not in {"RECEIVED", "PAYMENT_RECEIVED"}:
+            row.status = "RECEIVED"
+            if prior_row.payment_received_date and not row.payment_received_date:
+                row.payment_received_date = prior_row.payment_received_date
+            note = (row.notes or "").strip()
+            carry_note = "Payment already received in a previous Nashik cycle; carried forward."
+            if carry_note not in note:
+                row.notes = f"{note}\n{carry_note}".strip() if note else carry_note
+            db.add(row)
+    db.flush()
+    return hide_ids
+
+
 def get_payment_status(db: Session, status_id: int) -> Optional[CyclePaymentStatus]:
     return db.query(CyclePaymentStatus).filter(CyclePaymentStatus.id == status_id).first()
 

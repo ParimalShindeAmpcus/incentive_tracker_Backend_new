@@ -104,7 +104,7 @@ FTE_MIN_DAYS = Decimal("90")
 
 def is_fte_contract(contract_type: Optional[str]) -> bool:
     """Return True when the candidate is a Full-Time placement."""
-    return (contract_type or "").strip().upper() in {"FULLTIME", "FULL_TIME", "FT"}
+    return (contract_type or "").strip().upper() in {"FULLTIME", "FULL_TIME", "FT", "FTE"}
 
 
 def fte_recruiter_amount(
