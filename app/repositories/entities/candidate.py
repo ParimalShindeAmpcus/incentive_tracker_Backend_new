@@ -56,6 +56,7 @@ class Candidate(Base):
     benefits: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
     referral_fee: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
     finders_fee: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
+    finder_fees: Mapped[Optional[str]] = mapped_column(String(20), default="NONE")
     bill_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
     msp_fee: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
     margin: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))

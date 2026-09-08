@@ -36,6 +36,7 @@ class CandidateOut(BaseModel):
     benefits: Optional[Decimal] = None
     referral_fee: Optional[Decimal] = None
     finders_fee: Optional[Decimal] = None
+    finder_fees: Optional[str] = "NONE"
     bill_rate: Optional[Decimal] = None
     msp_fee: Optional[Decimal] = None
     margin: Optional[Decimal] = None
@@ -96,6 +97,7 @@ class CandidateUpdate(BaseModel):
     benefits: Optional[Decimal] = None
     referral_fee: Optional[Decimal] = None
     finders_fee: Optional[Decimal] = None
+    finder_fees: Optional[str] = None
     bill_rate: Optional[Decimal] = None
     msp_fee: Optional[Decimal] = None
     margin: Optional[Decimal] = None
@@ -164,6 +166,7 @@ class CandidateRowIn(BaseModel):
     benefits: Optional[Decimal] = None
     referral_fee: Optional[Decimal] = None
     finders_fee: Optional[Decimal] = None
+    finder_fees: Optional[str] = "NONE"
     bill_rate: Optional[Decimal] = None
     gross_bill_rate: Optional[Decimal] = None
     msp_fee: Optional[Decimal] = None

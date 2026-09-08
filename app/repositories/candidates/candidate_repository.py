@@ -239,6 +239,8 @@ def create_candidates(
                 existing.referral_fee = referral
             if finders is not None:
                 existing.finders_fee = finders
+            if row.get("finder_fees") is not None:
+                existing.finder_fees = row.get("finder_fees") or "NONE"
             if bill_rate_val is not None:
                 existing.bill_rate = bill_rate_val
             if row.get("msp_fee") is not None:
@@ -323,6 +325,7 @@ def create_candidates(
                 benefits=row.get("benefits"),
                 referral_fee=referral,
                 finders_fee=finders,
+                finder_fees=row.get("finder_fees") or "NONE",
                 bill_rate=bill_rate_val,
                 msp_fee=row.get("msp_fee"),
                 margin=row.get("margin"),
