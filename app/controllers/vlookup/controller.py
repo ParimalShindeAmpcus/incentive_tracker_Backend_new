@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.models.vlookup.schemas import (
@@ -39,13 +39,23 @@ def upload(
     db: DbSession,
     user: CurrentUser,
     template_file: UploadFile = File(..., description="Hours Template CSV/XLSX"),
-    messy_file: UploadFile = File(..., description="Client hours CSV/XLSX"),
+    consolidated_file: Optional[UploadFile] = File(
+        None,
+        description="Consolidated File CSV/XLSX. Headers may be Candidate Name or Name; Old Hours or Actual Quantity (Qty); New Hours or 160 Hours; Organisation or Source.",
+    ),
+    messy_file: Optional[UploadFile] = File(
+        None,
+        description="Deprecated alias for consolidated_file",
+    ),
     target_month: Optional[str] = Form(None),
 ) -> VLookupUploadResponse:
+    source_file = consolidated_file or messy_file
+    if source_file is None:
+        raise HTTPException(status_code=400, detail="Consolidated File is required.")
     return vlookup_service.upload_template_and_messy(
         db,
         template_file=template_file,
-        messy_file=messy_file,
+        messy_file=source_file,
         target_month=target_month,
         uploaded_by=getattr(user, "email", None) or str(user.id),
         user=user,
@@ -101,7 +111,7 @@ def client_file_candidates(
     batch_id: Optional[str] = Query(None),
     limit: int = Query(25, ge=1, le=100),
 ):
-    """Search candidates from the client hours file for rematch purposes."""
+    """Search candidates from the Consolidated File for rematch purposes."""
     _ = user
     return vlookup_service.search_client_file_candidates(
         db, q=q, client=client, batch_id=batch_id, limit=limit
@@ -119,8 +129,9 @@ def hours_template(
     return VLookupHoursTemplateListResponse(**payload)
 
 
+@router.get("/consolidated-file", response_model=VLookupMessyFileListResponse)
 @router.get("/messy-file", response_model=VLookupMessyFileListResponse)
-def messy_file(
+def consolidated_file(
     db: DbSession,
     user: CurrentUser,
     batch_id: Optional[str] = Query(None),

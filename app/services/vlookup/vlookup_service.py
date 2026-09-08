@@ -204,20 +204,22 @@ def upload_template_and_messy(
             )
 
         messy_content = messy_file.file.read()
-        unfiltered = parse_client_hours_file(
-            messy_content,
-            messy_file.filename or "client.csv",
-            target_month=None,
-        )
+        try:
+            unfiltered = parse_client_hours_file(
+                messy_content,
+                messy_file.filename or "consolidated.csv",
+                target_month=None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if not unfiltered["rows"]:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "No hours rows could be parsed from the client file. "
-                    f"Detected format: {unfiltered.get('format')}. "
-                    "Supported: Ampcus QuickBooks (Type/Date/Memo/Name/Qty) or "
-                    "flat files with candidate name + hours columns."
+                    "No hours rows could be parsed from the Consolidated File. "
+                    "Expected Candidate Name (or Name), Old Hours (or Actual Quantity (Qty)), "
+                    "New Hours (or 160 Hours), Organisation (or Source)."
                 ),
             )
 
@@ -246,19 +248,20 @@ def upload_template_and_messy(
             ),
         }
 
-        # Persist ALL weeks across months (bulk insert — much faster than ORM add loops)
+        # Persist consolidated identities (bulk insert — much faster than ORM add loops)
         weekly_mappings: List[Dict[str, Any]] = []
         for row in unfiltered["rows"]:
             hours_val = float(row.get("hours_worked") or 0)
-            if hours_val <= 0:
-                continue
+            old_hours_val = row.get("old_hours")
             weekly_mappings.append(
                 {
                     "candidate_name_messy": row["candidate_name"],
                     "hours_worked": int(round(hours_val)),
-                    "week": str(row.get("week") or "Week"),
-                    "month": str(row.get("month") or month_filter or ""),
-                    "client_name": str(row.get("client_name") or ""),
+                    "old_hours": None if old_hours_val is None else float(old_hours_val),
+                    "new_hours": hours_val,
+                    "week": str(row.get("week") or "New Hours"),
+                    "month": str(row.get("month") or ""),
+                    "client_name": str(row.get("organisation") or row.get("client_name") or ""),
                     "normalized_name": row.get("normalized_name")
                     or normalize_name(row["candidate_name"]),
                     "upload_batch_id": batch_id,
@@ -269,8 +272,8 @@ def upload_template_and_messy(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Client file was parsed but no positive hour rows remained after filtering. "
-                    f"Format: {parsed.get('format')}, available months: {available_months}."
+                    "Consolidated File was parsed but no candidate rows remained. "
+                    f"Format: {parsed.get('format')}."
                 ),
             )
 
@@ -332,6 +335,7 @@ def upload_template_and_messy(
                             weekly_by_month=match.get("weekly_by_month") or {},
                             monthly_hours=match.get("monthly_hours") or {},
                             cumulative_hours=match.get("cumulative_hours"),
+                            old_hours=match.get("old_hours"),
                             hours_note=match.get("hours_note") or "",
                         ),
                         "upload_batch_id": batch_id,
@@ -345,39 +349,19 @@ def upload_template_and_messy(
         messy_count = len(weekly_mappings)
 
         month_note = None
-        client_months_norm = [normalize_month_year(m) for m in (available_months or []) if m]
-        overlap_months = [m for m in template_months if m in client_months_norm]
-        if available_months:
-            months_label = ", ".join(available_months)
-            template_label = ", ".join(template_months) if template_months else "none"
-            if overlap_months:
-                month_note = (
-                    f"Client file contains {len(available_months)} month(s): {months_label}. "
-                    f"Hours Template month(s): {template_label}. "
-                    "People are matched by identity when the year overlaps. "
-                    "Hours for the selected month are taken from the client file "
-                    "(0 if that person has no weeks in that month)."
-                )
-            else:
-                template_years = {m[:4] for m in template_months if m}
-                client_years = {m[:4] for m in client_months_norm if m}
-                if template_years and client_years and template_years.isdisjoint(client_years):
-                    month_note = (
-                        f"Hours Template year(s) {', '.join(sorted(template_years))} do not "
-                        f"overlap client file year(s) {', '.join(sorted(client_years))}. "
-                        "Auto-match requires the same year."
-                    )
-                else:
-                    month_note = (
-                        f"Client file contains {len(available_months)} month(s): {months_label}. "
-                        f"Hours Template month(s): {template_label}. "
-                        "People are matched by identity. Hours for a month are 0 when that "
-                        "person has no client-file weeks in that month."
-                    )
-            if target_month and month_filter:
-                month_note += f" Default month filter: {month_filter}."
+        template_label = ", ".join(template_months) if template_months else "none"
+        if template_months:
+            month_note = (
+                "The Consolidated File has no Month column because it is already specific "
+                "to one month. Use the Month Filter to take Hours Template records for that "
+                f"month ({template_label}) and match them to Consolidated File New Hours. "
+                f"Default month filter: {month_filter or template_month}."
+            )
         elif template_month:
-            month_note = f"No month could be detected in the client file. Template month is {template_month}."
+            month_note = (
+                "The Consolidated File has no Month column. "
+                f"Template month is {template_month}."
+            )
 
         parser_warnings = (
             (parsed.get("warnings") or [])
@@ -457,7 +441,7 @@ def upload_template_and_messy(
             template_reused=reused,
             messy_count=messy_count,
             client_candidate_count=parsed.get("candidate_count"),
-            months_in_client_file=list(available_months),
+            months_in_client_file=list(template_months),
             matched_count=len(match_results.get("matched", [])),
             needs_review_count=len(match_results.get("needs_review", [])),
             unmatched_count=len(match_results.get("unmatched", [])),
@@ -548,6 +532,10 @@ def get_matches_by_status(
         if match.template_candidate_id:
             template = repo.get_template_by_id(db, match.template_candidate_id)
         payload = repo.serialize_match(match, template)
+        if payload.get("old_hours") is None:
+            payload["old_hours"] = _old_hours_for_name(
+                db, latest, match.messy_name_original
+            )
         weekly_by_month = payload.get("weekly_by_month") or {}
         if not weekly_by_month:
             weekly_by_month = _rebuild_weekly_by_month(
@@ -646,7 +634,7 @@ def search_client_file_candidates(
     limit: int = 25,
 ) -> Dict[str, Any]:
     """
-    Search for candidates in the client hours file (messy file) for rematch purposes.
+    Search for candidates in the Consolidated File for rematch purposes.
     Returns client-side identities with similarity ranking based on the query.
     """
     latest = repo.latest_batch_id(db, batch_id)
@@ -1133,10 +1121,22 @@ def list_hours_template(
     }
 
 
+def _display_hours(value: Any) -> Any:
+    if value is None:
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num == int(num):
+        return int(num)
+    return num
+
+
 def list_messy_file(
     db: Session, batch_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Read-only aggregated identities from the uploaded client (messy) hours file."""
+    """Read-only aggregated identities from the uploaded Consolidated File."""
     latest = repo.latest_batch_id(db, batch_id)
     rows = repo.list_weekly_hours_for_batch(db, latest)
     merged: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -1149,17 +1149,28 @@ def list_messy_file(
             dest = {
                 "candidate_name": name,
                 "client_name": client or None,
+                "organisation": client or None,
                 "normalized_name": row.normalized_name,
                 "monthly_hours": {},
                 "total_hours": 0,
+                "old_hours": None,
                 "week_count": 0,
             }
             merged[key] = dest
-        month = str(row.month or "").strip() or "unknown"
-        hours = int(row.hours_worked or 0)
-        dest["monthly_hours"][month] = float(dest["monthly_hours"].get(month, 0)) + hours
-        dest["total_hours"] = int(dest["total_hours"]) + hours
+        month = normalize_month_year(str(row.month or "")) or str(row.month or "").strip()
+        stored_new = getattr(row, "new_hours", None)
+        hours = (
+            float(stored_new)
+            if stored_new is not None
+            else float(row.hours_worked or 0)
+        )
+        if month:
+            dest["monthly_hours"][month] = float(dest["monthly_hours"].get(month, 0)) + hours
+        dest["total_hours"] = _display_hours(float(dest["total_hours"] or 0) + hours) or 0
         dest["week_count"] = int(dest["week_count"]) + 1
+        stored_old = getattr(row, "old_hours", None)
+        if dest.get("old_hours") is None and stored_old is not None:
+            dest["old_hours"] = _display_hours(stored_old)
         if len(name) > len(str(dest.get("candidate_name") or "")):
             dest["candidate_name"] = name
     identities = sorted(
@@ -1188,6 +1199,9 @@ def _hours_for_export_month(match: VLookupMatchedRecord, month_key: str) -> floa
         except (TypeError, ValueError):
             return 0
     elif month_key and normalize_month_year(str(match.messy_month or "")) == month_key:
+        hours_value = float(match.total_hours or 0)
+    elif month_key and not any(normalize_month_year(str(m or "")) for m in monthly):
+        # Consolidated File is month-agnostic; New Hours apply to the filtered template month.
         hours_value = float(match.total_hours or 0)
     elif not month_key:
         hours_value = float(match.total_hours or 0)
@@ -1219,7 +1233,7 @@ def _dedupe_export_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for row in rows:
         candidate_id = str(row.get("Candidate ID") or "").strip().lower()
         name = str(row.get("Candidate Name") or row.get("Source Name") or "").strip().lower()
-        client = str(row.get("Client Name") or row.get("Client Name (Source)") or "").strip().lower()
+        client = str(row.get("Client Name") or "").strip().lower()
         month = str(row.get("Month") or "").strip()
         key = f"{candidate_id or name}::{client}::{month}"
         prev = chosen.get(key)
@@ -1282,15 +1296,14 @@ def _hours_export_rows(
                 "Candidate Name": match.template_candidate_name
                 or match.messy_name_original
                 or "",
-                "Client Name": (template.client_name if template else "")
-                or (match.messy_client_name or ""),
+                "Client Name": (template.client_name if template else "") or "",
                 "Hours Worked": hours,
                 "Month": month_value,
                 "Match Status": match.match_status,
                 "Confidence": match.confidence_score,
-                "Client Name (Source)": match.messy_client_name or "",
+                "Organisation": match.messy_client_name or "",
                 "Source Name": match.messy_name_original or "",
-                "Cumulative Hours (Client File)": explanation.get("cumulative_hours"),
+                "Cumulative Hours": explanation.get("cumulative_hours"),
                 "Hours Note": explanation.get("hours_note") or "",
             }
         )
@@ -1339,9 +1352,9 @@ def _excel_download(
     audit_cols = export_cols + (extra_cols or [
         "Match Status",
         "Confidence",
-        "Client Name (Source)",
+        "Organisation",
         "Source Name",
-        "Cumulative Hours (Client File)",
+        "Cumulative Hours",
         "Hours Note",
     ])
     output = BytesIO()
@@ -1534,6 +1547,7 @@ def _with_hours_maps(
     weekly_by_month: Optional[Dict[str, Any]] = None,
     monthly_hours: Optional[Dict[str, Any]] = None,
     cumulative_hours: Any = None,
+    old_hours: Any = None,
     hours_note: str = "",
 ) -> Dict[str, Any]:
     """Ensure hours maps are always persisted inside match_explanation JSON."""
@@ -1544,9 +1558,34 @@ def _with_hours_maps(
         out["monthly_hours"] = monthly_hours
     if cumulative_hours is not None:
         out["cumulative_hours"] = cumulative_hours
+    if old_hours is not None:
+        out["old_hours"] = old_hours
     if hours_note:
         out["hours_note"] = hours_note
     return out
+
+
+def _old_hours_for_name(
+    db: Session, batch_id: Optional[str], messy_name: Optional[str]
+) -> Any:
+    """Read Old Hours from stored Consolidated File rows for this person."""
+    if not messy_name or not batch_id:
+        return None
+    nkey = normalize_name(messy_name)
+    rows = (
+        db.query(VLookupWeeklyHours)
+        .filter(VLookupWeeklyHours.upload_batch_id == batch_id)
+        .filter(
+            (VLookupWeeklyHours.normalized_name == nkey)
+            | (VLookupWeeklyHours.candidate_name_messy == messy_name)
+        )
+        .all()
+    )
+    for row in rows:
+        stored = getattr(row, "old_hours", None)
+        if stored is not None:
+            return _display_hours(stored)
+    return None
 
 
 def _rebuild_weekly_by_month(
@@ -1580,8 +1619,10 @@ def _rebuild_weekly_by_month(
         # Keep only rows whose name normalizes to the same key (variants)
         if normalize_name(row.candidate_name_messy or "") != nkey and (row.normalized_name or "") != nkey:
             continue
-        month = normalize_month_year(str(row.month or "")) or "unknown"
-        week = str(row.week or "Week")
+        month = normalize_month_year(str(row.month or ""))
+        if not month:
+            continue
+        week = str(row.week or "New Hours")
         by_month.setdefault(month, {})
         by_month[month][week] = float(by_month[month].get(week, 0) + float(row.hours_worked or 0))
     return by_month

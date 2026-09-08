@@ -43,13 +43,15 @@ class VLookupTemplateCandidate(Base):
 
 
 class VLookupWeeklyHours(Base):
-    """Parsed weekly/client hours rows from the messy client file."""
+    """Parsed rows from the Nashik Consolidated File (second Smart Match file)."""
 
     __tablename__ = "vlookup_weekly_hours"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     candidate_name_messy: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     hours_worked: Mapped[int] = mapped_column(Integer, nullable=False)
+    old_hours: Mapped[Optional[float]] = mapped_column(Float)
+    new_hours: Mapped[Optional[float]] = mapped_column(Float)
     week: Mapped[Optional[str]] = mapped_column(String(20))
     month: Mapped[Optional[str]] = mapped_column(String(20))
     client_name: Mapped[Optional[str]] = mapped_column(String(255))

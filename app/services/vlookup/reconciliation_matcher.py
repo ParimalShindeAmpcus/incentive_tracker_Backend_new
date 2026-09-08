@@ -141,7 +141,10 @@ class ReconciliationMatcher:
             g["_norm_name"] = parsed["normalized"]
             g["_name_parts"] = parsed
             g["_norm_client"] = normalize_client_name(g.get("client_name"))
-            g["_messy_key"] = (g["_norm_name"], g["_norm_client"])
+            g["_messy_key"] = (
+                g["_norm_name"],
+                normalize_client_name(g.get("organisation") or g.get("client_name")),
+            )
             if g["_norm_name"]:
                 by_norm[g["_norm_name"]].append(g)
                 name_to_groups[g["_norm_name"]].append(g)
@@ -204,12 +207,14 @@ class ReconciliationMatcher:
             cumulative = float(record.get("cumulative_hours") or hours)
 
             explanation["cumulative_hours"] = cumulative
+            explanation["old_hours"] = record.get("old_hours")
             explanation["monthly_hours"] = record.get("monthly_hours") or {}
             explanation["weekly_by_month"] = record.get("weekly_by_month") or {}
             explanation["hours_note"] = record.get("hours_note") or ""
             if hours > 0 or explanation["monthly_hours"]:
                 explanation["hours_source"] = (
-                    "Hours Worked filled from client weekly rows (template started at 0)"
+                    "Hours Worked filled from Consolidated File New Hours "
+                    "(Hours Template started at 0)"
                 )
 
             validation = self._hours_validation(hours)
@@ -282,7 +287,11 @@ class ReconciliationMatcher:
         for group in groups:
             name = group.get("candidate_name") or ""
             client = group.get("client_name") or ""
-            key = (normalize_name(name), normalize_client_name(client))
+            organisation = group.get("organisation") or ""
+            key = (
+                normalize_name(name),
+                normalize_client_name(client or organisation),
+            )
             if key not in merged:
                 monthly = dict(group.get("monthly_hours") or {})
                 if group.get("month") and group.get("total_hours") and group["month"] not in monthly:
@@ -407,7 +416,7 @@ class ReconciliationMatcher:
             scored["group"] = group
             scored["messy_key"] = group.get("_messy_key") or (
                 normalize_name(group.get("candidate_name")),
-                normalize_client_name(group.get("client_name")),
+                normalize_client_name(group.get("organisation") or group.get("client_name")),
             )
             ranked.append(scored)
         ranked.sort(
@@ -448,35 +457,59 @@ class ReconciliationMatcher:
             identity_already_assigned = True
 
         group = (best or {}).get("group") or {}
-        monthly_hours = dict(group.get("monthly_hours") or {})
-        weekly_by_month = dict(group.get("weekly_by_month") or {})
+        monthly_hours = {
+            m: h
+            for m, h in dict(group.get("monthly_hours") or {}).items()
+            if normalize_month_year(str(m or ""))
+        }
+        weekly_by_month = {
+            m: weeks
+            for m, weeks in dict(group.get("weekly_by_month") or {}).items()
+            if normalize_month_year(str(m or ""))
+        }
         hours_month = template_month or target_month
+        file_has_months = bool(monthly_hours) or bool(
+            normalize_month_year(str(group.get("month") or ""))
+        )
+        raw_hours = float(group.get("total_hours") or 0)
         if hours_month and monthly_hours.get(hours_month) is not None:
             hours_out = int(round(float(monthly_hours.get(hours_month) or 0)))
             weekly = dict((weekly_by_month.get(hours_month) or group.get("weekly_breakdown") or {}))
+        elif hours_month and not file_has_months:
+            # Consolidated File has no month column — New Hours apply to this
+            # Hours Template month after the results Month Filter is applied.
+            hours_out = int(round(raw_hours))
+            weekly = dict(group.get("weekly_breakdown") or {})
+            if raw_hours:
+                monthly_hours = {hours_month: raw_hours}
+                weekly_by_month = {hours_month: dict(weekly)} if weekly else {}
         elif hours_month:
             hours_out = 0
             weekly = {}
         else:
-            hours_out = int(round(float(group.get("total_hours") or 0)))
+            hours_out = int(round(raw_hours))
             weekly = dict(group.get("weekly_breakdown") or {})
         cumulative_hours = float(group.get("cumulative_hours") or hours_out)
         hours_note = group.get("hours_note") or ""
         validation = self._hours_validation(hours_out)
 
+        source_org = (
+            (group.get("organisation") or group.get("client_name")) if best else None
+        )
         base_fields = {
             "template_candidate": template,
             "template_candidate_id": template.get("id"),
             "template_candidate_name": template.get("candidate_name"),
             "template_candidate_id_str": template.get("candidate_id"),
             "messy_name_original": group.get("candidate_name") if best else None,
-            "messy_client_name": group.get("client_name") if best else None,
+            "messy_client_name": source_org,
             "messy_month": hours_month or (
                 (group.get("month") or target_month) if best else (target_month or template.get("_month"))
             ),
             "weekly_records": group.get("source_rows") or [],
             "weekly_breakdown": weekly,
             "total_hours": hours_out,
+            "old_hours": group.get("old_hours") if best else None,
             "cumulative_hours": cumulative_hours,
             "monthly_hours": monthly_hours,
             "weekly_by_month": weekly_by_month,
@@ -486,7 +519,7 @@ class ReconciliationMatcher:
 
         if not best:
             summary = (
-                "This Hours Template candidate was not found in the client hours file."
+                "This Hours Template candidate was not found in the Consolidated File."
             )
             explanation = {
                 "identity_summary": summary,
@@ -570,7 +603,7 @@ class ReconciliationMatcher:
         if status == "unmatched":
             if "year_mismatch" not in flags and "month_year_mismatch" not in flags:
                 summary = (
-                    "This Hours Template candidate was not found in the client hours file "
+                    "This Hours Template candidate was not found in the Consolidated File "
                     "with a sufficiently reliable identity match."
                 )
                 headline = "Unmatched"
@@ -656,9 +689,11 @@ class ReconciliationMatcher:
         return {
             **base_fields,
             "messy_name_original": (linked_group or {}).get("candidate_name"),
-            "messy_client_name": (linked_group or {}).get("client_name"),
+            "messy_client_name": (linked_group or {}).get("organisation")
+            or (linked_group or {}).get("client_name"),
             "weekly_breakdown": weekly,
             "total_hours": hours_out,
+            "old_hours": (linked_group or {}).get("old_hours"),
             "cumulative_hours": cumulative_hours,
             "monthly_hours": monthly_hours,
             "weekly_by_month": weekly_by_month,
@@ -1437,7 +1472,7 @@ class ReconciliationMatcher:
                 "status": "unmatched",
                 "summary": (
                     f"Candidate identity may match, but Hours Template year {template_year} "
-                    f"does not appear in the client file ({months_label}). "
+                    f"does not appear in the Consolidated File ({months_label}). "
                     "Auto-match requires the same year."
                 ),
                 "headline": "Unmatched (year mismatch)",
@@ -1559,8 +1594,16 @@ class ReconciliationMatcher:
                 "flags": ["strong_name_moderate_client"],
             }
 
-        # Case B/incomplete — strong name but client missing
+        # Strong name without client: Consolidated File has Organisation, not
+        # Hours Template Client Name, so name-only auto-match is correct.
         if name_band == "strong" and not client_available:
+            if str(group.get("organisation") or "").strip():
+                return {
+                    "status": "matched",
+                    "summary": "Candidate name strongly matches the Consolidated File.",
+                    "headline": f"Matched: {master_name}",
+                    "flags": ["consolidated_name_match"],
+                }
             return {
                 "status": "needs_review",
                 "summary": (
@@ -1662,6 +1705,7 @@ class ReconciliationMatcher:
             "weekly_records": group.get("source_rows") or [],
             "weekly_breakdown": weekly,
             "total_hours": hours_out,
+            "old_hours": group.get("old_hours"),
             "cumulative_hours": cumulative_hours,
             "monthly_hours": monthly_hours,
             "weekly_by_month": weekly_by_month,

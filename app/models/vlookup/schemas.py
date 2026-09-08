@@ -136,7 +136,7 @@ class VLookupTemplateResponse(BaseModel):
             "Month",
         ]
     )
-    message: str = "Upload Hours Template + client hours via POST /vlookup/upload"
+    message: str = "Upload Hours Template + Consolidated File via POST /vlookup/upload"
 
 
 class VLookupPublishHoursResponse(BaseModel):

@@ -277,6 +277,7 @@ def serialize_match(
         "messy_client_name": match.messy_client_name,
         "messy_month": match.messy_month,
         "total_hours": match.total_hours,
+        "old_hours": explanation.get("old_hours"),
         "cumulative_hours": explanation.get("cumulative_hours"),
         "monthly_hours": explanation.get("monthly_hours") or {},
         "weekly_by_month": explanation.get("weekly_by_month") or {},
