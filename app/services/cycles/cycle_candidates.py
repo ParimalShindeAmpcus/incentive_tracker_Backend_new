@@ -65,6 +65,17 @@ def candidate_matches_division(candidate: Candidate, cycle_division: str) -> boo
         ):
             return False
         return "ampcus tech" in org and contract != "INHOUSE"
+        # Match solely on organisation — no recruiter location condition for Ampcus Tech Client.
+        org_only = (candidate.organization or "").lower()
+        org_compact = org_only.replace(" ", "").replace("-", "").replace("_", "")
+        is_ampcus_tech_client = (
+            "ampcusclient" in org_compact
+            or "ampcus client" in org_only
+        ) and "inhouse" not in org_compact
+        # Also match when the stored division tag explicitly says client.
+        if (candidate.division or "").strip().lower().replace(" ", "") in ("ampcustechclient", "client"):
+            is_ampcus_tech_client = True
+        return is_ampcus_tech_client
 
     if is_ampcus_inhouse_division(cycle_division):
         return is_ampcus_inhouse_candidate(
@@ -130,3 +141,4 @@ def candidate_ids_for_new_cycle(db: Session, division: str) -> List[int]:
         if candidate_matches_division(c, division) and not is_seed_candidate(c)
     ]
     return matched
+

@@ -44,6 +44,7 @@ from app.repositories.hours import hours_repository
 from app.repositories.incentives import incentive_repository
 from app.services.audit import audit_service
 from app.services.cycles.cycle_candidates import (
+    candidate_ids_for_new_cycle,
     candidate_matches_division,
     is_seed_candidate,
     resolve_candidates_for_cycle,
@@ -266,6 +267,18 @@ def update_checklist(
 def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
     cycle = _require_cycle(db, cycle_id)
     rows = cycle_repository.list_payment_statuses(db, cycle_id)
+
+    # Add newly uploaded Ampcus Tech Client candidates without overwriting
+    # payment decisions that are already recorded for this cycle.
+    if is_ampcus_client_division(cycle.division):
+        status_val = cycle.status.value if hasattr(cycle.status, "value") else str(cycle.status)
+        if status_val.upper() not in {"APPROVED", "PAID", "CLOSED"}:
+            candidate_ids = candidate_ids_for_new_cycle(db, cycle.division)
+            if candidate_ids:
+                cycle_repository.ensure_payment_statuses(db, cycle_id, candidate_ids)
+                db.commit()
+                rows = cycle_repository.list_payment_statuses(db, cycle_id)
+
     out: List[PaymentStatusOut] = []
     nashik = is_nashik_division(cycle.division)
     as_of = cycle.cycle_end_date or date.today()
@@ -695,6 +708,19 @@ def upload_hours_file(
             if is_nashik_division(cycle.division)
             else "Review payment status before calculation."
         )
+        if not matched_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": (
+                        "No candidates from the placement file matched Candidate Master"
+                        if is_ampcus_client_division(cycle.division)
+                        else "No candidates from the hours file matched Candidate Master"
+                    ),
+                    "issues": issues,
+                    "coordinator_issues": coordinator_issues,
+                },
+            )
         return HoursUploadOut(
             cycle_id=cycle.id,
             row_count=len(rows),

@@ -3,7 +3,11 @@ Division resolver — derives the incentive "division" to run for one candidate.
 
 The business requirement is that Hours-upload rows must not be used to infer
 division. Instead, we classify the *matched* Candidate Master record into the
-cycle's division via org + recruiter work location (and related attributes).
+cycle's division via org (and related attributes).
+
+- Ampcus Tech Client: resolved from organisation field only. No recruiter
+  location condition applies.
+- Sambhaji Nagar / Nashik: recruiter work location is the primary signal.
 
 Note: In this codebase the Candidate Master already carries a `division`
 classification field. The resolver still treats organization/recruiter location
@@ -83,7 +87,7 @@ def resolve_candidate_division(
             recruiter_work_location=recruiter_work_location,
         )
 
-    # Check if organization indicates Ampcus Tech divisions
+    # Ampcus Tech Client — match on organisation only, no recruiter location check.
     org_lower = _norm_text(organization).lower()
     org_compact = org_lower.replace(" ", "").replace("-", "")
     if is_ampcus_inhouse_candidate(
@@ -96,7 +100,9 @@ def resolve_candidate_division(
             organization=organization,
             recruiter_work_location=recruiter_work_location,
         )
-    if "ampcustech" in org_compact or "ampcus tech" in org_lower:
+
+    if "ampcusclient" in org_compact or "ampcus client" in org_lower or "ampcustech" in org_compact or "ampcus tech" in org_lower:
+
         return ResolvedCandidateDivision(
             resolved_division="ampcusTechClient",
             master_division=_norm_text(master_division) or None,

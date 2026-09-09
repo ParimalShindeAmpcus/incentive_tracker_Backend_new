@@ -42,6 +42,7 @@ from app.services.incentives.nashik_calculator import (
 from app.services.incentives.nashik_rules import is_nashik_division, normalize_person
 from app.services.cycles.engines.ampcus_client import (
     calculate_placement as calculate_ampcus_client_placement,
+    calculate_fte_placement as calculate_atc_fte_placement,
     coordinator_index,
     is_ampcus_client_division,
 )
@@ -49,7 +50,10 @@ from app.services.incentives.recruiter_master import missing_recruiter_master_va
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
 from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
 from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations, calculate_fte_placement, is_fte_contract
-from app.services.cycles.engines.nashik_fte import calculate_nashik_fte_placement
+from app.services.cycles.engines.nashik_fte import (
+    calculate_nashik_fte_placement,
+    finder_fee_above_from_master,
+)
 
 
 def _prior_nashik_fte_recruiter_paid(db: Session, candidate_id: int, exclude_cycle_id: int) -> Decimal:
@@ -76,6 +80,7 @@ def _prior_nashik_fte_recruiter_paid(db: Session, candidate_id: int, exclude_cyc
         if "nashik_fte" in blob or '"candidate_type": "FTE"' in blob or '"candidate_type":"FTE"' in blob:
             total += Decimal(str(row.amount or 0))
     return total
+
 
 
 def _to_master(cand: Candidate) -> MasterCandidate:
@@ -244,6 +249,7 @@ def run_cycle_calculation(
             {"check_key": "payment_pending", "severity": "YELLOW" if pending else "GREEN", "message": "Placements awaiting first full-month client payment", "count": pending, "details_json": None},
             {"check_key": "no_incentive_slab", "severity": "YELLOW" if no_slab else "GREEN", "message": "Placements below the client mark-up threshold", "count": no_slab, "details_json": None},
             missing_recruiter_master_validation(lines),
+            {"check_key": "coordinator_not_in_master", "severity": "RED" if any(line.reason == "COORDINATOR_NOT_IN_MASTER" for line in lines) else "GREEN", "message": "Hierarchy person not found in Coordinator Master", "count": sum(1 for line in lines if line.reason == "COORDINATOR_NOT_IN_MASTER"), "details_json": None},
             {"check_key": "coordinator_ineligible", "severity": "YELLOW" if any(line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"} for line in lines) else "GREEN", "message": "Coordinator on notice or left — incentive excluded", "count": sum(1 for line in lines if line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"}), "details_json": None},
         ]
         return lines, stats, [], validations
@@ -297,6 +303,8 @@ def run_cycle_calculation(
             {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
             {"check_key": "manual_exclude_nashik", "severity": "YELLOW" if manually_excluded else "GREEN", "message": "Manually excluded (Nashik overlap / user exclude)", "count": manually_excluded, "details_json": None},
             missing_recruiter_master_validation(lines),
+            {"check_key": "coordinator_not_in_master", "severity": "RED" if any(line.reason == "COORDINATOR_NOT_IN_MASTER" for line in lines) else "GREEN", "message": "Hierarchy person not found in Coordinator Master", "count": sum(1 for line in lines if line.reason == "COORDINATOR_NOT_IN_MASTER"), "details_json": None},
+            {"check_key": "coordinator_ineligible", "severity": "YELLOW" if any(line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"} for line in lines) else "GREEN", "message": "Coordinator on notice or left — incentive excluded", "count": sum(1 for line in lines if line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"}), "details_json": None},
         ]
         return lines, stats, [], validations
 
@@ -474,7 +482,7 @@ def run_cycle_calculation(
             lines.append(draft)
 
     if is_sambhaji_nagar_division(cycle.division):
-        lines = special_average(lines, cycle_month=cycle.incentive_month)
+        pass
 
     validations = [
         {
@@ -705,20 +713,69 @@ def run_cycle_calculation(
         assert coordinators is not None
         pending = 0
         no_slab = 0
+
+        from collections import Counter as _Counter
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # ── Identify ATC FTE candidates and count placements per recruiter/month/tier ──
+        # The slab is PER TIER: below-$4500 placements and above-$4500 placements each
+        # have their own count for the same recruiter in the same calendar month.
+        atc_fte_pks = [
+            pk for pk in included_pks
+            if is_fte_contract(by_pk[pk].contract_type)
+        ]
+
+        atc_fte_month_counts: dict = _Counter()
+        for pk in atc_fte_pks:
+            cand = by_pk[pk]
+            start_month = (
+                cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
+            )
+            fee_above = finder_fee_above_from_master(cand)  # True or False
+            # Key includes tier so below-$4500 and above-$4500 are counted independently
+            tier_key = (str(cand.recruiter or "").strip().lower(), start_month, fee_above)
+            atc_fte_month_counts[tier_key] += 1
+
         for pk in included_pks:
             candidate = by_pk[pk]
-            drafts = calculate_ampcus_client_placement(
-                candidate,
-                cycle_end=window.end,
-                payment=payment_by_candidate.get(candidate.id),
-                coordinators=coordinators,
-                paid_keys=paid_keys,
-            )
+
+            if pk in atc_fte_pks:
+                # ATC FTE placement — use finder-fee slab, not markup slab
+                start_month = (
+                    candidate.start_date.strftime("%Y-%m") if candidate.start_date else (cycle.incentive_month or "")
+                )
+                fee_above = finder_fee_above_from_master(candidate)
+                tier_key = (str(candidate.recruiter or "").strip().lower(), start_month, fee_above)
+                placement_count = atc_fte_month_counts.get(tier_key, 1)
+
+                logger.info(f"[ATC FTE] Candidate ID: {candidate.id}, recruiter: {candidate.recruiter}, "
+                            f"month: {start_month}, tier={'above' if fee_above else 'below'}, count: {placement_count}")
+
+                drafts = calculate_atc_fte_placement(
+                    candidate,
+                    cycle_end=window.end,
+                    payment=payment_by_candidate.get(candidate.id),
+                    coordinators=coordinators,
+                    paid_keys=paid_keys,
+                    placement_count_this_month=placement_count,
+                )
+            else:
+                # W2 / C2C placement — existing markup slab logic
+                drafts = calculate_ampcus_client_placement(
+                    candidate,
+                    cycle_end=window.end,
+                    payment=payment_by_candidate.get(candidate.id),
+                    coordinators=coordinators,
+                    paid_keys=paid_keys,
+                )
+
             if any(line.reason == "PAYMENT_PENDING" for line in drafts):
                 pending += 1
-            if any(line.reason == "MARKUP_BELOW_INCENTIVE_THRESHOLD" for line in drafts):
+            if any(line.reason in {"MARKUP_BELOW_INCENTIVE_THRESHOLD", "FINDER_FEE_NOT_SET"} for line in drafts):
                 no_slab += 1
             lines.extend(drafts)
+
 
         validations = [
             {
@@ -871,10 +928,7 @@ def run_cycle_calculation(
             days_completed = hours_by_pk[pk]  # "Hours Worked" column = days for FTE
             payment_status_row = payment_by_candidate.get(pk)
             payment_status = str(getattr(payment_status_row, "status", "PAYMENT_PENDING"))
-
-            # Retrieve finder_fee_above_threshold from the payment status row metadata
-            # The frontend stores this as a boolean on the payment status row.
-            finder_fee_above = bool(getattr(payment_status_row, "finder_fee_above_threshold", False))
+            finder_fee_above = finder_fee_above_from_master(cand)
 
             start_month = (
                 cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")

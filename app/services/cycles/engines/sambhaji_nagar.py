@@ -29,10 +29,10 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
-from typing import Dict, List, Optional, Sequence, Set, Tuple
-
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.coordinator import CoordinatorRecord
+
 from app.services.cycles.recruiter_master import (
     EXEMPTED_MISSING_RECRUITER_MASTER,
     EXEMPTION_REASON_TEXT,
@@ -420,13 +420,17 @@ def calculate_fte_placement(
     2. client payment received
 
     Recruiter incentive is a fixed one-time amount per FTE placement, determined by:
-    - Whether the finder's fee exceeds $4,500 (finder_fee_above_threshold)
+    - Finder Fee tier from Candidate Master (Below / Above $4,500)
     - How many FTE placements the same recruiter made in the same calendar month
 
     Leadership roles (Team Lead, Manager, CRM, AD, Center Head) each receive a fixed
     ONE_TIME amount per FTE placement regardless of placement volume.
     """
+    # Local import to avoid circular dependency with nashik_fte
+    from app.services.cycles.engines.nashik_fte import finder_fee_above_from_master  # noqa: PLC0415
     paid = payment_status.upper() in {"RECEIVED", "PAYMENT_RECEIVED", "NOT_APPLICABLE"}
+    finder_fee_above_threshold = finder_fee_above_from_master(c)
+    finder_raw = str(getattr(c, "finder_fees", None) or "NONE").strip().upper()
 
     # Source / location validation
     org_val = str(c.organization or "").strip().lower()
@@ -448,13 +452,22 @@ def calculate_fte_placement(
         hard_blocked = "INVALID_SOURCE"
     elif not loc_valid:
         hard_blocked = "INVALID_LOCATION"
+    elif finder_raw in {"", "NONE", "NULL", "N/A", "NA"}:
+        hard_blocked = "FINDER_FEE_NOT_SET"
 
     # Eligibility gates
     days_gate_ok = days_completed >= FTE_MIN_DAYS
     payment_gate_ok = paid
 
     # Build recruiter incentive amount
-    if hard_blocked:
+    recruiter_clean = (c.recruiter or "").strip().lower()
+    recruiter_std_key = f"{c.id}|ONE_TIME|Recruiter|{recruiter_clean}"
+
+    if paid_keys and recruiter_std_key in paid_keys:
+        recruiter_blocked = "ALREADY_PAID"
+        recruiter_ok = False
+        rec_amount = 0
+    elif hard_blocked:
         recruiter_blocked = hard_blocked
         recruiter_ok = False
         rec_amount = 0
@@ -524,8 +537,9 @@ def calculate_fte_placement(
         coord_rec_l = lookup_coordinator(coordinators, person)
         person_clean = person.strip().lower()
         key = f"{c.id}|ONE_TIME|FTE|{role}|{person_clean}"
+        std_key = f"{c.id}|ONE_TIME|{role}|{person_clean}"
 
-        if paid_keys and key in paid_keys:
+        if paid_keys and (key in paid_keys or std_key in paid_keys):
             lead_eligible = False
             lead_reason = "ALREADY_PAID"
         elif hard_blocked:

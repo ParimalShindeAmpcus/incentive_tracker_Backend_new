@@ -3,6 +3,11 @@
 This engine deliberately has no hours or 90-day condition.  It consumes the
 reviewed placement snapshot (Candidate in the current data model) and emits
 server-calculated line drafts only.
+
+FTE (Full-Time) placements use a separate recruiter slab based on:
+  - Finder's Fee from Candidate Master (Below / Above $4,500)
+  - Number of FTE placements by the same recruiter in the same calendar month
+Leadership roles receive a fixed one-time amount per FTE placement.
 """
 
 from __future__ import annotations
@@ -535,3 +540,220 @@ def coordinator_index(db: Session) -> Dict[str, CoordinatorRecord]:
             if key:
                 out[key] = row
     return out
+
+
+# ── Ampcus Tech Client FTE (Full-Time) incentive rules ───────────────────────
+# Rules (from management document):
+#   Recruiter slab by Finder's Fee tier x monthly FTE placement count.
+#   Leadership: fixed one-time per FTE placement (no multiple-placement bonus).
+
+# Finder's fee threshold (same threshold as Nashik / Sambhaji Nagar FTE)
+ATC_FTE_FINDER_FEE_THRESHOLD = Decimal("4500")
+
+# ATC_FTE_RECRUITER_SLABS[finder_fee_above_threshold][placement_count_bucket]
+# Bucket: 0 = 1st placement, 1 = 2nd, 2 = 3+
+ATC_FTE_RECRUITER_SLABS: Dict[bool, Tuple[int, int, int]] = {
+    False: (15000, 18000, 20000),   # Finder's fee below $4,500
+    True:  (20000, 25000, 30000),   # Finder's fee above $4,500
+}
+
+# Fixed one-time amounts for leadership per FTE placement (no volume bonus)
+ATC_FTE_FIXED: Dict[str, int] = {
+    "Team Lead":           1000,
+    "Manager":             1500,
+    "Senior Manager":      1500,
+    "CRM":                 1500,
+    "Associate Director":  4000,
+    "Center Head":         4000,
+    "AVP":                 4000,
+    "Director":            1500,
+}
+
+
+def _fte_recruiter_amount(finder_fee_above: bool, placement_count: int) -> int:
+    """Return INR recruiter incentive for one ATC FTE placement."""
+    slabs = ATC_FTE_RECRUITER_SLABS[finder_fee_above]
+    if placement_count >= 3:
+        return slabs[2]
+    if placement_count == 2:
+        return slabs[1]
+    return slabs[0]
+
+
+def _finder_fee_above_from_master(candidate: Candidate) -> bool:
+    """True when Candidate Master Finder Fees is Above $4,500."""
+    raw = (
+        str(getattr(candidate, "finder_fees", None) or "")
+        .strip().upper()
+        .replace(" ", "").replace("-", "").replace("$", "").replace(",", "")
+    )
+    if raw in {"ABOVE500", "ABOVE_500", "ABOVE4500"}:
+        return True
+    if raw in {"BELOW500", "BELOW_500", "BELOW4500"}:
+        return False
+    fee = getattr(candidate, "finders_fee", None)
+    if fee is not None:
+        try:
+            return Decimal(str(fee)) > ATC_FTE_FINDER_FEE_THRESHOLD
+        except Exception:
+            return False
+    return False
+
+
+def calculate_fte_placement(
+    candidate: Candidate,
+    *,
+    cycle_end: date,
+    payment: Optional[object] = None,
+    coordinators: Optional[Dict[str, CoordinatorRecord]] = None,
+    paid_keys: Optional[Set[str]] = None,
+    placement_count_this_month: int = 1,
+) -> List[LineDraft]:
+    """Calculate Ampcus Tech Client FTE incentive lines for one placement.
+
+    Rules:
+    - Candidate must have completed >= 90 days from start date (cycle_end - start_date).
+    - Payment received is required (same payment gate as W2/C2C).
+    - Recruiter incentive: finder fee tier (from Candidate Master) x monthly FTE count
+      (count is per-tier: below-$4500 placements counted separately from above-$4500).
+    - Leadership: fixed one-time per FTE placement; no volume bonus.
+    """
+    coordinators = coordinators or {}
+    paid_keys = paid_keys or set()
+
+    payment_status = str(getattr(payment, "status", "PAYMENT_PENDING") or "PAYMENT_PENDING").upper()
+    paid = payment_status in {"RECEIVED", "PAYMENT_RECEIVED"}
+    finder_fee_above = _finder_fee_above_from_master(candidate)
+    finder_raw = str(getattr(candidate, "finder_fees", None) or "NONE").strip().upper()
+
+    days_completed = (cycle_end - candidate.start_date).days if candidate.start_date else 0
+
+    details_base = {
+        "contract_type": "FULLTIME",
+        "atc_fte": True,
+        "finder_fees": finder_raw,
+        "finder_fee_above_threshold": finder_fee_above,
+        "placement_count_this_month": placement_count_this_month,
+        "payment_status": payment_status,
+        "payment_received": paid,
+        "start_date": candidate.start_date.isoformat() if candidate.start_date else None,
+        "days_completed": days_completed,
+        "fte_min_days": 90,
+        "organization": candidate.organization or "",
+        "candidate_id": (
+            getattr(candidate, "start_id", None)
+            or getattr(candidate, "external_candidate_id", None)
+            or str(candidate.id)
+        ),
+        "external_candidate_id": getattr(candidate, "external_candidate_id", None),
+        "recruiter": getattr(candidate, "recruiter", None),
+    }
+
+    role_pairs = _roles_to_evaluate(candidate)
+
+    def _block_all(reason: str) -> List[LineDraft]:
+        return [
+            _line(candidate, role, person, ZERO,
+                  eligible=False, reason=reason,
+                  rule="Ampcus Client FTE eligibility",
+                  details=details_base)
+            for role, person in role_pairs
+        ]
+
+    if not candidate.start_date:
+        return _block_all("CANDIDATE_NOT_STARTED")
+    if _inactive(candidate):
+        return _block_all("CANDIDATE_INACTIVE")
+    if _project_ended(candidate, cycle_end):
+        return _block_all("PROJECT_ENDED")
+    if days_completed < 90:
+        return _block_all("FTE_90_DAY_NOT_MET")
+    if finder_raw in {"", "NONE", "NULL", "N/A", "NA"}:
+        return _block_all("FINDER_FEE_NOT_SET")
+    if not paid:
+        return _block_all("PAYMENT_PENDING")
+
+    rec_amount = Decimal(_fte_recruiter_amount(finder_fee_above, placement_count_this_month))
+    details_rec = {
+        **details_base,
+        "rule": f"ATC FTE finder-fee={'above' if finder_fee_above else 'below'} $4500, count={placement_count_this_month}",
+    }
+
+    lines: List[LineDraft] = []
+
+    # Enforce max-two-roles
+    by_person_roles: Dict[str, List[str]] = {}
+    for role, person in role_pairs:
+        if person and not _is_not_applicable(person):
+            norm = normalize_person(person)
+            by_person_roles.setdefault(norm, []).append(role)
+
+    FTE_ROLE_PRIORITY = [
+        "Recruiter", "AVP", "Associate Director", "Center Head",
+        "Director", "CH/VP", "Senior Manager", "Manager", "CRM", "Team Lead",
+    ]
+    allowed_roles: Set[str] = set()
+    for norm_name, roles_held in by_person_roles.items():
+        if len(roles_held) <= 2:
+            allowed_roles.update(roles_held)
+        else:
+            ordered = sorted(roles_held, key=lambda r: FTE_ROLE_PRIORITY.index(r) if r in FTE_ROLE_PRIORITY else 99)
+            allowed_roles.update(ordered[:2])
+
+    for role, person in role_pairs:
+        amount = rec_amount if role == "Recruiter" else Decimal(ATC_FTE_FIXED.get(role, 0))
+        rule_label = (
+            f"ATC FTE recruiter slab {'above' if finder_fee_above else 'below'} $4500"
+            if role == "Recruiter"
+            else f"ATC FTE fixed {role}"
+        )
+        details_role = {**details_rec, "incentive_role": role}
+
+        if not person or not str(person).strip():
+            lines.append(_line(candidate, role, person, ZERO, eligible=False,
+                               reason="MISSING_HIERARCHY", rule=rule_label, details=details_role))
+            continue
+
+        if _is_not_applicable(person):
+            lines.append(_line(candidate, role, person, ZERO, eligible=False,
+                               reason="ROLE_NOT_APPLICABLE", rule=rule_label, details=details_role))
+            continue
+
+        person_clean = person.strip().lower()
+        key = f"{candidate.id}|ATC_FTE|{role}|{person_clean}"
+        std_key = f"{candidate.id}|AMPCUS_CLIENT_MARKUP|{role}|{person_clean}"
+        if key in paid_keys or std_key in paid_keys:
+            lines.append(_line(candidate, role, person, ZERO, eligible=False,
+                               reason="ALREADY_PAID", rule=rule_label, details=details_role))
+            continue
+
+        if role not in allowed_roles:
+            lines.append(_line(candidate, role, person, ZERO, eligible=False,
+                               reason="ROLE_LIMIT_EXCEEDED", rule=rule_label, details=details_role))
+            continue
+
+        coord = lookup_coordinator(coordinators, person)
+        if coordinators and not coord:
+            lines.append(_line(candidate, role, person, ZERO, eligible=False,
+                               reason=EXEMPTED_MISSING_RECRUITER_MASTER,
+                               rule=rule_label,
+                               details={**details_role, "exemption": EXEMPTION_REASON_TEXT}))
+            continue
+
+        coordinator_status = getattr(coord, "employment_status", CoordinatorStatus.ACTIVE)
+        coordinator_status_value = getattr(coordinator_status, "value", str(coordinator_status)).upper()
+        if coordinator_status_value in {CoordinatorStatus.LEFT.value, CoordinatorStatus.NOTICE.value}:
+            reason = (
+                "COORDINATOR_LEFT"
+                if coordinator_status_value == CoordinatorStatus.LEFT.value
+                else "COORDINATOR_ON_NOTICE"
+            )
+            lines.append(_line(candidate, role, person, ZERO, eligible=False,
+                               reason=reason, rule=rule_label,
+                               details={**details_role, "coordinator_status": coordinator_status_value}))
+        else:
+            lines.append(_line(candidate, role, person, amount, eligible=True,
+                               reason="ELIGIBLE", rule=rule_label,
+                               details={**details_role, "coordinator_status": coordinator_status_value}))
+
+    return lines
