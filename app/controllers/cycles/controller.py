@@ -2,12 +2,13 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, Body, File, Query, UploadFile
 
 from app.models.cycles.schemas import (
     AdjustmentCreate,
     AdjustmentOut,
     ApproveRequest,
+    CalculateRequest,
     CalculateResult,
     ChecklistOut,
     ChecklistUpdate,
@@ -153,8 +154,13 @@ def get_approval_results(cycle_id: int, db: DbSession) -> List[CycleApprovalResu
 
 
 @router.post("/{cycle_id}/calculate", response_model=CalculateResult)
-def calculate(cycle_id: int, db: DbSession, user: CurrentUser) -> CalculateResult:
-    return cycle_service.calculate_cycle(db, cycle_id, user=user)
+def calculate(
+    cycle_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    payload: Optional[CalculateRequest] = Body(default=None),
+) -> CalculateResult:
+    return cycle_service.calculate_cycle(db, cycle_id, user=user, payload=payload)
 
 
 @router.get("/{cycle_id}/export")

@@ -175,6 +175,41 @@ def _paid_keys_for_cycle(db: Session, cycle) -> set[str]:
     return keys
 
 
+def _excluded_candidate_keys(cycle) -> set[str]:
+    """Parse cycle.excluded_candidate_ids JSON/CSV into a normalized key set."""
+    raw = getattr(cycle, "excluded_candidate_ids", None)
+    if raw is None:
+        return set()
+    values: list = []
+    if isinstance(raw, list):
+        values = raw
+    else:
+        text = str(raw).strip()
+        if not text:
+            return set()
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                values = parsed
+            else:
+                values = [x.strip() for x in text.split(",") if x.strip()]
+        except Exception:
+            values = [x.strip() for x in text.split(",") if x.strip()]
+    return {str(v).strip().lower() for v in values if str(v).strip()}
+
+
+def _candidate_matches_excluded_keys(candidate: Candidate, excluded_keys: set[str]) -> bool:
+    if not excluded_keys:
+        return False
+    keys = {
+        str(getattr(candidate, "id", "") or "").strip().lower(),
+        str(getattr(candidate, "start_id", None) or "").strip().lower(),
+        str(getattr(candidate, "activity_id", None) or "").strip().lower(),
+        str(getattr(candidate, "external_candidate_id", None) or "").strip().lower(),
+    }
+    return any(k and k in excluded_keys for k in keys)
+
+
 def run_cycle_calculation(
     db: Session,
     cycle,
@@ -183,7 +218,7 @@ def run_cycle_calculation(
 ) -> Tuple[List[LineDraft], dict, List[dict], List[dict]]:
     # Ampcus Client is placement/payment/approved-markup driven.  It must not
     # require an hours import or inherit Nashik's 160-hour matching flow.
-    if is_ampcus_client_division(cycle.division) or is_ampcus_inhouse_division(cycle.division):
+    if is_ampcus_client_division(cycle.division):
         masters = resolve_candidates_for_cycle(db, cycle)
         payment_by_candidate = {
             row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
@@ -216,17 +251,33 @@ def run_cycle_calculation(
     # Ampcus In-House is 90-day active tenure driven directly from Candidate Master.
     # No hours template upload required; candidates completing 90 days are automatically eligible.
     if is_ampcus_inhouse_division(cycle.division):
-        masters = candidate_repository.list_all_candidates(db)
-        division_masters = [c for c in masters if is_ampcus_inhouse_division(c.division)]
-        if division_masters:
-            masters = division_masters
+        masters = resolve_candidates_for_cycle(db, cycle)
+        if not masters:
+            masters = candidate_repository.list_all_candidates(db)
+            division_masters = [c for c in masters if is_ampcus_inhouse_division(c.division)]
+            if division_masters:
+                masters = division_masters
         paid_keys = _paid_keys_for_cycle(db, cycle)
         coordinators = coordinator_index(db)
+        excluded_keys = _excluded_candidate_keys(cycle)
         lines = []
         not_90_days = 0
         inactive = 0
         already_paid = 0
+        manually_excluded = 0
         for candidate in masters:
+            if _candidate_matches_excluded_keys(candidate, excluded_keys):
+                manually_excluded += 1
+                lines.append(
+                    _ineligible_line(
+                        candidate_pk=candidate.id,
+                        name=candidate.candidate_name,
+                        hours=Decimal("0"),
+                        reason="MANUAL_EXCLUDE_NASHIK_OVERLAP",
+                        rule="INHOUSE_MANUAL_EXCLUDE",
+                    )
+                )
+                continue
             drafts = calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
             if any(line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in drafts):
                 not_90_days += 1
@@ -239,10 +290,12 @@ def run_cycle_calculation(
             "total_hours_rows": len(masters), "matched_name_and_id": len(masters),
             "matched_id_fallback": 0, "name_id_mismatch": 0, "unmatched": 0,
             "inactive": inactive, "already_paid": already_paid,
+            "manually_excluded": manually_excluded,
         }
         validations = [
             {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
             {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
+            {"check_key": "manual_exclude_nashik", "severity": "YELLOW" if manually_excluded else "GREEN", "message": "Manually excluded (Nashik overlap / user exclude)", "count": manually_excluded, "details_json": None},
             missing_recruiter_master_validation(lines),
         ]
         return lines, stats, [], validations
@@ -691,8 +744,22 @@ def run_cycle_calculation(
         not_90_days = 0
         inactive = 0
         already_paid_count = 0
+        manually_excluded = 0
+        excluded_keys = _excluded_candidate_keys(cycle)
         for pk in included_pks:
             candidate = by_pk[pk]
+            if _candidate_matches_excluded_keys(candidate, excluded_keys):
+                manually_excluded += 1
+                lines.append(
+                    _ineligible_line(
+                        candidate_pk=pk,
+                        name=candidate.candidate_name,
+                        hours=Decimal("0"),
+                        reason="MANUAL_EXCLUDE_NASHIK_OVERLAP",
+                        rule="INHOUSE_MANUAL_EXCLUDE",
+                    )
+                )
+                continue
             drafts = calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
             if any(line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in drafts):
                 not_90_days += 1
@@ -707,6 +774,7 @@ def run_cycle_calculation(
             {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
             {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
             {"check_key": "already_paid", "severity": "YELLOW" if already_paid_count else "GREEN", "message": "One-time incentives already paid in a previous cycle", "count": already_paid_count, "details_json": None},
+            {"check_key": "manual_exclude_nashik", "severity": "YELLOW" if manually_excluded else "GREEN", "message": "Manually excluded (Nashik overlap / user exclude)", "count": manually_excluded, "details_json": None},
             missing_recruiter_master_validation(lines),
         ]
         return lines, stats, match_rows, validations

@@ -53,6 +53,7 @@ class IncentiveCycle(Base):
     cycle_start_date: Mapped[Optional[date]] = mapped_column(Date)
     cycle_end_date: Mapped[Optional[date]] = mapped_column(Date)
     remarks: Mapped[Optional[str]] = mapped_column(Text)
+    excluded_candidate_ids: Mapped[Optional[str]] = mapped_column(Text)  # JSON list of candidate keys
     status: Mapped[CycleStatus] = mapped_column(
         Enum(CycleStatus, name="cycle_status_enum"),
         default=CycleStatus.DRAFT,

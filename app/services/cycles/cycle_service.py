@@ -16,6 +16,7 @@ from app.models.cycles.schemas import (
     AdjustmentCreate,
     AdjustmentOut,
     ApproveRequest,
+    CalculateRequest,
     CalculateResult,
     ChecklistOut,
     ChecklistUpdate,
@@ -751,7 +752,12 @@ def upload_hours_file(
     )
 
 
-def calculate_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> CalculateResult:
+def calculate_cycle(
+    db: Session,
+    cycle_id: int,
+    user: Optional[User] = None,
+    payload: Optional[CalculateRequest] = None,
+) -> CalculateResult:
     cycle = _require_cycle(db, cycle_id)
     status_val = cycle.status.value if hasattr(cycle.status, "value") else str(cycle.status)
     if status_val.upper() in {CycleStatus.APPROVED.value, CycleStatus.PAID.value, CycleStatus.CLOSED.value}:
@@ -759,6 +765,14 @@ def calculate_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Approved cycles cannot be recalculated",
         )
+    if payload is not None:
+        excluded = getattr(payload, "excluded_candidate_ids", None)
+        if excluded is not None:
+            cycle.excluded_candidate_ids = json.dumps(
+                [str(x).strip() for x in excluded if str(x).strip()]
+            )
+            db.add(cycle)
+            db.flush()
     if is_nashik_division(cycle.division):
         # Ensure prior-month FTE payment-received carries into this cycle before calc.
         cycle_repository.apply_nashik_fte_prior_payment_carryforward(db, cycle.id)
