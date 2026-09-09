@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 from app.services.cycles.engines.ampcus_client import is_ampcus_client_division
-from app.services.cycles.engines.ampcus_inhouse import is_ampcus_inhouse_division
+from app.services.cycles.engines.ampcus_inhouse import (
+    is_ampcus_inhouse_candidate,
+    is_ampcus_inhouse_division,
+)
 from app.services.cycles.engines.sambhaji_nagar import is_sambhaji_nagar_division
 from app.services.incentives.nashik_rules import is_nashik_division, is_nashik_office
 
@@ -83,15 +86,17 @@ def resolve_candidate_division(
     # Check if organization indicates Ampcus Tech divisions
     org_lower = _norm_text(organization).lower()
     org_compact = org_lower.replace(" ", "").replace("-", "")
-    ct_upper = _norm_text(contract_type).upper().replace(" ", "")
+    if is_ampcus_inhouse_candidate(
+        organization=organization,
+        contract_type=contract_type,
+    ):
+        return ResolvedCandidateDivision(
+            resolved_division="ampcusTechInhouse",
+            master_division=_norm_text(master_division) or None,
+            organization=organization,
+            recruiter_work_location=recruiter_work_location,
+        )
     if "ampcustech" in org_compact or "ampcus tech" in org_lower:
-        if "inhouse" in org_compact or ct_upper in {"INHOUSE", "FULLTIME", "FULL_TIME"}:
-            return ResolvedCandidateDivision(
-                resolved_division="ampcusTechInhouse",
-                master_division=_norm_text(master_division) or None,
-                organization=organization,
-                recruiter_work_location=recruiter_work_location,
-            )
         return ResolvedCandidateDivision(
             resolved_division="ampcusTechClient",
             master_division=_norm_text(master_division) or None,
@@ -99,15 +104,7 @@ def resolve_candidate_division(
             recruiter_work_location=recruiter_work_location,
         )
 
-    # Full-Time is a contract classification in the data.
-    # When the master_division can't be normalized, treat Full-Time as In-House.
-    if ct_upper in {"FULLTIME", "FULL_TIME"}:
-        return ResolvedCandidateDivision(
-            resolved_division="ampcusTechInhouse",
-            master_division=_norm_text(master_division) or None,
-            organization=organization,
-            recruiter_work_location=recruiter_work_location,
-        )
+    # Do NOT map bare FULLTIME → In-House (Nashik FTE and other FTEs must not auto-enter).
 
     # Fallback heuristics based on recruiter location.
     loc = _norm_text(recruiter_work_location).lower()
@@ -122,18 +119,6 @@ def resolve_candidate_division(
     if is_nashik_office(recruiter_work_location):
         return ResolvedCandidateDivision(
             resolved_division="nashik",
-            master_division=_norm_text(master_division) or None,
-            organization=organization,
-            recruiter_work_location=recruiter_work_location,
-        )
-
-    # Last-resort fallback: treat Full-Time as In-House in absence of a
-    # configured mapping. This keeps the system functional while keeping
-    # the authoritative master_division when available.
-    ct = _norm_text(contract_type).upper().replace(" ", "")
-    if ct in {"FULLTIME", "FULL_TIME"}:
-        return ResolvedCandidateDivision(
-            resolved_division="ampcusTechInhouse",
             master_division=_norm_text(master_division) or None,
             organization=organization,
             recruiter_work_location=recruiter_work_location,

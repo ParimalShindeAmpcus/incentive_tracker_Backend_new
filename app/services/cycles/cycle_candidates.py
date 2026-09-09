@@ -11,7 +11,10 @@ from app.repositories.candidates import candidate_repository
 from app.repositories.cycles import cycle_repository
 from app.repositories.entities.candidate import Candidate
 from app.services.cycles.engines.ampcus_client import is_ampcus_client_division
-from app.services.cycles.engines.ampcus_inhouse import is_ampcus_inhouse_division
+from app.services.cycles.engines.ampcus_inhouse import (
+    is_ampcus_inhouse_candidate,
+    is_ampcus_inhouse_division,
+)
 from app.services.cycles.engines.sambhaji_nagar import is_sambhaji_nagar_division
 from app.services.incentives.nashik_rules import is_nashik_division
 
@@ -54,10 +57,22 @@ def candidate_matches_division(candidate: Candidate, cycle_division: str) -> boo
     contract = (candidate.contract_type or "").upper()
 
     if is_ampcus_client_division(cycle_division):
-        return "ampcus tech" in org and "inhouse" not in org and contract != "INHOUSE"
+        if is_ampcus_inhouse_candidate(
+            division=candidate.division,
+            organization=candidate.organization,
+            candidate_source=candidate.candidate_source,
+            contract_type=candidate.contract_type,
+        ):
+            return False
+        return "ampcus tech" in org and contract != "INHOUSE"
 
     if is_ampcus_inhouse_division(cycle_division):
-        return "inhouse" in org or contract == "INHOUSE"
+        return is_ampcus_inhouse_candidate(
+            division=candidate.division,
+            organization=candidate.organization,
+            candidate_source=candidate.candidate_source,
+            contract_type=candidate.contract_type,
+        )
 
     if is_sambhaji_nagar_division(cycle_division):
         loc = (candidate.recruiter_location or "").lower()
@@ -67,7 +82,6 @@ def candidate_matches_division(candidate: Candidate, cycle_division: str) -> boo
         from app.services.incentives.nashik_rules import matches_nashik_company
 
         return matches_nashik_company(candidate.candidate_source, candidate.organization)
-
 
     # Other divisions: match explicit division tag only.
     return False

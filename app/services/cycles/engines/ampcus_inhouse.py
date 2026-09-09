@@ -25,6 +25,43 @@ def is_ampcus_inhouse_division(division: Optional[str]) -> bool:
     return "inhouse" in normalized or normalized in {"ampcustechinhouse", "ampcusinhouse"}
 
 
+def is_ampcus_inhouse_candidate(
+    *,
+    division: Optional[str] = None,
+    organization: Optional[str] = None,
+    candidate_source: Optional[str] = None,
+    contract_type: Optional[str] = None,
+) -> bool:
+    """
+    True only for genuine Ampcus Tech In-House placements.
+
+    Do NOT treat bare FULLTIME as In-House — Nashik FTE / other Full-Time
+    placements must not auto-enter the In-House cycle.
+    """
+    if is_ampcus_inhouse_division(division):
+        return True
+
+    org_blob = f"{organization or ''} {candidate_source or ''}".strip().lower()
+    org_compact = org_blob.replace(" ", "").replace("-", "").replace("_", "")
+    contract = str(contract_type or "").strip().upper().replace(" ", "").replace("-", "").replace("_", "")
+
+    # Explicit In-House contract type.
+    if contract == "INHOUSE":
+        return True
+
+    # Organisation / source must clearly indicate Ampcus Tech In-House.
+    if "inhouse" in org_compact and (
+        "ampcustech" in org_compact or "ampcustechnology" in org_compact or "ampcus" in org_compact
+    ):
+        return True
+
+    # Phrases like "Ampcus Tech Inhouse" / "Ampcus Tech - In House"
+    if "ampcus" in org_blob and "in house" in org_blob.replace("-", " "):
+        return True
+
+    return False
+
+
 def _line(c: Candidate, role: str, person: Optional[str], amount: int, eligible: bool, reason: str, days: int = 0) -> LineDraft:
     meta = {
         "placement_level": getattr(c, "placement_level", None),
