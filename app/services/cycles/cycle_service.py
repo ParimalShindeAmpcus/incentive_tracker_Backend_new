@@ -52,7 +52,12 @@ from app.services.cycles.cycle_candidates import (
 from app.services.cycles.cycle_engine import run_cycle_calculation
 from app.services.cycles.engines.ampcus_client import coordinator_index, is_ampcus_client_division
 from app.services.cycles.engines.ampcus_inhouse import is_ampcus_inhouse_division
-from app.services.cycles.engines.sambhaji_nagar import is_fte_contract, is_sambhaji_nagar_division
+from app.services.cycles.engines.sambhaji_nagar import (
+    is_fte_contract,
+    is_sambhaji_nagar_division,
+    sn_finder_fee_above_from_master,
+    sn_finder_fee_label,
+)
 from app.services.incentives.nashik_rules import is_nashik_division
 from app.services.cycles.engines.nashik_fte import (
     days_completed_from_start,
@@ -309,6 +314,7 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
             continue
 
         payload = PaymentStatusOut.model_validate(row).model_dump()
+        sn = is_sambhaji_nagar_division(cycle.division)
         if cand is not None:
             payload.update(
                 {
@@ -321,7 +327,14 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
                     "approved_markup_percentage": cand.approved_markup_percentage,
                     "start_date": cand.start_date,
                     "finder_fees": getattr(cand, "finder_fees", None) or "NONE",
-                    "finder_fee_label": finder_fee_label(cand) if nashik else None,
+                    # Nashik: show finder_fee_label; SN FTE: also show it
+                    "finder_fee_label": (
+                        finder_fee_label(cand)
+                        if nashik
+                        else sn_finder_fee_label(cand)
+                        if sn and is_fte_contract(cand.contract_type)
+                        else None
+                    ),
                 }
             )
             if nashik and is_fte_contract(cand.contract_type):
@@ -330,10 +343,17 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
                 payload["days_completed"] = days_completed_from_start(cand.start_date, as_of)
                 eligible_on = ninety_day_eligible_date(cand.start_date)
                 payload["ninety_day_eligible_date"] = eligible_on
+            elif sn and cand is not None and is_fte_contract(cand.contract_type):
+                # SN FTE: Days and Finder Fee come from Candidate Master — never from hours template.
+                payload["finder_fee_above_threshold"] = sn_finder_fee_above_from_master(cand)
+                payload["days_completed"] = days_completed_from_start(cand.start_date, as_of)
+                eligible_on = ninety_day_eligible_date(cand.start_date)
+                payload["ninety_day_eligible_date"] = eligible_on
 
-        # Sambhaji / others: days from hours template when present
+        # For W2/C2C (non-FTE) or non-SN/Nashik cycles: days from hours template when present
         cid = cand.id if cand else row.candidate_id
-        if not (nashik and cand is not None and is_fte_contract(cand.contract_type)):
+        is_fte_cand = cand is not None and is_fte_contract(cand.contract_type)
+        if not ((nashik or sn) and is_fte_cand):
             if cid in hours_map and hours_map[cid] is not None:
                 payload["days_completed"] = hours_map[cid]
 
@@ -1005,7 +1025,7 @@ def _export_row(cycle, line, cand) -> list:
         int(round(float(line.amount or 0))),
         incentive_type,
         source,
-        _team_label_from_candidate(cand),
+        "",  # Team column: header kept, values intentionally blank in Excel export
     ]
 
 
@@ -1033,7 +1053,7 @@ def _export_row_from_snapshot(row) -> list:
         int(round(float(row.amount or 0))),
         incentive_type,
         row.candidate_source or row.organization or "",
-        row.team or "",
+        "",  # Team column: header kept, values intentionally blank in Excel export
     ]
 
 

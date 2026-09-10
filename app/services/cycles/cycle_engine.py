@@ -49,11 +49,8 @@ from app.services.cycles.engines.ampcus_client import (
 from app.services.incentives.recruiter_master import missing_recruiter_master_validation
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
 from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
-from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations, calculate_fte_placement, is_fte_contract
-from app.services.cycles.engines.nashik_fte import (
-    calculate_nashik_fte_placement,
-    finder_fee_above_from_master,
-)
+from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations, calculate_fte_placement, is_fte_contract, sn_finder_fee_above_from_master
+from app.services.cycles.engines.nashik_fte import calculate_nashik_fte_placement, finder_fee_above_from_master
 
 
 def _prior_nashik_fte_recruiter_paid(db: Session, candidate_id: int, exclude_cycle_id: int) -> Decimal:
@@ -82,6 +79,30 @@ def _prior_nashik_fte_recruiter_paid(db: Session, candidate_id: int, exclude_cyc
     return total
 
 
+def _prior_sn_fte_recruiter_paid(db: Session, candidate_id: int, exclude_cycle_id: int) -> Decimal:
+    """Sum previously approved SN FTE recruiter amounts for installment tracking."""
+    rows = (
+        db.query(IncentiveLine)
+        .join(IncentiveCycle, IncentiveCycle.id == IncentiveLine.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            IncentiveLine.candidate_id == candidate_id,
+            IncentiveLine.role == "Recruiter",
+            IncentiveLine.eligible.is_(True),
+            IncentiveLine.incentive_type == "FULL_TIME",
+            IncentiveLine.amount > 0,
+        )
+        .all()
+    )
+    total = Decimal("0")
+    for row in rows:
+        explanation = row.explanation_json or ""
+        blob = explanation if isinstance(explanation, str) else str(explanation)
+        # Match lines produced by the new SN FTE engine
+        if '"sn_fte": true' in blob or '"sn_fte":true' in blob:
+            total += Decimal(str(row.amount or 0))
+    return total
 
 def _to_master(cand: Candidate) -> MasterCandidate:
     return MasterCandidate(
@@ -899,7 +920,13 @@ def run_cycle_calculation(
             pk for pk in hours_by_pk
             if is_fte_contract(by_pk[pk].contract_type)
         ]
-        # Map (recruiter_lower, start_month) -> count of FTE placements
+        # For FTE candidates, ignore any hours value from the uploaded template.
+        # The FTE engine uses start_date-based days (>= 90), not hours.
+        for pk in fte_pks:
+            hours_by_pk[pk] = Decimal("0")
+
+        # Map (recruiter_lower, start_month, fee_above) -> count of FTE placements
+        # Placements are counted SEPARATELY per finder's fee tier (below vs above $4,500)
         from collections import Counter as _Counter
         fte_month_counts: dict = _Counter()
         for pk in fte_pks:
@@ -907,7 +934,8 @@ def run_cycle_calculation(
             start_month = (
                 cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
             )
-            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month)
+            fee_above = sn_finder_fee_above_from_master(cand)
+            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month, fee_above)
             fte_month_counts[recruiter_key] += 1
 
         for pk in fte_pks:
@@ -925,26 +953,24 @@ def run_cycle_calculation(
                 )
                 continue
 
-            days_completed = hours_by_pk[pk]  # "Hours Worked" column = days for FTE
             payment_status_row = payment_by_candidate.get(pk)
             payment_status = str(getattr(payment_status_row, "status", "PAYMENT_PENDING"))
-            finder_fee_above = finder_fee_above_from_master(cand)
 
             start_month = (
                 cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
             )
-            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month)
+            fee_above = sn_finder_fee_above_from_master(cand)
+            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month, fee_above)
             placement_count = fte_month_counts.get(recruiter_key, 1)
 
             drafts = calculate_fte_placement(
                 cand,
-                days_completed=days_completed,
                 payment_status=payment_status,
                 coordinators=coordinators,
                 paid_keys=paid_keys,
                 cycle_end=window.end,
-                finder_fee_above_threshold=finder_fee_above,
                 placement_count_this_month=placement_count,
+                prior_recruiter_paid_amount=_prior_sn_fte_recruiter_paid(db, pk, cycle.id),
             )
             lines.extend(drafts)
 
@@ -1086,6 +1112,7 @@ def run_cycle_calculation(
                 lines.append(draft)
 
         # FTE — separate Nashik FTE flow (hours-file candidates only).
+        # Placements are counted SEPARATELY per finder's fee tier (below vs above $4,500)
         fte_pks = [pk for pk in hours_by_pk if is_fte_contract(by_pk[pk].contract_type)]
         fte_month_counts: dict = _Counter()
         for pk in fte_pks:
@@ -1093,7 +1120,8 @@ def run_cycle_calculation(
             start_month = (
                 cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
             )
-            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month)
+            fee_above = finder_fee_above_from_master(cand)
+            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month, fee_above)
             fte_month_counts[recruiter_key] += 1
 
         for pk in fte_pks:
@@ -1117,7 +1145,8 @@ def run_cycle_calculation(
             start_month = (
                 cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
             )
-            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month)
+            fee_above = finder_fee_above_from_master(cand)
+            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month, fee_above)
             placement_count = fte_month_counts.get(recruiter_key, 1)
             prior_paid = _prior_nashik_fte_recruiter_paid(db, pk, cycle.id)
 

@@ -27,8 +27,8 @@ Business rules (per Incentive Calculation Process document + management amendmen
 from __future__ import annotations
 
 import json
-from datetime import date
-from decimal import Decimal
+from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.coordinator import CoordinatorRecord
@@ -105,6 +105,31 @@ FTE_MIN_DAYS = Decimal("90")
 def is_fte_contract(contract_type: Optional[str]) -> bool:
     """Return True when the candidate is a Full-Time placement."""
     return (contract_type or "").strip().upper() in {"FULLTIME", "FULL_TIME", "FT", "FTE"}
+
+
+def sn_finder_fee_above_from_master(c: "Candidate") -> bool:
+    """Return True when the Candidate Master finder_fees indicates above $4,500."""
+    raw = (
+        str(getattr(c, "finder_fees", None) or "")
+        .strip().upper()
+        .replace(" ", "").replace("-", "").replace("$", "").replace(",", "")
+    )
+    return raw in {"ABOVE500", "ABOVE_500", "ABOVE4500"}
+
+
+def sn_finder_fee_label(c: "Candidate") -> str:
+    """Return a human-readable label for the candidate's finder's fee tier."""
+    raw = str(getattr(c, "finder_fees", None) or "NONE").strip().upper()
+    if raw in {"ABOVE_500", "ABOVE500", "ABOVE4500"}:
+        return "Above $4500"
+    if raw in {"BELOW_500", "BELOW500", "BELOW4500"}:
+        return "Below $4500"
+    return "None"
+
+
+def _money(value: Decimal) -> Decimal:
+    """Round to 2 decimal places using ROUND_HALF_UP."""
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def fte_recruiter_amount(
@@ -200,6 +225,33 @@ def _line(c: Candidate, role: str, person: Optional[str], amount: int, hours: De
                 "exemption_reason": EXEMPTION_REASON_TEXT,
             } if reason == EXEMPTED_MISSING_RECRUITER_MASTER else {}),
         })]
+    )
+
+
+def _fte_line(
+    c: Candidate,
+    role: str,
+    person: Optional[str],
+    amount: Decimal,
+    hours: Decimal,
+    eligible: bool,
+    reason: str,
+    incentive_type: str,
+    explanation: dict,
+) -> LineDraft:
+    """Build a LineDraft for the SN FTE path with rule_applied='SN FTE'."""
+    return LineDraft(
+        c.id, c.candidate_name, role, (person or "—").strip(),
+        incentive_type,
+        "SN FTE",
+        eligible,
+        amount,
+        Decimal("1") if eligible else ZERO,
+        amount if eligible else ZERO,
+        hours,
+        c.margin,
+        reason,
+        [json.dumps(explanation, default=str)],
     )
 
 
@@ -404,37 +456,50 @@ def calculate_placement(
 def calculate_fte_placement(
     c: Candidate,
     *,
-    days_completed: Decimal,
     payment_status: str,
     coordinators: Dict[str, CoordinatorRecord],
     paid_keys: Optional[set[str]] = None,
-    cycle_end=None,
-    finder_fee_above_threshold: bool = False,
+    cycle_end: Optional[date] = None,
     placement_count_this_month: int = 1,
+    prior_recruiter_paid_amount: Decimal = ZERO,
 ) -> List[LineDraft]:
     """
     Calculate incentive lines for one Sambhaji Nagar Full-Time (FTE) candidate.
 
     Eligibility gates:
-    1. days_completed >= 90  (the 'Hours Worked' column in the template holds days for FTE)
-    2. client payment received
+    1. candidate must have completed >= 90 days from start_date as of cycle_end
+    2. Finder's fee must be set on the Candidate Master (FINDER_FEE_NOT_SET blocks if missing)
 
     Recruiter incentive is a fixed one-time amount per FTE placement, determined by:
-    - Finder Fee tier from Candidate Master (Below / Above $4,500)
+    - Whether the finder's fee exceeds $4,500 (from Candidate Master finder_fees field)
     - How many FTE placements the same recruiter made in the same calendar month
 
-    Leadership roles (Team Lead, Manager, CRM, AD, Center Head) each receive a fixed
-    ONE_TIME amount per FTE placement regardless of placement volume.
+    Payment model (mirrors Nashik FTE):
+    - If client payment received: pay remaining amount one-time after 90 days
+    - If client payment NOT received: pay in equal 1/3 installments after 90 days,
+      deducting prior_recruiter_paid_amount already approved in previous cycles
+
+    Leadership roles each receive a fixed ONE_TIME amount per FTE placement.
+    Leadership is NOT subject to the installment rule.
     """
-    # Local import to avoid circular dependency with nashik_fte
-    from app.services.cycles.engines.nashik_fte import finder_fee_above_from_master  # noqa: PLC0415
+    as_of = cycle_end or date.today()
     paid = payment_status.upper() in {"RECEIVED", "PAYMENT_RECEIVED", "NOT_APPLICABLE"}
-    finder_fee_above_threshold = finder_fee_above_from_master(c)
-    finder_raw = str(getattr(c, "finder_fees", None) or "NONE").strip().upper()
+
+    # Compute days completed from Candidate Master start_date
+    if c.start_date and as_of >= c.start_date:
+        days_done = (as_of - c.start_date).days
+    else:
+        days_done = 0
+    days_completed = Decimal(str(days_done))
+    days_gate_ok = days_done >= int(FTE_MIN_DAYS)
 
     # Source / location validation
     org_val = str(c.organization or "").strip().lower()
     loc_valid = is_valid_sn_location(c.recruiter_location)
+
+    # Finder's fee — read from Candidate Master
+    finder_raw = str(getattr(c, "finder_fees", None) or "NONE").strip().upper()
+    fee_above = sn_finder_fee_above_from_master(c)
 
     # Recruiter employment status
     coord_rec = lookup_coordinator(coordinators, c.recruiter)
@@ -444,7 +509,12 @@ def calculate_fte_placement(
         recruiter_status = getattr(coord_rec, "employment_status", "ACTIVE")
         recruiter_status = getattr(recruiter_status, "value", str(recruiter_status)).upper()
 
-    # Hard blocks
+    # Full recruiter amount (before installment logic)
+    full_recruiter = Decimal(
+        fte_recruiter_amount(fee_above, max(1, int(placement_count_this_month)))
+    )
+
+    # Hard blocks — abort both recruiter and leadership
     hard_blocked = ""
     if cycle_end and c.start_date and c.start_date > cycle_end:
         hard_blocked = "NOT_YET_STARTED"
@@ -455,69 +525,94 @@ def calculate_fte_placement(
     elif finder_raw in {"", "NONE", "NULL", "N/A", "NA"}:
         hard_blocked = "FINDER_FEE_NOT_SET"
 
-    # Eligibility gates
-    days_gate_ok = days_completed >= FTE_MIN_DAYS
-    payment_gate_ok = paid
+    # ── Recruiter amount and reason ───────────────────────────────────────────
+    recruiter_amount = ZERO
+    recruiter_ok = False
+    recruiter_reason = "ELIGIBLE"
+    payment_schedule = "ONE_TIME"
 
-    # Build recruiter incentive amount
-    recruiter_clean = (c.recruiter or "").strip().lower()
-    recruiter_std_key = f"{c.id}|ONE_TIME|Recruiter|{recruiter_clean}"
-
-    if paid_keys and recruiter_std_key in paid_keys:
-        recruiter_blocked = "ALREADY_PAID"
-        recruiter_ok = False
-        rec_amount = 0
-    elif hard_blocked:
-        recruiter_blocked = hard_blocked
-        recruiter_ok = False
-        rec_amount = 0
+    if hard_blocked:
+        recruiter_reason = hard_blocked
     elif recruiter_status == "MISSING":
-        recruiter_blocked = EXEMPTED_MISSING_RECRUITER_MASTER
-        recruiter_ok = False
-        rec_amount = 0
+        recruiter_reason = EXEMPTED_MISSING_RECRUITER_MASTER
     elif recruiter_status in {"LEFT", "NOTICE"}:
-        recruiter_blocked = (
+        recruiter_reason = (
             "COORDINATOR_LEFT" if recruiter_status == "LEFT" else "COORDINATOR_ON_NOTICE"
         )
-        recruiter_ok = False
-        rec_amount = 0
     elif not days_gate_ok:
-        recruiter_blocked = "FTE_90_DAY_NOT_MET"
-        recruiter_ok = False
-        rec_amount = 0
-    elif not payment_gate_ok:
-        recruiter_blocked = "PAYMENT_PENDING"
-        recruiter_ok = False
-        rec_amount = 0
+        recruiter_reason = "FTE_90_DAY_NOT_MET"
+    elif not (c.recruiter or "").strip():
+        recruiter_reason = "MISSING_RECRUITER"
     else:
-        recruiter_blocked = ""
-        recruiter_ok = bool(c.recruiter)
-        rec_amount = fte_recruiter_amount(finder_fee_above_threshold, placement_count_this_month)
+        remaining = _money(full_recruiter - _money(Decimal(str(prior_recruiter_paid_amount or 0))))
+        if remaining <= ZERO:
+            recruiter_reason = "ALREADY_PAID"
+        elif paid:
+            # Payment received: pay full remaining amount as one-time
+            recruiter_ok = True
+            recruiter_amount = remaining
+            payment_schedule = "ONE_TIME_AFTER_90_DAYS"
+            recruiter_reason = "ELIGIBLE"
+        else:
+            # Payment NOT received: pay in equal thirds (installment model)
+            installment = _money(full_recruiter / Decimal("3"))
+            recruiter_ok = True
+            recruiter_amount = _money(min(installment, remaining))
+            prior_n = int(
+                (_money(Decimal(str(prior_recruiter_paid_amount or 0))) / installment)
+                .to_integral_value(rounding=ROUND_HALF_UP)
+            ) if installment > ZERO else 0
+            payment_schedule = f"INSTALLMENT_{min(prior_n + 1, 3)}/3"
+            recruiter_reason = "ELIGIBLE_PAYMENT_PENDING_INSTALLMENT"
 
-    base_explanation = json.dumps({
+    # Base explanation dict shared by recruiter and leadership lines
+    base_explanation = {
+        "sn_fte": True,
+        "division": "Sambhaji Nagar",
         "contract_type": "FULLTIME",
-        "days_completed": str(days_completed),
-        "fte_min_days": str(FTE_MIN_DAYS),
-        "finder_fee_above_threshold": finder_fee_above_threshold,
+        "start_date": c.start_date.isoformat() if c.start_date else None,
+        "start_month": c.start_date.strftime("%Y-%m") if c.start_date else "",
+        "ninety_day_eligible_date": (
+            (c.start_date + timedelta(days=int(FTE_MIN_DAYS))).isoformat()
+            if c.start_date else None
+        ),
+        "days_completed": days_done,
+        "fte_min_days": int(FTE_MIN_DAYS),
+        "finder_fees": finder_raw,
+        "finder_fee_label": sn_finder_fee_label(c),
+        "finder_fee_above_threshold": fee_above,
         "placement_count_this_month": placement_count_this_month,
+        "full_recruiter_incentive": str(full_recruiter),
+        "prior_recruiter_paid_amount": str(prior_recruiter_paid_amount),
         "payment_status": payment_status,
+        "payment_received": paid,
+        "payment_schedule": payment_schedule,
         "organization": c.organization or "",
         "recruiter_location": c.recruiter_location or "",
+        "candidate_source": c.candidate_source or "",
         "external_candidate_id": c.activity_id or c.start_id or c.external_candidate_id or "",
         "candidate_id": c.activity_id or c.start_id or c.external_candidate_id or "",
-    })
+    }
 
     lines: List[LineDraft] = [
-        _line(
-            c, "Recruiter", c.recruiter, rec_amount, days_completed,
-            recruiter_ok, recruiter_blocked or "ELIGIBLE", "ONE_TIME", days_completed
+        _fte_line(
+            c, "Recruiter", c.recruiter,
+            recruiter_amount, days_completed,
+            recruiter_ok, recruiter_reason,
+            "FULL_TIME",
+            {
+                **base_explanation,
+                **({
+                    "exemption_status": EXEMPTED_MISSING_RECRUITER_MASTER,
+                    "exemption_reason": EXEMPTION_REASON_TEXT,
+                } if recruiter_reason == EXEMPTED_MISSING_RECRUITER_MASTER else {}),
+            },
         )
     ]
-    # Patch the explanation with FTE detail
-    lines[0].explanation = [base_explanation]
 
     # ── Leadership ONE_TIME lines ──────────────────────────────────────────────
     # Each eligible leadership role gets a fixed amount once per FTE placement.
+    # Leadership is NOT subject to the installment rule — paid in full after 90 days.
     for role, person in {
         "Team Lead":          c.team_lead,
         "Manager":            c.manager,
@@ -533,9 +628,10 @@ def calculate_fte_placement(
         if role not in FTE_FIXED:
             continue
 
-        fixed_amount = FTE_FIXED[role]
+        fixed_amount = Decimal(FTE_FIXED[role])
         coord_rec_l = lookup_coordinator(coordinators, person)
         person_clean = person.strip().lower()
+        # Dedup key — prevents paying the same ONE_TIME twice across cycles
         key = f"{c.id}|ONE_TIME|FTE|{role}|{person_clean}"
         std_key = f"{c.id}|ONE_TIME|{role}|{person_clean}"
 
@@ -545,38 +641,42 @@ def calculate_fte_placement(
         elif hard_blocked:
             lead_eligible = False
             lead_reason = hard_blocked
-        elif not coord_rec_l:
+        elif not days_gate_ok:
+            lead_eligible = False
+            lead_reason = "FTE_90_DAY_NOT_MET"
+        elif not coord_rec_l and coordinators:
             lead_eligible = False
             lead_reason = EXEMPTED_MISSING_RECRUITER_MASTER
         else:
-            coord_status = getattr(
-                getattr(coord_rec_l, "employment_status", None), "value",
-                getattr(coord_rec_l, "employment_status", "ACTIVE"),
-            )
-            coord_status_str = str(coord_status).upper()
-            if coord_status_str == "LEFT":
-                lead_eligible = False
-                lead_reason = "COORDINATOR_LEFT"
-            elif coord_status_str == "NOTICE":
-                lead_eligible = False
-                lead_reason = "COORDINATOR_ON_NOTICE"
-            elif not days_gate_ok:
-                lead_eligible = False
-                lead_reason = "FTE_90_DAY_NOT_MET"
-            elif not payment_gate_ok:
-                lead_eligible = False
-                lead_reason = "PAYMENT_PENDING"
+            if coord_rec_l:
+                coord_status = getattr(
+                    getattr(coord_rec_l, "employment_status", None), "value",
+                    getattr(coord_rec_l, "employment_status", "ACTIVE"),
+                )
+                coord_status_str = str(coord_status).upper()
+                if coord_status_str == "LEFT":
+                    lead_eligible = False
+                    lead_reason = "COORDINATOR_LEFT"
+                elif coord_status_str == "NOTICE":
+                    lead_eligible = False
+                    lead_reason = "COORDINATOR_ON_NOTICE"
+                else:
+                    lead_eligible = True
+                    lead_reason = "ELIGIBLE"
             else:
                 lead_eligible = True
                 lead_reason = "ELIGIBLE"
 
-        lead_amount = fixed_amount if lead_eligible else 0
-        line = _line(
-            c, role, person, lead_amount, days_completed,
-            lead_eligible, lead_reason, "ONE_TIME", days_completed
+        lines.append(
+            _fte_line(
+                c, role, person,
+                fixed_amount if lead_eligible else ZERO,
+                days_completed,
+                lead_eligible, lead_reason,
+                "ONE_TIME",
+                {**base_explanation, "payment_schedule": "ONE_TIME_AFTER_90_DAYS", "hierarchy_role": role},
+            )
         )
-        line.explanation = [base_explanation]
-        lines.append(line)
 
     return lines
 
@@ -646,6 +746,7 @@ def calculate_special_incentives(
     return extras
 
 
+
 def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
     """Build summary validation cards for the Calculation step UI."""
     counts = {
@@ -661,25 +762,31 @@ def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
         "sn_fte_eligible": 0,
         "sn_fte_90_day_not_met": 0,
         "sn_fte_payment_pending": 0,
+        "sn_finder_fee_not_set": 0,
     }
     for line in lines:
         if line.role != "Recruiter":
             continue
-        # Detect whether this line came from the FTE path by checking explanation payload
-        is_fte_line = False
-        try:
-            payload = json.loads(line.explanation[0]) if line.explanation else {}
-            is_fte_line = payload.get("contract_type", "") == "FULLTIME"
-        except Exception:
-            pass
+        # Detect whether this line came from the FTE path:
+        # Primary: rule_applied == "SN FTE"
+        # Fallback: check explanation JSON for sn_fte:true or contract_type:FULLTIME
+        is_fte_line = getattr(line, "rule_applied", "") == "SN FTE"
+        if not is_fte_line:
+            try:
+                payload = json.loads(line.explanation[0]) if line.explanation else {}
+                is_fte_line = payload.get("sn_fte") is True or payload.get("contract_type", "") == "FULLTIME"
+            except Exception:
+                pass
 
-        if line.eligible:
+        if line.eligible or line.reason == "ELIGIBLE_PAYMENT_PENDING_INSTALLMENT":
             if is_fte_line:
                 counts["sn_fte_eligible"] += 1
             else:
                 counts["sn_recruiter_eligible"] += 1
         elif line.reason == "FTE_90_DAY_NOT_MET":
             counts["sn_fte_90_day_not_met"] += 1
+        elif line.reason == "FINDER_FEE_NOT_SET":
+            counts["sn_finder_fee_not_set"] += 1
         elif line.reason == "PAYMENT_PENDING":
             if is_fte_line:
                 counts["sn_fte_payment_pending"] += 1
@@ -704,11 +811,13 @@ def build_sn_validations(lines: List[LineDraft]) -> List[dict]:
         {"check_key": "sn_recruiter_eligible", "severity": "GREEN" if counts["sn_recruiter_eligible"] > 0 else "YELLOW",
          "count": counts["sn_recruiter_eligible"], "message": "Sambhaji Nagar (W2/C2C): Eligible recruiter placements", "details_json": None},
         {"check_key": "sn_fte_eligible", "severity": "GREEN" if counts["sn_fte_eligible"] > 0 else "YELLOW",
-         "count": counts["sn_fte_eligible"], "message": "Sambhaji Nagar (FTE): Eligible recruiter placements", "details_json": None},
+         "count": counts["sn_fte_eligible"], "message": "Sambhaji Nagar (FTE): Eligible recruiter placements (incl. installments)", "details_json": None},
         {"check_key": "sn_fte_90_day_not_met", "severity": "YELLOW" if counts["sn_fte_90_day_not_met"] > 0 else "GREEN",
          "count": counts["sn_fte_90_day_not_met"], "message": "FTE placements: 90-day requirement not met", "details_json": None},
         {"check_key": "sn_fte_payment_pending", "severity": "YELLOW" if counts["sn_fte_payment_pending"] > 0 else "GREEN",
          "count": counts["sn_fte_payment_pending"], "message": "FTE placements awaiting client payment", "details_json": None},
+        {"check_key": "sn_finder_fee_not_set", "severity": "RED" if counts["sn_finder_fee_not_set"] > 0 else "GREEN",
+         "count": counts["sn_finder_fee_not_set"], "message": "FTE placements blocked: Finder's Fee not set in Candidate Master", "details_json": None},
         {"check_key": "sn_payment_pending", "severity": "YELLOW" if counts["sn_payment_pending"] > 0 else "GREEN",
          "count": counts["sn_payment_pending"], "message": "W2/C2C placements awaiting client payment", "details_json": None},
         {"check_key": "sn_outside_matrix", "severity": "YELLOW" if counts["sn_outside_matrix"] > 0 else "GREEN",
