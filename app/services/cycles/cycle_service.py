@@ -88,6 +88,15 @@ def create_cycle(db: Session, payload: CycleCreate, created_by: Optional[int] = 
     data["status"] = CycleStatus.DRAFT
     cycle = cycle_repository.create_cycle(db, data)
     cycle_repository.ensure_default_checklist(db, cycle.id)
+    # Client cycles are placement/payment based, so link eligible Candidate
+    # Master rows before returning the newly created cycle.
+    if is_ampcus_client_division(cycle.division):
+        cycle_repository.ensure_payment_statuses(
+            db,
+            cycle.id,
+            candidate_ids_for_new_cycle(db, cycle.division),
+        )
+
     db.commit()
     db.refresh(cycle)
     return CycleOut.model_validate(cycle)
@@ -1002,6 +1011,15 @@ def _format_start_date(value: Any) -> str:
         return text[:10]
     return text
 
+def _format_export_month(value: Any) -> str:
+    raw = str(value or "").strip()
+    if len(raw) >= 7 and raw[4] == "-" and raw[5:7].isdigit():
+        try:
+            return f"{calendar.month_name[int(raw[5:7])]} {raw[:4]}"
+        except (IndexError, ValueError):
+            pass
+    return raw
+
 
 def _export_row(cycle, line, cand) -> list:
     meta = _parse_explanation(getattr(line, "explanation_json", None))
@@ -1013,11 +1031,6 @@ def _export_row(cycle, line, cand) -> list:
         start = cand.start_date.isoformat()
     elif meta.get("start_date"):
         start = _format_start_date(meta.get("start_date"))
-    contract = ""
-    if cand and cand.contract_type:
-        contract = cand.contract_type
-    elif meta.get("contract_type"):
-        contract = str(meta.get("contract_type"))
     margin_val: Any = None
     if line.margin is not None:
         margin_val = float(line.margin)
@@ -1027,15 +1040,15 @@ def _export_row(cycle, line, cand) -> list:
         margin_val = float(meta.get("margin_per_hour"))
     ext_id = ""
     if cand:
-        ext_id = cand.activity_id or cand.start_id or cand.external_candidate_id or ""
+        ext_id = (
+            getattr(cand, "activity_id", None)
+            or cand.start_id
+            or cand.external_candidate_id
+            or ""
+        )
     if not ext_id:
         ext_id = str(meta.get("candidate_id") or meta.get("external_candidate_id") or "")
-    source = ""
-    if cand:
-        source = cand.candidate_source or cand.organization or ""
-    if not source:
-        source = str(meta.get("candidate_source") or "")
-    month = f"{cycle.incentive_month}-01" if cycle.incentive_month else ""
+    month = _format_export_month(cycle.incentive_month)
     return [
         line.person,
         coord_type,
@@ -1043,12 +1056,10 @@ def _export_row(cycle, line, cand) -> list:
         line.candidate_name,
         start,
         month,
-        contract,
         margin_val if margin_val is not None else "",
         float(line.hours or 0),
         int(round(float(line.amount or 0))),
         incentive_type,
-        source,
         "",  # Team column: header kept, values intentionally blank in Excel export
     ]
 
@@ -1063,7 +1074,7 @@ def _export_row_from_snapshot(row) -> list:
         margin_val = float(row.margin)
     elif row.candidate_margin is not None:
         margin_val = float(row.candidate_margin)
-    month = f"{row.incentive_month}-01" if row.incentive_month else ""
+    month = _format_export_month(row.incentive_month)
     return [
         row.person,
         coord_type,
@@ -1071,12 +1082,10 @@ def _export_row_from_snapshot(row) -> list:
         row.candidate_name,
         start,
         month,
-        row.contract_type or "",
         margin_val,
         float(row.hours or 0),
         int(round(float(row.amount or 0))),
         incentive_type,
-        row.candidate_source or row.organization or "",
         "",  # Team column: header kept, values intentionally blank in Excel export
     ]
 
@@ -1095,12 +1104,10 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
         *(["Candidate Type"] if nashik else []),
         "Start Date",
         "Month",
-        "Contract Type",
         "Margin/Finder Fees",
         "Hours/Placements",
         "Incentive Amount (INR)",
         "Incentive Type",
-        "Candidate Source",
         "Team",
     ]
     sheet.append(headers)

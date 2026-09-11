@@ -36,8 +36,8 @@ def test_export_row_uses_candidate_master_fields():
     row = _export_row(cycle, line, cand)
     assert row[2] == "12345"
     assert row[4] == "2026-01-01"
-    assert row[6] == "C2C"
-    assert row[7] == 12.0
+    assert row[5] == "August 2026"
+    assert row[6] == 12.0
 
 
 def test_export_row_falls_back_to_explanation_json():
@@ -64,5 +64,5 @@ def test_export_row_falls_back_to_explanation_json():
     row = _export_row(cycle, line, None)
     assert row[2] == "12345"
     assert row[4] == "2026-01-01"
-    assert row[6] == "C2C"
-    assert row[7] == 12.0
+    assert row[5] == "August 2026"
+    assert row[6] == 12.0

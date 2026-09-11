@@ -64,7 +64,9 @@ def candidate_matches_division(candidate: Candidate, cycle_division: str) -> boo
             contract_type=candidate.contract_type,
         ):
             return False
-        return "ampcus tech" in org and contract != "INHOUSE"
+        client_compact = re.sub(r"[\s_\-().]", "", org).lower()
+        return "ampcusclient" in client_compact or "ampcustech" in client_compact
+
         # Match solely on organisation — no recruiter location condition for Ampcus Tech Client.
         org_only = (candidate.organization or "").lower()
         org_compact = org_only.replace(" ", "").replace("-", "").replace("_", "")

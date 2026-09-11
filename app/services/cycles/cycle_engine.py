@@ -58,6 +58,7 @@ from app.services.cycles.engines.nashik_fte import (
     calculate_nashik_fte_placement,
     nashik_fte_placement_count_for_candidate,
     peer_fee_category_counts,
+    finder_fee_above_from_master,
 )
 
 
