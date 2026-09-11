@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as inhouse
 from app.services.cycles.engines.sambhaji_nagar import calculate_placement as sambhaji, matrix_amount
 
@@ -14,6 +15,7 @@ def candidate(**overrides):
         end_date=None,
         incentive_active=True,
         status="ACTIVE",
+        job_level="Below Manager",
         placement_level="BELOW_MANAGER",
         recruiter="R",
         manager="M",
@@ -48,6 +50,30 @@ def _active_coordinators():
     return _mock_coordinators("R", "M", "CH")
 
 
+@pytest.mark.parametrize(
+    "job_level,placement_level,expected_amount,expected_eligible,expected_reason",
+    [
+        ("Above Manager", "Below Manager", Decimal("5000"), True, "ELIGIBLE"),
+        ("Below Manager", "Above Manager", Decimal("3000"), True, "ELIGIBLE"),
+        ("Above Manager", None, Decimal("5000"), True, "ELIGIBLE"),
+        ("Below Manager", None, Decimal("3000"), True, "ELIGIBLE"),
+        (None, "Above Manager", Decimal("0"), False, "MISSING_JOB_LEVEL"),
+        (None, "Below Manager", Decimal("0"), False, "MISSING_JOB_LEVEL"),
+        ("Invalid", "Above Manager", Decimal("0"), False, "INVALID_JOB_LEVEL"),
+    ],
+)
+def test_inhouse_truth_table_job_level_strictness(
+    job_level, placement_level, expected_amount, expected_eligible, expected_reason
+):
+    coords = _active_coordinators()
+    c = candidate(job_level=job_level, placement_level=placement_level)
+    lines = inhouse(c, cycle_end=date(2026, 5, 1), coordinators=coords)
+    rec_line = next(line for line in lines if line.role == "Recruiter")
+    assert rec_line.amount == expected_amount
+    assert rec_line.eligible is expected_eligible
+    assert rec_line.reason == expected_reason
+
+
 def test_inhouse_90_day_and_level_amounts():
     coords = _active_coordinators()
     lines = inhouse(candidate(), cycle_end=date(2026, 5, 1), coordinators=coords)
@@ -55,7 +81,7 @@ def test_inhouse_90_day_and_level_amounts():
     assert all(line.eligible is True and line.reason == "ELIGIBLE" for line in lines)
 
     # Above manager level
-    above = inhouse(candidate(placement_level="ABOVE_MANAGER"), cycle_end=date(2026, 5, 1), coordinators=coords)
+    above = inhouse(candidate(job_level="Above Manager"), cycle_end=date(2026, 5, 1), coordinators=coords)
     assert {line.role: line.amount for line in above} == {"Recruiter": Decimal("5000"), "Manager": Decimal("500"), "Center Head": Decimal("1000")}
 
     # Less than 90 days tenure
@@ -161,5 +187,24 @@ def test_sambhaji_missing_center_head_exempts_only_that_role():
     assert by_role["Center Head"].eligible is False
     assert by_role["Center Head"].reason == "EXEMPTED_MISSING_RECRUITER_MASTER"
     assert by_role["Manager"].eligible is True
+
+
+def test_inhouse_center_head_falls_back_to_avp():
+    coords = _mock_coordinators("R", "M", "AVP_Person")
+    c = candidate(center_head=None, avp="AVP_Person")
+    lines = inhouse(c, cycle_end=date(2026, 5, 1), coordinators=coords)
+    ch_line = next(line for line in lines if line.role == "Center Head")
+    assert ch_line.person == "AVP_Person"
+    assert ch_line.eligible is True
+    assert ch_line.amount == Decimal("1000")
+
+
+def test_inhouse_resigned_and_terminated_status():
+    coords = _active_coordinators()
+    for st in ("RESIGNED", "TERMINATED", "NOTICE - Resigned"):
+        c = candidate(status=st)
+        lines = inhouse(c, cycle_end=date(2026, 5, 1), coordinators=coords)
+        assert all(line.eligible is False and line.amount == Decimal("0") and line.reason == "CANDIDATE_INACTIVE" for line in lines)
+
 
 

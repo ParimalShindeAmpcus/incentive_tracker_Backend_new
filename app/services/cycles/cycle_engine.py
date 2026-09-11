@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy.orm import Session
@@ -243,314 +244,49 @@ def _candidate_matches_excluded_keys(candidate: Candidate, excluded_keys: set[st
     return any(k and k in excluded_keys for k in keys)
 
 
-def run_cycle_calculation(
-    db: Session,
-    cycle,
-    hours_rows: Sequence[HoursMatchRow],
-    window: CycleWindow,
-) -> Tuple[List[LineDraft], dict, List[dict], List[dict]]:
-    # Ampcus Client is placement/payment/approved-markup driven.  It must not
-    # require an hours import or inherit Nashik's 160-hour matching flow.
-    if is_ampcus_client_division(cycle.division):
-        masters = resolve_candidates_for_cycle(db, cycle)
-        payment_by_candidate = {
-            row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
-        }
-        coordinators = coordinator_index(db)
-        paid_keys = _paid_keys_for_cycle(db, cycle)
-        lines = []
-        pending = 0
-        no_slab = 0
-        for candidate in masters:
-            drafts = calculate_ampcus_client_placement(candidate, cycle_end=window.end, payment=payment_by_candidate.get(candidate.id), coordinators=coordinators, paid_keys=paid_keys)
-            if any(line.reason == "PAYMENT_PENDING" for line in drafts):
-                pending += 1
-            if any(line.reason == "MARKUP_BELOW_INCENTIVE_THRESHOLD" for line in drafts):
-                no_slab += 1
-            lines.extend(drafts)
-        stats = {
-            "total_hours_rows": len(masters), "matched_name_and_id": len(masters),
-            "matched_id_fallback": 0, "name_id_mismatch": 0, "unmatched": 0,
-            "inactive": sum(1 for c in masters if not c.incentive_active), "already_paid": 0,
-        }
-        validations = [
-            {"check_key": "payment_pending", "severity": "YELLOW" if pending else "GREEN", "message": "Placements awaiting first full-month client payment", "count": pending, "details_json": None},
-            {"check_key": "no_incentive_slab", "severity": "YELLOW" if no_slab else "GREEN", "message": "Placements below the client mark-up threshold", "count": no_slab, "details_json": None},
-            missing_recruiter_master_validation(lines),
-            {"check_key": "coordinator_not_in_master", "severity": "RED" if any(line.reason == "COORDINATOR_NOT_IN_MASTER" for line in lines) else "GREEN", "message": "Hierarchy person not found in Coordinator Master", "count": sum(1 for line in lines if line.reason == "COORDINATOR_NOT_IN_MASTER"), "details_json": None},
-            {"check_key": "coordinator_ineligible", "severity": "YELLOW" if any(line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"} for line in lines) else "GREEN", "message": "Coordinator on notice or left — incentive excluded", "count": sum(1 for line in lines if line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"}), "details_json": None},
-        ]
-        return lines, stats, [], validations
-
-    # Ampcus In-House is 90-day active tenure driven directly from Candidate Master.
-    # No hours template upload required; candidates completing 90 days are automatically eligible.
-    if is_ampcus_inhouse_division(cycle.division):
-        masters = resolve_candidates_for_cycle(db, cycle)
-        if not masters:
-            masters = candidate_repository.list_all_candidates(db)
-            division_masters = [c for c in masters if is_ampcus_inhouse_division(c.division)]
-            if division_masters:
-                masters = division_masters
-        paid_keys = _paid_keys_for_cycle(db, cycle)
-        coordinators = coordinator_index(db)
-        excluded_keys = _excluded_candidate_keys(cycle)
-        lines = []
-        not_90_days = 0
-        inactive = 0
-        already_paid = 0
-        manually_excluded = 0
-        for candidate in masters:
-            if _candidate_matches_excluded_keys(candidate, excluded_keys):
-                manually_excluded += 1
-                lines.append(
-                    _ineligible_line(
-                        candidate_pk=candidate.id,
-                        name=candidate.candidate_name,
-                        hours=Decimal("0"),
-                        reason="MANUAL_EXCLUDE_NASHIK_OVERLAP",
-                        rule="INHOUSE_MANUAL_EXCLUDE",
-                    )
-                )
-                continue
-            drafts = calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
-            if any(line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in drafts):
-                not_90_days += 1
-            if any(line.reason == "CANDIDATE_INACTIVE" for line in drafts):
-                inactive += 1
-            if any(line.reason == "ALREADY_PAID" for line in drafts):
-                already_paid += 1
-            lines.extend(drafts)
-        stats = {
-            "total_hours_rows": len(masters), "matched_name_and_id": len(masters),
-            "matched_id_fallback": 0, "name_id_mismatch": 0, "unmatched": 0,
-            "inactive": inactive, "already_paid": already_paid,
-            "manually_excluded": manually_excluded,
-        }
-        validations = [
-            {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
-            {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
-            {"check_key": "manual_exclude_nashik", "severity": "YELLOW" if manually_excluded else "GREEN", "message": "Manually excluded (Nashik overlap / user exclude)", "count": manually_excluded, "details_json": None},
-            missing_recruiter_master_validation(lines),
-            {"check_key": "coordinator_not_in_master", "severity": "RED" if any(line.reason == "COORDINATOR_NOT_IN_MASTER" for line in lines) else "GREEN", "message": "Hierarchy person not found in Coordinator Master", "count": sum(1 for line in lines if line.reason == "COORDINATOR_NOT_IN_MASTER"), "details_json": None},
-            {"check_key": "coordinator_ineligible", "severity": "YELLOW" if any(line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"} for line in lines) else "GREEN", "message": "Coordinator on notice or left — incentive excluded", "count": sum(1 for line in lines if line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"}), "details_json": None},
-        ]
-        return lines, stats, [], validations
-
-    masters = candidate_repository.list_all_candidates(db)
-    if cycle.division:
-        division_masters = [c for c in masters if (c.division or "") == cycle.division]
-        if division_masters:
-            masters = division_masters
-    master_objs = [_to_master(c) for c in masters]
-    by_pk = {c.id: c for c in masters}
-    by_name = build_name_index(master_objs)
-    by_id = build_id_index(master_objs)
-
-    stats = {
-        "total_hours_rows": len(hours_rows),
-        "matched_name_and_id": 0,
-        "matched_id_fallback": 0,
-        "name_id_mismatch": 0,
-        "unmatched": 0,
-        "inactive": 0,
-        "already_paid": 0,
-    }
-    match_rows: List[dict] = []
-    hours_by_pk: Dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
-    matched_pks: Dict[int, str] = {}
-    ineligible: List[LineDraft] = []
-
-    for row in hours_rows:
-        decision = match_hours_row(row, by_name, by_id)
-        hours = Decimal(str(row.hours or 0))
-        method = decision.status
-        accepted = decision.matched
-        result = MatchResult.MATCHED if accepted else (
-            MatchResult.UNMATCHED if decision.status == UNMATCHED else MatchResult.REJECTED
-        )
-        if decision.status == NAME_AND_ID:
-            stats["matched_name_and_id"] += 1
-        elif decision.status == ID_FALLBACK:
-            stats["matched_id_fallback"] += 1
-        elif decision.status == NAME_ID_MISMATCH:
-            stats["name_id_mismatch"] += 1
-        else:
-            stats["unmatched"] += 1
-
-        match_rows.append(
-            {
-                "source_row_ref": str(row.source_row),
-                "source_candidate_name": row.uploaded_name,
-                "source_candidate_id": row.uploaded_id,
-                "source_client": row.client,
-                "hours_worked": hours,
-                "candidate_id": decision.master.pk if decision.master else None,
-                "match_method": method,
-                "match_result": result,
-                "confidence": "HIGH" if method == NAME_AND_ID else ("MEDIUM" if method == ID_FALLBACK else "LOW"),
-                "accepted": accepted,
-                "notes": decision.warning or decision.reason,
-            }
-        )
-
-        if not accepted:
-            ineligible.append(
-                _ineligible_line(
-                    candidate_pk=decision.master.pk if decision.master else None,
-                    name=row.uploaded_name or row.uploaded_id or "Unknown",
-                    hours=hours,
-                    reason=decision.reason,
-                    rule=decision.status,
-                )
-            )
+def _inhouse_overrides_by_key(cycle) -> Dict[str, dict]:
+    """Parse cycle.inhouse_overrides JSON into a dictionary keyed by candidate identifiers."""
+    raw = getattr(cycle, "inhouse_overrides", None)
+    if not raw:
+        return {}
+    items = []
+    if isinstance(raw, list):
+        items = raw
+    else:
+        try:
+            parsed = json.loads(str(raw))
+            if isinstance(parsed, list):
+                items = parsed
+        except Exception:
+            return {}
+    out: Dict[str, dict] = {}
+    for item in items:
+        if not isinstance(item, dict):
             continue
+        cid = str(item.get("candidate_id") or "").strip().lower()
+        if cid:
+            out[cid] = item
+            if cid.startswith("db-"):
+                out[cid[3:]] = item
+    return out
 
-        hours_by_pk[decision.master.pk] += hours
-        matched_pks[decision.master.pk] = decision.status
 
-    paid_keys = _paid_keys_for_cycle(db, cycle)
-    lines: List[LineDraft] = list(ineligible)
-    for pk, hours in hours_by_pk.items():
-        cand = by_pk[pk]
-        if cand.incentive_active is False:
-            stats["inactive"] += 1
-            lines.append(
-                _ineligible_line(
-                    candidate_pk=pk,
-                    name=cand.candidate_name,
-                    hours=hours,
-                    reason="Inactive Candidate",
-                    rule="INELIGIBLE",
-                )
-            )
-            continue
-        if is_sambhaji_nagar_division(cycle.division):
-            payment_by_candidate = {row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)}
-            prior_hours_map = sn_cumulative_hours_by_candidate(
-                db, [pk], exclude_cycle_id=cycle.id, division=cycle.division
-            )
-            paid_hours_map = sn_paid_recruiter_hours_by_candidate(
-                db, [pk], exclude_cycle_id=cycle.id, division=cycle.division
-            )
-            already_approved_this_month_map = sn_hours_already_approved_this_month(
-                db, [pk], exclude_cycle_id=cycle.id, month=cycle.incentive_month, division=cycle.division
-            )
-            
-            already_approved = already_approved_this_month_map.get(pk, Decimal("0"))
-            leadership_hours = max(Decimal("0"), hours - already_approved)
-
-            prior_lifetime = prior_hours_map.get(pk, Decimal("0"))
-            prior_paid = paid_hours_map.get(pk, Decimal("0"))
-            
-            unpaid_prior = prior_lifetime - prior_paid
-            if unpaid_prior < 0:
-                unpaid_prior = Decimal("0")
-                
-            recruiter_matrix_hours = unpaid_prior + hours
-            leadership_lifetime_hours = prior_lifetime + leadership_hours
-
-            drafts = calculate_sambhaji_placement(
-                cand,
-                hours=hours,
-                payment_status=str(getattr(payment_by_candidate.get(pk), "status", "PAYMENT_PENDING")),
-                coordinators=coordinator_index(db),
-                paid_keys=paid_keys,
-                cycle_end=window.end,
-                recruiter_matrix_hours=recruiter_matrix_hours,
-                leadership_lifetime_hours=leadership_lifetime_hours,
-                already_approved_this_month=already_approved_this_month_map.get(pk),
-            )
-            lines.extend(drafts)
-            continue
-        if not is_nashik_division(cycle.division):
-            lines.append(
-                _ineligible_line(
-                    candidate_pk=pk,
-                    name=cand.candidate_name,
-                    hours=hours,
-                    reason=f"Division {cycle.division} calculation is not implemented in this engine",
-                    rule="UNSUPPORTED_DIVISION",
-                )
-            )
-            continue
-        prior_hours = hours_repository.sum_published_hours_before_month(
-            db, pk, getattr(cycle, "incentive_month", None)
-        )
-        drafts = calculate_nashik_placement(
-            _placement(cand, hours, window, cumulative_hours=prior_hours + hours),
-            window,
-            paid_keys,
-            employment_status=_nashik_employment_status(coordinator_index(db)),
-        )
-        for draft in drafts:
-            payload = {
-                "division": "Nashik",
-                "contract_type": cand.contract_type,
-                "start_date": cand.start_date.isoformat() if cand.start_date else None,
-                "candidate_id": cand.start_id or cand.external_candidate_id,
-                "external_candidate_id": cand.external_candidate_id,
-                "candidate_name": cand.candidate_name,
-                "candidate_source": cand.candidate_source or cand.organization,
-                "role": draft.role,
-                "person": draft.person,
-                "margin_per_hour": float(cand.margin) if cand.margin is not None else None,
-                "hours": float(hours),
-                "benchmark_hours": 160,
-                "base_incentive": float(draft.base_incentive),
-                "pro_rata_factor": float(draft.pro_rata_factor),
-                "final_amount": float(draft.amount),
-                "eligible": draft.eligible,
-                "rule": draft.rule_applied,
-                "match_method": matched_pks.get(pk),
-                "notes": draft.explanation,
-            }
-            draft.explanation = [json.dumps(payload)]
-            if (not draft.eligible) and "already paid" in (draft.reason or "").lower():
-                stats["already_paid"] += 1
-            lines.append(draft)
-
-    if is_sambhaji_nagar_division(cycle.division):
-        pass
-
-    validations = [
-        {
-            "check_key": "matched_name_and_id",
-            "severity": "GREEN",
-            "message": "Matched by Candidate Name + Candidate ID",
-            "count": stats["matched_name_and_id"],
-            "details_json": None,
-        },
-        {
-            "check_key": "matched_id_fallback",
-            "severity": "YELLOW" if stats["matched_id_fallback"] else "GREEN",
-            "message": "Matched by Candidate ID because Candidate Name did not match",
-            "count": stats["matched_id_fallback"],
-            "details_json": None,
-        },
-        {
-            "check_key": "name_id_mismatch",
-            "severity": "RED" if stats["name_id_mismatch"] else "GREEN",
-            "message": "Candidate Name matched but Candidate ID does not match Candidate Master",
-            "count": stats["name_id_mismatch"],
-            "details_json": None,
-        },
-        {
-            "check_key": "unmatched",
-            "severity": "RED" if stats["unmatched"] else "GREEN",
-            "message": "Candidate Name and Candidate ID could not be matched with Candidate Master",
-            "count": stats["unmatched"],
-            "details_json": None,
-        },
-        {
-            "check_key": "inactive",
-            "severity": "YELLOW" if stats["inactive"] else "GREEN",
-            "message": "Inactive Candidate",
-            "count": stats["inactive"],
-            "details_json": None,
-        },
-        missing_recruiter_master_validation(lines),
+def _find_candidate_override(candidate: Candidate, overrides_by_key: Dict[str, dict]) -> Optional[dict]:
+    if not overrides_by_key:
+        return None
+    cand_id = str(getattr(candidate, "id", "") or "").strip().lower()
+    keys = [
+        cand_id,
+        str(getattr(candidate, "external_candidate_id", None) or "").strip().lower(),
+        str(getattr(candidate, "start_id", None) or "").strip().lower(),
+        str(getattr(candidate, "activity_id", None) or "").strip().lower(),
     ]
-    return lines, stats, match_rows, validations
+    if cand_id:
+        keys.append(f"db-{cand_id}")
+    for k in keys:
+        if k and k in overrides_by_key:
+            return overrides_by_key[k]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -721,6 +457,7 @@ def run_cycle_calculation(
             }
         )
 
+    overrides_by_key = _inhouse_overrides_by_key(cycle)
     # 2) If no hours were uploaded, only Ampcus Client/In-House cycles can run.
     if not hours_rows and (is_ampcus_client_division(cycle.division) or is_ampcus_inhouse_division(cycle.division)):
         for cand in masters:
@@ -731,7 +468,10 @@ def run_cycle_calculation(
                 master_division=cand.division,
             )
             resolved_div_by_pk[cand.id] = resolved.resolved_division
-            if cycle.division and resolved.resolved_division == cycle.division:
+            if cycle.division and (
+                resolved.resolved_division == cycle.division
+                or (is_ampcus_inhouse_division(cycle.division) and _find_candidate_override(cand, overrides_by_key) is not None)
+            ):
                 included_pks.add(cand.id)
 
     # 3) Run the division incentive engine for included candidates only.
@@ -826,6 +566,19 @@ def run_cycle_calculation(
 
     if is_ampcus_inhouse_division(cycle.division):
         assert coordinators is not None
+        if not included_pks:
+            # Strictly NO fallback to all candidates across other divisions.
+            stats = {
+                "total_hours_rows": 0, "matched_name_and_id": 0,
+                "matched_id_fallback": 0, "name_id_mismatch": 0, "unmatched": 0,
+                "inactive": 0, "already_paid": 0,
+                "manually_excluded": 0,
+            }
+            validations = [
+                {"check_key": "no_candidates", "severity": "INFO", "message": "No Ampcus In-House candidates found for this cycle", "count": 0, "details_json": None}
+            ]
+            return [], stats, match_rows, validations
+
         not_90_days = 0
         inactive = 0
         already_paid_count = 0
@@ -833,7 +586,21 @@ def run_cycle_calculation(
         excluded_keys = _excluded_candidate_keys(cycle)
         for pk in included_pks:
             candidate = by_pk[pk]
-            if _candidate_matches_excluded_keys(candidate, excluded_keys):
+            override = _find_candidate_override(candidate, overrides_by_key)
+            is_manually_excluded = False
+            if override:
+                if override.get("manually_excluded") is True:
+                    is_manually_excluded = True
+                lvl = override.get("job_level")
+                if lvl and str(lvl).strip():
+                    clean = str(lvl).strip()
+                    clean_job_level = "Above Manager" if "above" in clean.lower() else ("Below Manager" if "below" in clean.lower() else clean)
+                    if getattr(candidate, "job_level", None) != clean_job_level:
+                        candidate.job_level = clean_job_level
+                        db.add(candidate)
+                        db.flush()
+
+            if is_manually_excluded or _candidate_matches_excluded_keys(candidate, excluded_keys):
                 manually_excluded += 1
                 lines.append(
                     _ineligible_line(
@@ -845,7 +612,21 @@ def run_cycle_calculation(
                     )
                 )
                 continue
-            drafts = calculate_inhouse_placement(candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
+
+            eff_candidate = candidate
+            if override and override.get("employment_status"):
+                status_clean = str(override["employment_status"]).strip().upper()
+                eff_candidate = SimpleNamespace(**{
+                    col.name: getattr(candidate, col.name)
+                    for col in candidate.__table__.columns
+                })
+                eff_candidate.status = status_clean
+                if status_clean in {"RESIGNED", "TERMINATED", "INACTIVE", "LEFT", "ABSCOND"}:
+                    eff_candidate.incentive_active = False
+                elif status_clean == "ACTIVE":
+                    eff_candidate.incentive_active = True
+
+            drafts = calculate_inhouse_placement(eff_candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
             if any(line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in drafts):
                 not_90_days += 1
             if any(line.reason == "CANDIDATE_INACTIVE" for line in drafts):
@@ -855,12 +636,15 @@ def run_cycle_calculation(
             lines.extend(drafts)
         stats["inactive"] = inactive
         stats["already_paid"] = already_paid_count
+        stats["manually_excluded"] = manually_excluded
         validations = [
             {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
             {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
             {"check_key": "already_paid", "severity": "YELLOW" if already_paid_count else "GREEN", "message": "One-time incentives already paid in a previous cycle", "count": already_paid_count, "details_json": None},
             {"check_key": "manual_exclude_nashik", "severity": "YELLOW" if manually_excluded else "GREEN", "message": "Manually excluded (Nashik overlap / user exclude)", "count": manually_excluded, "details_json": None},
             missing_recruiter_master_validation(lines),
+            {"check_key": "coordinator_not_in_master", "severity": "RED" if any(line.reason == "COORDINATOR_NOT_IN_MASTER" for line in lines) else "GREEN", "message": "Hierarchy person not found in Coordinator Master", "count": sum(1 for line in lines if line.reason == "COORDINATOR_NOT_IN_MASTER"), "details_json": None},
+            {"check_key": "coordinator_ineligible", "severity": "YELLOW" if any(line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"} for line in lines) else "GREEN", "message": "Coordinator on notice or left — incentive excluded", "count": sum(1 for line in lines if line.reason in {"COORDINATOR_LEFT", "COORDINATOR_ON_NOTICE"}), "details_json": None},
         ]
         return lines, stats, match_rows, validations
 

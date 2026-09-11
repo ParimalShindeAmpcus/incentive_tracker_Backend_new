@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.candidates.schemas import (
+    CandidateDuplicateInfo,
     CandidateOut,
     CandidateUpdate,
     CandidateVersionCreateResponse,
@@ -118,13 +119,28 @@ def create_version(
             row_count=len(payload.rows),
         )
         row_dicts = [r.model_dump() for r in payload.rows]
-        created = candidate_repository.create_candidates(db, version, row_dicts)
-        version.row_count = len(created)
+        new_candidates, updated_candidates = candidate_repository.create_candidates(db, version, row_dicts)
+        version.row_count = len(new_candidates) + len(updated_candidates)
         db.commit()
         db.refresh(version)
+
+        duplicates = [
+            CandidateDuplicateInfo(
+                identifier=f"{c.candidate_name} ({c.start_id or c.activity_id or c.external_candidate_id or 'ID'})",
+                reason="Existing candidate in system — placement fields updated",
+                candidate_id=c.id,
+                activity_id=c.activity_id,
+                start_id=c.start_id,
+            )
+            for c in updated_candidates
+        ]
+
         return CandidateVersionCreateResponse(
             version=CandidateVersionOut.model_validate(version),
-            created_count=len(created),
+            created_count=len(new_candidates),
+            updated_count=len(updated_candidates),
+            duplicate_count=len(updated_candidates),
+            duplicates=duplicates,
         )
     except Exception as e:
         db.rollback()

@@ -48,6 +48,7 @@ class CycleOut(BaseModel):
     cycle_end_date: Optional[date] = None
     remarks: Optional[str] = None
     excluded_candidate_ids: Optional[str] = None
+    inhouse_overrides: Optional[str] = None
     status: str
     candidate_version_id: Optional[int] = None
     recruiter_version_id: Optional[int] = None
@@ -238,10 +239,19 @@ class CycleApprovalResultOut(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class InhouseCandidateOverride(BaseModel):
+    candidate_id: str
+    job_level: Optional[str] = None
+    placement_level: Optional[str] = None
+    employment_status: Optional[str] = None
+    manually_excluded: Optional[bool] = None
+
+
 class CalculateRequest(BaseModel):
     """Optional body for cycle calculation (In-House manual exclusions, etc.)."""
     force: bool = False
     excluded_candidate_ids: Optional[List[str]] = None
+    inhouse_overrides: Optional[List[InhouseCandidateOverride]] = None
 
 
 class MatchStatsOut(BaseModel):

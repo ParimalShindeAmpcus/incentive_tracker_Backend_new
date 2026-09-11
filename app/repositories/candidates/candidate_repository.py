@@ -119,32 +119,89 @@ def create_version(
     return version
 
 
-def find_existing_candidate(db: Session, row: dict) -> Optional[Candidate]:
-    ext_id = str(row.get("external_candidate_id") or "").strip()
-    act_id = str(row.get("activity_id") or "").strip()
-    st_id = str(row.get("start_id") or "").strip()
-    name = str(row.get("candidate_name") or "").strip().lower()
-    client = str(row.get("client") or "").strip().lower()
+def _is_placeholder_id(val: Optional[str]) -> bool:
+    if not val:
+        return True
+    s = str(val).strip().lower()
+    if not s or s.startswith("auto-"):
+        return True
+    return s in {"na", "n/a", "tbd", "pending", "-", "0", "none", "unknown", "null"}
 
-    # 1. Match by activity_id, start_id, or external_candidate_id across all ID columns
-    for test_id in (act_id, st_id, ext_id):
-        if test_id and not test_id.startswith("AUTO-"):
-            clean_id = test_id.lower()
-            cand = db.query(Candidate).filter(
+
+def _clean_normalized_name(val: Optional[str]) -> str:
+    import re
+    if not val:
+        return ""
+    s = re.sub(r"\b(mr|mrs|ms|dr|jr|sr)\b\.?", " ", str(val).lower())
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def find_existing_candidate(db: Session, row: dict) -> Optional[Candidate]:
+    st_id = str(row.get("start_id") or "").strip()
+    act_id = str(row.get("activity_id") or "").strip()
+    ext_id = str(row.get("external_candidate_id") or "").strip()
+    raw_name = str(row.get("candidate_name") or "").strip()
+    raw_client = str(row.get("client") or "").strip()
+
+    # Priority 1: valid start_id
+    if not _is_placeholder_id(st_id):
+        clean_st = st_id.lower()
+        cand = db.query(Candidate).filter(
+            or_(
+                func.lower(Candidate.start_id) == clean_st,
+                func.lower(Candidate.activity_id) == clean_st,
+                func.lower(Candidate.external_candidate_id) == clean_st,
+            )
+        ).first()
+        if cand:
+            return cand
+
+    # Priority 2: valid activity_id
+    if not _is_placeholder_id(act_id):
+        clean_act = act_id.lower()
+        cand = db.query(Candidate).filter(
+            or_(
+                func.lower(Candidate.activity_id) == clean_act,
+                func.lower(Candidate.start_id) == clean_act,
+                func.lower(Candidate.external_candidate_id) == clean_act,
+            )
+        ).first()
+        if cand:
+            return cand
+
+    # Priority 3: valid external_candidate_id
+    if not _is_placeholder_id(ext_id):
+        clean_ext = ext_id.lower()
+        cand = db.query(Candidate).filter(
+            or_(
+                func.lower(Candidate.external_candidate_id) == clean_ext,
+                func.lower(Candidate.start_id) == clean_ext,
+                func.lower(Candidate.activity_id) == clean_ext,
+            )
+        ).first()
+        if cand:
+            return cand
+
+    # Priority 4: normalized candidate name, with client constraint when supplied
+    norm_name = _clean_normalized_name(raw_name)
+    norm_client = _clean_normalized_name(raw_client)
+    if norm_name:
+        # Match exact normalized name (avoid fuzzy collisions)
+        q = db.query(Candidate).filter(
+            or_(
+                func.lower(Candidate.candidate_name) == raw_name.lower(),
+                func.lower(Candidate.normalized_name) == raw_name.lower(),
+                func.lower(Candidate.normalized_name) == norm_name,
+            )
+        )
+        if norm_client:
+            cand = q.filter(
                 or_(
-                    func.lower(Candidate.activity_id) == clean_id,
-                    func.lower(Candidate.start_id) == clean_id,
-                    func.lower(Candidate.external_candidate_id) == clean_id,
+                    func.lower(Candidate.client) == raw_client.lower(),
+                    func.lower(Candidate.normalized_client) == norm_client,
                 )
             ).first()
-            if cand:
-                return cand
-
-    # 2. Match by normalized candidate name (+ optional client)
-    if name:
-        q = db.query(Candidate).filter(func.lower(Candidate.candidate_name) == name)
-        if client:
-            cand = q.filter(func.lower(Candidate.client) == client).first()
             if cand:
                 return cand
         cand = q.first()
@@ -169,8 +226,9 @@ def create_candidates(
     db: Session,
     version: CandidateDataVersion,
     rows: Sequence[dict],
-) -> List[Candidate]:
-    created: List[Candidate] = []
+) -> Tuple[List[Candidate], List[Candidate]]:
+    new_candidates: List[Candidate] = []
+    updated_candidates: List[Candidate] = []
     for row in rows:
         name = row["candidate_name"]
         finders = row.get("finders_fee") or row.get("referral_fee")
@@ -296,7 +354,7 @@ def create_candidates(
                 existing.placement_level = row.get("placement_level")
             _sync_markup_fields(row, existing)
             db.add(existing)
-            created.append(existing)
+            updated_candidates.append(existing)
 
         else:
             candidate = Candidate(
@@ -361,8 +419,8 @@ def create_candidates(
             )
             _sync_markup_fields(row, candidate)
             db.add(candidate)
-            created.append(candidate)
+            new_candidates.append(candidate)
 
-    version.row_count = len(created)
+    version.row_count = len(new_candidates) + len(updated_candidates)
     db.flush()
-    return created
+    return new_candidates, updated_candidates

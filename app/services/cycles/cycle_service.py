@@ -819,6 +819,30 @@ def calculate_cycle(
             )
             db.add(cycle)
             db.flush()
+
+        inhouse_overrides = getattr(payload, "inhouse_overrides", None)
+        if inhouse_overrides is not None:
+            serialized = [
+                (o.model_dump() if hasattr(o, "model_dump") else (dict(o) if isinstance(o, dict) else o.__dict__))
+                for o in inhouse_overrides
+            ]
+            cycle.inhouse_overrides = json.dumps(serialized)
+            manually_excluded_ids = [
+                str(item.get("candidate_id", "")).strip()
+                for item in serialized
+                if item.get("manually_excluded") is True and str(item.get("candidate_id", "")).strip()
+            ]
+            if manually_excluded_ids:
+                curr_excluded = set()
+                if cycle.excluded_candidate_ids:
+                    try:
+                        curr_excluded = set(json.loads(cycle.excluded_candidate_ids))
+                    except Exception:
+                        pass
+                curr_excluded.update(manually_excluded_ids)
+                cycle.excluded_candidate_ids = json.dumps(list(curr_excluded))
+            db.add(cycle)
+            db.flush()
     if is_nashik_division(cycle.division):
         # Ensure prior-month FTE payment-received carries into this cycle before calc.
         cycle_repository.apply_nashik_fte_prior_payment_carryforward(db, cycle.id)

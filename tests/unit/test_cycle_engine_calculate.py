@@ -63,18 +63,26 @@ def _seed_candidate(db, **kwargs):
     return cand
 
 
-def _cycle(db, *, division: str = "nashik"):
+def _cycle(
+    db,
+    *,
+    division: str = "nashik",
+    start_date: date = date(2026, 8, 1),
+    end_date: date = date(2026, 8, 31),
+    incentive_month: str = "2026-08",
+):
     cycle = IncentiveCycle(
-        name="Nashik Aug",
+        name=f"{division} Aug",
         division=division,
-        incentive_month="2026-08",
-        cycle_start_date=date(2026, 8, 1),
-        cycle_end_date=date(2026, 8, 31),
+        incentive_month=incentive_month,
+        cycle_start_date=start_date,
+        cycle_end_date=end_date,
         status=CycleStatus.DRAFT,
     )
     db.add(cycle)
     db.flush()
     return cycle
+
 
 
 WINDOW = CycleWindow(start=date(2026, 8, 1), end=date(2026, 8, 31))
@@ -548,3 +556,135 @@ def test_nashik_nitin_three_roles_top_two_excludes_recruiter_in_cycle():
     roles = {line.role for line in nitin}
     assert roles == {"Manager", "CRM"}
     assert not any(line.role == "Recruiter" and line.eligible and line.amount > 0 and line.person == person for line in lines)
+
+
+def test_inhouse_cycle_calculation_with_overrides():
+    import json
+    db = _session()
+    cand = _seed_candidate(
+        db,
+        candidate_name="Inhouse Star",
+        external_candidate_id="INH-1",
+        organization="Ampcus Tech In-House",
+        candidate_source="Ampcus Tech In-House",
+        contract_type="INHOUSE",
+        division="ampcusTechInhouse",
+        start_date=date(2025, 10, 1),
+        placement_level="BELOW_MANAGER",
+        recruiter="Rec Inhouse",
+        manager="Mgr Inhouse",
+        center_head="CH Inhouse",
+        avp=None,
+    )
+    _seed_coordinator(db, "Rec Inhouse", CoordinatorStatus.ACTIVE, "1")
+    _seed_coordinator(db, "Mgr Inhouse", CoordinatorStatus.ACTIVE, "2")
+    _seed_coordinator(db, "CH Inhouse", CoordinatorStatus.ACTIVE, "3")
+
+    overrides = [
+        {
+            "candidate_id": str(cand.id),
+            "candidate_name": "Inhouse Star",
+            "job_level": "Above Manager",
+            "employment_status": "ACTIVE",
+            "manually_excluded": False,
+        }
+    ]
+    cycle = _cycle(
+        db,
+        division="ampcusTechInhouse",
+        start_date=date(2026, 7, 1),
+        end_date=date(2026, 7, 31),
+        incentive_month="2026-07",
+    )
+    cycle.inhouse_overrides = json.dumps(overrides)
+    db.flush()
+
+    lines, _, _, _ = run_cycle_calculation(db, cycle, [], CycleWindow(date(2026, 7, 1), date(2026, 7, 31)))
+
+    rec_line = next(line for line in lines if line.role == "Recruiter")
+    assert rec_line.eligible is True
+    assert rec_line.amount == Decimal("5000")
+
+    # Verify DB candidate was updated with job_level
+    db.refresh(cand)
+    assert cand.job_level == "Above Manager"
+
+
+def test_inhouse_cycle_dangerous_fallback_prevented():
+    db = _session()
+    # Only seed a Nashik C2C candidate
+    _seed_candidate(
+        db,
+        candidate_name="Nashik Only",
+        external_candidate_id="NSH-1",
+        organization="Random Client",
+        candidate_source="Portal",
+        contract_type="C2C",
+        division="nashik",
+        recruiter_location="Nashik",
+    )
+    cycle = _cycle(
+        db,
+        division="ampcusTechInhouse",
+        start_date=date(2026, 7, 1),
+        end_date=date(2026, 7, 31),
+        incentive_month="2026-07",
+    )
+    lines, _, _, val = run_cycle_calculation(db, cycle, [], CycleWindow(date(2026, 7, 1), date(2026, 7, 31)))
+
+    # Must be 0 lines, dangerous fallback must NOT evaluate Nashik candidate!
+    assert len(lines) == 0
+    assert any("No Ampcus In-House candidates found" in v.get("message", "") for v in val)
+
+
+def test_approved_cycle_recalculation_and_overrides_locked():
+    """Verify backend enforces APPROVED cycle lock: POST /cycles/{id}/calculate is blocked."""
+    import pytest
+    from fastapi import HTTPException
+    from app.models.cycles.schemas import CalculateRequest, InhouseCandidateOverride
+    from app.services.cycles.cycle_service import calculate_cycle
+
+    db = _session()
+    cand = _seed_candidate(
+        db,
+        candidate_name="Locked Candidate",
+        external_candidate_id="LC-1",
+        organization="Ampcus Inc",
+        division="ampcusTechInhouse",
+        placement_level="BELOW_MANAGER",
+    )
+    cycle = _cycle(
+        db,
+        division="ampcusTechInhouse",
+        start_date=date(2026, 7, 1),
+        end_date=date(2026, 7, 31),
+        incentive_month="2026-07",
+    )
+    # Set status to APPROVED
+    cycle.status = CycleStatus.APPROVED
+    db.add(cycle)
+    db.commit()
+
+    override_payload = CalculateRequest(
+        inhouse_overrides=[
+            InhouseCandidateOverride(
+                candidate_id="LC-1",
+                placement_level="ABOVE_MANAGER",
+                employment_status="RESIGNED",
+            )
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        calculate_cycle(db, cycle.id, payload=override_payload)
+
+    assert exc_info.value.status_code == 400
+    assert "Approved cycles cannot be recalculated" in str(exc_info.value.detail)
+
+    # Verify DB was NOT mutated: inhouse_overrides remains None, placement_level unchanged
+    db.refresh(cycle)
+    db.refresh(cand)
+    assert cycle.inhouse_overrides is None
+    assert cand.placement_level == "BELOW_MANAGER"
+
+

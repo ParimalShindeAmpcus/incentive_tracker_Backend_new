@@ -123,6 +123,7 @@ class CandidateUpdate(BaseModel):
     recruiter_location: Optional[str] = None
     recruiter: Optional[str] = None
     status: Optional[str] = None
+    placement_level: Optional[str] = None
     division: Optional[str] = None
     is_active: Optional[bool] = None
     incentive_active: Optional[bool] = None
@@ -204,9 +205,20 @@ class CreateVersionRequest(BaseModel):
     rows: List[CandidateRowIn] = Field(default_factory=list)
 
 
+class CandidateDuplicateInfo(BaseModel):
+    identifier: str
+    reason: str
+    candidate_id: Optional[int] = None
+    activity_id: Optional[str] = None
+    start_id: Optional[str] = None
+
+
 class CandidateVersionCreateResponse(BaseModel):
     version: CandidateVersionOut
     created_count: int
+    updated_count: int = 0
+    duplicate_count: int = 0
+    duplicates: List[CandidateDuplicateInfo] = Field(default_factory=list)
 
 
 class PaginatedCandidates(BaseModel):

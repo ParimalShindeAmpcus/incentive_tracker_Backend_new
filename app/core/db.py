@@ -90,7 +90,7 @@ def init_db() -> None:
     bool_type = "BOOLEAN" if is_pg else "BOOLEAN"
     _add_missing(
         "incentive_cycles",
-        {"approved_at": ts, "excluded_candidate_ids": "TEXT"},
+        {"approved_at": ts, "excluded_candidate_ids": "TEXT", "inhouse_overrides": "TEXT"},
     )
     _add_missing(
         "candidates",

@@ -64,7 +64,7 @@ def is_ampcus_inhouse_candidate(
 
 def _line(c: Candidate, role: str, person: Optional[str], amount: int, eligible: bool, reason: str, days: int = 0) -> LineDraft:
     meta = {
-        "placement_level": getattr(c, "placement_level", None),
+        "job_level": getattr(c, "job_level", None),
         "start_date": str(c.start_date) if getattr(c, "start_date", None) else None,
         "contract_type": getattr(c, "contract_type", None) or "Full Time",
         "candidate_source": getattr(c, "candidate_source", None) or getattr(c, "organization", None) or "",
@@ -133,7 +133,26 @@ def calculate_placement(c: Candidate, *, cycle_end: date, coordinators: Dict[str
     if getattr(c, "incentive_active", True) is False or any(x in status for x in ("INACTIVE", "TERMINAT", "RESIGN", "LEFT", "ABSCOND")):
         return [_line(c, role, person, 0, False, "CANDIDATE_INACTIVE", days) for role, person in people.items()]
 
-    recruiter_amount = 5000 if str(getattr(c, "placement_level", None) or "").upper() == "ABOVE_MANAGER" else 3000
+    raw_job_level = getattr(c, "job_level", None)
+    job_level_clean = str(raw_job_level or "").strip().lower()
+
+    recruiter_eligible = True
+    recruiter_reason = "ELIGIBLE"
+    recruiter_amount = 0
+
+    if not job_level_clean:
+        recruiter_eligible = False
+        recruiter_reason = "MISSING_JOB_LEVEL"
+        recruiter_amount = 0
+    elif "above" in job_level_clean:
+        recruiter_amount = 5000
+    elif "below" in job_level_clean:
+        recruiter_amount = 3000
+    else:
+        recruiter_eligible = False
+        recruiter_reason = "INVALID_JOB_LEVEL"
+        recruiter_amount = 0
+
     amounts = {"Recruiter": recruiter_amount, "Manager": 500, "Center Head": 1000}
 
     # W1: Max-two-roles — if one person holds 3+ roles, exclude lowest-payout extras
@@ -171,7 +190,13 @@ def calculate_placement(c: Candidate, *, cycle_end: date, coordinators: Dict[str
         if str(coordinator_status).upper() in {"LEFT", "NOTICE"}:
             reason = "COORDINATOR_LEFT" if str(coordinator_status).upper() == "LEFT" else "COORDINATOR_ON_NOTICE"
             lines.append(_line(c, role, person, 0, False, reason, days))
-        else:
-            lines.append(_line(c, role, person, amounts[role], True, "ELIGIBLE", days))
+            continue
+
+        # Recruiter job level eligibility check
+        if role == "Recruiter" and not recruiter_eligible:
+            lines.append(_line(c, role, person, 0, False, recruiter_reason, days))
+            continue
+
+        lines.append(_line(c, role, person, amounts[role], True, "ELIGIBLE", days))
     return lines
 
