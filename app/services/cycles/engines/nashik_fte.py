@@ -105,22 +105,7 @@ def finder_fee_is_set(candidate: Candidate) -> bool:
 
 def finder_fee_above_from_master(candidate: Candidate) -> bool:
     """True when Candidate Master Finder Fees is Above $4500."""
-<<<<<<< Updated upstream
-    raw = str(getattr(candidate, "finder_fees", None) or "").strip().upper().replace(" ", "").replace("-", "").replace("$", "").replace(",", "")
-    if raw in {"ABOVE500", "ABOVE_500", "ABOVE4500"}:
-        return True
-    if raw in {"BELOW500", "BELOW_500", "BELOW4500"}:
-        return False
-    fee = getattr(candidate, "finders_fee", None)
-    if fee is not None:
-        try:
-            return Decimal(str(fee)) > Decimal("4500")
-        except Exception:
-            return False
-    return False
-=======
     return resolve_finder_fee_above(candidate) is True
->>>>>>> Stashed changes
 
 
 def finder_fee_label(candidate: Candidate) -> str:
