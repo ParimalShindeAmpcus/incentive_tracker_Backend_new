@@ -11,7 +11,7 @@ class CandidateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    external_candidate_id: str
+    external_candidate_id: Optional[str] = None
     activity_id: Optional[str] = None
     start_id: Optional[str] = None
     candidate_name: str
@@ -144,10 +144,10 @@ class CandidateVersionOut(BaseModel):
 
 
 class CandidateRowIn(BaseModel):
-    external_candidate_id: str
+    external_candidate_id: Optional[str] = None
     activity_id: Optional[str] = None
     start_id: Optional[str] = None
-    candidate_name: str
+    candidate_name: Optional[str] = None
     email: Optional[str] = None
     contact: Optional[str] = None
     client: Optional[str] = None
@@ -208,9 +208,11 @@ class CreateVersionRequest(BaseModel):
 class CandidateDuplicateInfo(BaseModel):
     identifier: str
     reason: str
+    status: Optional[str] = "DUPLICATE"
     candidate_id: Optional[int] = None
     activity_id: Optional[str] = None
     start_id: Optional[str] = None
+    changed_fields: Optional[List[str]] = None
 
 
 class CandidateVersionCreateResponse(BaseModel):
@@ -219,6 +221,8 @@ class CandidateVersionCreateResponse(BaseModel):
     updated_count: int = 0
     duplicate_count: int = 0
     duplicates: List[CandidateDuplicateInfo] = Field(default_factory=list)
+    rejected_count: int = 0
+    rejected_rows: List[dict] = Field(default_factory=list)
 
 
 class PaginatedCandidates(BaseModel):

@@ -31,7 +31,7 @@ class Candidate(Base):
     __tablename__ = "candidates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    external_candidate_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    external_candidate_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     activity_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     start_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     candidate_name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -63,20 +63,6 @@ def update_candidate(db: Session, candidate_id: int, payload: CandidateUpdate) -
     if "client" in data and data["client"]:
         data["normalized_client"] = data["client"].strip().lower()
 
-    # If end_date is set and has passed or is today, automatically inactivate/exclude candidate
-    if "end_date" in data and data["end_date"]:
-        end_val = data["end_date"]
-        if isinstance(end_val, str):
-            from datetime import datetime
-            try:
-                end_val = datetime.strptime(end_val, "%Y-%m-%d").date()
-            except ValueError:
-                end_val = None
-        if end_val and end_val <= date.today():
-            data["incentive_active"] = False
-            if not data.get("status") or data.get("status") == "Active":
-                data["status"] = "Inactive (Excluded)"
-            data.setdefault("inactivation_reason", f"Project ended on {end_val}")
 
     try:
         updated = candidate_repository.update_candidate(db, row, data)
@@ -118,29 +104,45 @@ def create_version(
             uploaded_by=uploaded_by,
             row_count=len(payload.rows),
         )
-        row_dicts = [r.model_dump() for r in payload.rows]
-        new_candidates, updated_candidates = candidate_repository.create_candidates(db, version, row_dicts)
-        version.row_count = len(new_candidates) + len(updated_candidates)
+        row_dicts = [r.model_dump(exclude_unset=True) for r in payload.rows]
+        new_candidates, updated_candidates, duplicate_candidates, rejected_rows = candidate_repository.create_candidates(db, version, row_dicts)
+        version.row_count = len(new_candidates) + len(updated_candidates) + len(duplicate_candidates)
         db.commit()
         db.refresh(version)
 
-        duplicates = [
-            CandidateDuplicateInfo(
-                identifier=f"{c.candidate_name} ({c.start_id or c.activity_id or c.external_candidate_id or 'ID'})",
-                reason="Existing candidate in system — placement fields updated",
-                candidate_id=c.id,
-                activity_id=c.activity_id,
-                start_id=c.start_id,
+        duplicates: List[CandidateDuplicateInfo] = []
+        for c, changed in updated_candidates:
+            duplicates.append(
+                CandidateDuplicateInfo(
+                    identifier=f"{c.candidate_name} ({c.start_id or c.activity_id or c.external_candidate_id or 'ID'})",
+                    status="UPDATED",
+                    reason=f"Existing candidate matched by ID — updated {len(changed)} field(s): {', '.join(changed)}",
+                    candidate_id=c.id,
+                    activity_id=c.activity_id,
+                    start_id=c.start_id,
+                    changed_fields=changed,
+                )
             )
-            for c in updated_candidates
-        ]
+        for c in duplicate_candidates:
+            duplicates.append(
+                CandidateDuplicateInfo(
+                    identifier=f"{c.candidate_name} ({c.start_id or c.activity_id or c.external_candidate_id or 'ID'})",
+                    status="DUPLICATE",
+                    reason="Candidate already exists with identical supplied data — no changes made",
+                    candidate_id=c.id,
+                    activity_id=c.activity_id,
+                    start_id=c.start_id,
+                )
+            )
 
         return CandidateVersionCreateResponse(
             version=CandidateVersionOut.model_validate(version),
             created_count=len(new_candidates),
             updated_count=len(updated_candidates),
-            duplicate_count=len(updated_candidates),
+            duplicate_count=len(duplicate_candidates),
             duplicates=duplicates,
+            rejected_count=len(rejected_rows),
+            rejected_rows=rejected_rows,
         )
     except Exception as e:
         db.rollback()
