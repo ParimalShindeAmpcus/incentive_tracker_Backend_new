@@ -264,6 +264,14 @@ def test_missing_center_head_from_recruiter_master_exempts_only_that_role():
     assert ch.amount == Decimal("0")
 
 
+def test_empty_recruiter_master_blocks_all_roles_with_missing_master_reason():
+    lines = calculate_placement(placement(), cycle_end=date(2026, 8, 31), payment=payment(), coordinators={})
+
+    assert all(line.reason == "EXEMPTED_MISSING_RECRUITER_MASTER" for line in lines)
+    assert all(line.amount == Decimal("0") for line in lines)
+    assert all(line.eligible is False for line in lines)
+
+
 def test_left_and_notice_in_recruiter_master_are_not_treated_as_missing():
     coords = active_coordinators("Recruiter", "Lead", "Manager", "CRM", "Center Head")
     coords["lead"] = SimpleNamespace(employment_status="NOTICE")

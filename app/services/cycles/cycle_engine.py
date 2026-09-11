@@ -58,7 +58,6 @@ from app.services.cycles.engines.nashik_fte import (
     calculate_nashik_fte_placement,
     nashik_fte_placement_count_for_candidate,
     peer_fee_category_counts,
-    finder_fee_above_from_master,
 )
 
 
@@ -387,8 +386,6 @@ def run_cycle_calculation(
                 master_division=cand_entity.division,
             )
             resolved_division = resolved.resolved_division
-            if not cand_entity.division and cycle.division:
-                resolved_division = cycle.division
 
             resolved_div_by_pk[cand_entity.id] = resolved_division
             matched_method_by_pk[cand_entity.id] = method

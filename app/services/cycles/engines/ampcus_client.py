@@ -42,9 +42,9 @@ ROLES = (
     "CH/VP",
 )
 SLABS: Tuple[Tuple[Decimal, Decimal, Dict[str, int]], ...] = (
-    (Decimal("0"), Decimal("4.99"), {role: 0 for role in ROLES}),
+    (Decimal("0"), Decimal("5.00"), {role: 0 for role in ROLES}),
     (
-        Decimal("5"),
+        Decimal("5.01"),
         Decimal("10"),
         {
             "Recruiter": 2000,
@@ -475,8 +475,7 @@ def calculate_placement(
             continue
             
         coord = lookup_coordinator(coordinators, person)
-        # No Recruiter Master uploaded at all -> skip the presence exemption entirely.
-        if coordinators and not coord:
+        if not coord:
             lines.append(
                 _line(
                     candidate,
@@ -587,9 +586,9 @@ def _finder_fee_above_from_master(candidate: Candidate) -> bool:
         .strip().upper()
         .replace(" ", "").replace("-", "").replace("$", "").replace(",", "")
     )
-    if raw in {"ABOVE500", "ABOVE_500", "ABOVE4500"}:
+    if raw == "ABOVE4500":
         return True
-    if raw in {"BELOW500", "BELOW_500", "BELOW4500"}:
+    if raw == "BELOW4500":
         return False
     fee = getattr(candidate, "finders_fee", None)
     if fee is not None:
@@ -733,7 +732,7 @@ def calculate_fte_placement(
             continue
 
         coord = lookup_coordinator(coordinators, person)
-        if coordinators and not coord:
+        if not coord:
             lines.append(_line(candidate, role, person, ZERO, eligible=False,
                                reason=EXEMPTED_MISSING_RECRUITER_MASTER,
                                rule=rule_label,
