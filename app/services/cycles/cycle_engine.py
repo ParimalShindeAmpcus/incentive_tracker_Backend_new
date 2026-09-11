@@ -49,10 +49,6 @@ from app.services.cycles.engines.ampcus_client import (
 from app.services.incentives.recruiter_master import missing_recruiter_master_validation
 from app.services.cycles.engines.ampcus_inhouse import calculate_placement as calculate_inhouse_placement, is_ampcus_inhouse_division
 from app.services.cycles.cycle_candidates import resolve_candidates_for_cycle
-<<<<<<< Updated upstream
-from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations, calculate_fte_placement, is_fte_contract, sn_finder_fee_above_from_master
-from app.services.cycles.engines.nashik_fte import calculate_nashik_fte_placement, finder_fee_above_from_master
-=======
 from app.services.cycles.engines.sambhaji_nagar import calculate_placement as calculate_sambhaji_placement, is_sambhaji_nagar_division, calculate_special_incentives, build_sn_validations, calculate_fte_placement, is_fte_contract
 from app.services.cycles.engines.nashik_fte import (
     build_nashik_fte_slab_counts,
@@ -60,7 +56,6 @@ from app.services.cycles.engines.nashik_fte import (
     nashik_fte_placement_count_for_candidate,
     peer_fee_category_counts,
 )
->>>>>>> Stashed changes
 
 
 def _prior_nashik_fte_recruiter_paid(db: Session, candidate_id: int, exclude_cycle_id: int) -> Decimal:
@@ -1124,19 +1119,6 @@ def run_cycle_calculation(
                 lines.append(draft)
 
         # FTE — separate Nashik FTE flow (hours-file candidates only).
-<<<<<<< Updated upstream
-        # Placements are counted SEPARATELY per finder's fee tier (below vs above $4,500)
-        fte_pks = [pk for pk in hours_by_pk if is_fte_contract(by_pk[pk].contract_type)]
-        fte_month_counts: dict = _Counter()
-        for pk in fte_pks:
-            cand = by_pk[pk]
-            start_month = (
-                cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
-            )
-            fee_above = finder_fee_above_from_master(cand)
-            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month, fee_above)
-            fte_month_counts[recruiter_key] += 1
-=======
         # Slab count = Recruiter + Placement Month (start date) + Finder Fee category.
         fte_pks = [pk for pk in hours_by_pk if is_fte_contract(by_pk[pk].contract_type)]
         fte_candidates = [by_pk[pk] for pk in fte_pks]
@@ -1144,7 +1126,6 @@ def run_cycle_calculation(
             fte_candidates,
             fallback_month=getattr(cycle, "incentive_month", None) or "",
         )
->>>>>>> Stashed changes
 
         for pk in fte_pks:
             cand = by_pk[pk]
@@ -1174,12 +1155,6 @@ def run_cycle_calculation(
                 fte_slab_counts,
                 fallback_month=getattr(cycle, "incentive_month", None) or "",
             )
-<<<<<<< Updated upstream
-            fee_above = finder_fee_above_from_master(cand)
-            recruiter_key = (str(cand.recruiter or "").strip().lower(), start_month, fee_above)
-            placement_count = fte_month_counts.get(recruiter_key, 1)
-=======
->>>>>>> Stashed changes
             prior_paid = _prior_nashik_fte_recruiter_paid(db, pk, cycle.id)
 
             drafts = calculate_nashik_fte_placement(
