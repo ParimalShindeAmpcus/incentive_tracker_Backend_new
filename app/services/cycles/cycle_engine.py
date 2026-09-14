@@ -243,7 +243,6 @@ def _candidate_matches_excluded_keys(candidate: Candidate, excluded_keys: set[st
     }
     return any(k and k in excluded_keys for k in keys)
 
-
 def _inhouse_overrides_by_key(cycle) -> Dict[str, dict]:
     """Parse cycle.inhouse_overrides JSON into a dictionary keyed by candidate identifiers."""
     raw = getattr(cycle, "inhouse_overrides", None)
@@ -287,7 +286,6 @@ def _find_candidate_override(candidate: Candidate, overrides_by_key: Dict[str, d
         if k and k in overrides_by_key:
             return overrides_by_key[k]
     return None
-
 
 # ---------------------------------------------------------------------------
 # Division-aware implementation

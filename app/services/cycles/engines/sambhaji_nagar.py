@@ -218,8 +218,8 @@ def _line(c: Candidate, role: str, person: Optional[str], amount: int, hours: De
             "start_date": c.start_date.isoformat() if c.start_date else None,
             "contract_type": c.contract_type or "",
             "candidate_source": c.candidate_source or "",
-            "external_candidate_id": c.activity_id or c.start_id or c.external_candidate_id or "",
-            "candidate_id": c.activity_id or c.start_id or c.external_candidate_id or "",
+            "external_candidate_id": getattr(c, "activity_id", None) or getattr(c, "start_id", None) or getattr(c, "external_candidate_id", None) or "",
+            "candidate_id": getattr(c, "activity_id", None) or getattr(c, "start_id", None) or getattr(c, "external_candidate_id", None) or "",
             **(  {
                 "exemption_status": EXEMPTED_MISSING_RECRUITER_MASTER,
                 "exemption_reason": EXEMPTION_REASON_TEXT,
@@ -590,8 +590,8 @@ def calculate_fte_placement(
         "organization": c.organization or "",
         "recruiter_location": c.recruiter_location or "",
         "candidate_source": c.candidate_source or "",
-        "external_candidate_id": c.activity_id or c.start_id or c.external_candidate_id or "",
-        "candidate_id": c.activity_id or c.start_id or c.external_candidate_id or "",
+        "external_candidate_id": getattr(c, "activity_id", None) or getattr(c, "start_id", None) or getattr(c, "external_candidate_id", None) or "",
+        "candidate_id": getattr(c, "activity_id", None) or getattr(c, "start_id", None) or getattr(c, "external_candidate_id", None) or "",
     }
 
     lines: List[LineDraft] = [
@@ -729,7 +729,7 @@ def calculate_special_incentives(
                     first.recruiter,
                     "SPECIAL",
                     "Sambhaji Nagar multiple-placement average",
-                    True, float(payable_now), Decimal("1"), float(payable_now), ZERO, first.margin,
+                    True, payable_now, Decimal("1"), payable_now, ZERO, first.margin,
                     "Eligible recruiter multiple-placement average bonus",
                     [json.dumps({
                         "start_month": start_month,
@@ -739,8 +739,8 @@ def calculate_special_incentives(
                         "payable_now": float(payable_now),
                         "cycle_month": cycle_month,
                         "note": "Special incentive: average of 160+ hour placements starting in same month",
-                        "external_candidate_id": first.activity_id or first.start_id or first.external_candidate_id or "",
-                        "candidate_id": first.activity_id or first.start_id or first.external_candidate_id or "",
+                        "external_candidate_id": getattr(first, "activity_id", None) or getattr(first, "start_id", None) or getattr(first, "external_candidate_id", None) or "",
+                        "candidate_id": getattr(first, "activity_id", None) or getattr(first, "start_id", None) or getattr(first, "external_candidate_id", None) or "",
                     })],
                 ))
     return extras
