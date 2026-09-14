@@ -135,8 +135,8 @@ def sn_paid_special_bonuses(db: Session, exclude_cycle_id: int, division: str) -
         person = (r.person or "").strip().lower()
         start_month = ""
         try:
-            if r.explanation:
-                meta = json.loads(r.explanation[0])
+            if r.explanation_json:
+                meta = json.loads(r.explanation_json)
                 start_month = meta.get("start_month", "")
         except Exception:
             pass

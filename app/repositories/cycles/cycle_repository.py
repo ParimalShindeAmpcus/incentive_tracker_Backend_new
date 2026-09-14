@@ -215,6 +215,10 @@ def sync_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) 
             new_row = CyclePaymentStatus(cycle_id=cycle_id, candidate_id=candidate_id, status="PAYMENT_PENDING")
             db.add(new_row)
             created.append(new_row)
+    db.flush()
+    return created
+
+
 def replace_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) -> List[CyclePaymentStatus]:
     clear_payment_statuses(db, cycle_id)
     created: List[CyclePaymentStatus] = []
@@ -511,6 +515,7 @@ def sn_paid_recruiter_hours_by_candidate(
             IncentiveLine.candidate_id.in_(candidate_ids),
             IncentiveLine.role == "Recruiter",
             IncentiveLine.eligible.is_(True),
+            IncentiveLine.incentive_type != "FULL_TIME",
         )
         .group_by(IncentiveLine.candidate_id)
         .all()
