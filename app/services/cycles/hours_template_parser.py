@@ -61,8 +61,8 @@ def _hours(value: object) -> Decimal:
         return Decimal("0")
 
 
-def normalize_month_key(value: object) -> str:
-    """Normalize month values like Aug-26 / September 2026 / 2026-08 to YYYY-MM."""
+def normalize_month_key(value: object, fallback_year: Optional[int] = None) -> str:
+    """Normalize month values like Aug-26 / September 2026 / 2026-08 / 26-Sep / 9/26/2026 to YYYY-MM."""
     if value is None:
         return ""
     if isinstance(value, datetime):
@@ -85,45 +85,117 @@ def normalize_month_key(value: object) -> str:
     if re.fullmatch(r"\d{4}-\d{2}", raw):
         return raw
 
-    named = re.fullmatch(r"([A-Za-z]+)\s*[-/., ]\s*(\d{4})", raw)
+    # ISO date / ISO timestamp: 2026-09-26 or 2026-09-26 00:00:00 or 2026-09-26T00:00:00
+    iso = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s].*)?$", raw)
+    if iso:
+        y, m = int(iso.group(1)), int(iso.group(2))
+        if 1970 <= y <= 2100 and 1 <= m <= 12:
+            return f"{y}-{m:02d}"
+
+    # Year-Month: 2026-09 or 2026/09
+    ym = re.match(r"^(\d{4})[/.-](\d{1,2})$", raw)
+    if ym:
+        y, m = int(ym.group(1)), int(ym.group(2))
+        if 1970 <= y <= 2100 and 1 <= m <= 12:
+            return f"{y}-{m:02d}"
+
+    # Numeric slash/dash date 4-digit year: M/D/YYYY or D/M/YYYY
+    slash4 = re.match(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$", raw)
+    if slash4:
+        p1, p2, y = int(slash4.group(1)), int(slash4.group(2)), int(slash4.group(3))
+        if 1970 <= y <= 2100:
+            if p1 > 12 and 1 <= p2 <= 12:
+                return f"{y}-{p2:02d}"
+            if p2 > 12 and 1 <= p1 <= 12:
+                return f"{y}-{p1:02d}"
+            if 1 <= p1 <= 12 and 1 <= p2 <= 31:
+                return f"{y}-{p1:02d}"
+
+    # Numeric slash/dash date 2-digit year: M/D/YY or D/M/YY
+    slash2 = re.match(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2})$", raw)
+    if slash2:
+        p1, p2, yy = int(slash2.group(1)), int(slash2.group(2)), int(slash2.group(3))
+        y = 2000 + yy
+        if p1 > 12 and 1 <= p2 <= 12:
+            return f"{y}-{p2:02d}"
+        if p2 > 12 and 1 <= p1 <= 12:
+            return f"{y}-{p1:02d}"
+        if 1 <= p1 <= 12 and 1 <= p2 <= 31:
+            return f"{y}-{p1:02d}"
+
+    # Full date string with month name: "September 26, 2026", "Sep 26 2026"
+    mdy_named = re.match(r"^([A-Za-z]+)\s*[-/., ]\s*(\d{1,2})(?:st|nd|rd|th)?(?:,\s*|\s*[-/., ]\s*)(\d{2,4})$", raw)
+    if mdy_named:
+        idx = _MONTH_NAME_TO_INDEX.get(mdy_named.group(1).lower())
+        day = int(mdy_named.group(2))
+        y = int(mdy_named.group(3))
+        if y < 100:
+            y += 2000
+        if idx and 1 <= day <= 31 and 1970 <= y <= 2100:
+            return f"{y}-{idx:02d}"
+
+    # Day + Month name + Year: "26 September 2026", "26-Sep-2026"
+    dmy_named = re.match(r"^(\d{1,2})(?:st|nd|rd|th)?\s*[-/., ]\s*([A-Za-z]+)\s*[-/., ]\s*(\d{2,4})$", raw)
+    if dmy_named:
+        day = int(dmy_named.group(1))
+        idx = _MONTH_NAME_TO_INDEX.get(dmy_named.group(2).lower())
+        y = int(dmy_named.group(3))
+        if y < 100:
+            y += 2000
+        if idx and 1 <= day <= 31 and 1970 <= y <= 2100:
+            return f"{y}-{idx:02d}"
+
+    # Month name + 4-digit Year: "September 2026", "Sep-2026"
+    named = re.match(r"^([A-Za-z]+)\s*[-/., ]\s*(\d{4})$", raw)
     if named:
         idx = _MONTH_NAME_TO_INDEX.get(named.group(1).lower())
-        if idx:
-            return f"{named.group(2)}-{idx:02d}"
+        y = int(named.group(2))
+        if idx and 1970 <= y <= 2100:
+            return f"{y}-{idx:02d}"
 
-    named_yy = re.fullmatch(r"([A-Za-z]+)\s*[-/., ]\s*(\d{2})", raw)
+    # 4-digit Year + Month name: "2026 September", "2026-Sep"
+    ym_named = re.match(r"^(\d{4})\s*[-/., ]\s*([A-Za-z]+)$", raw)
+    if ym_named:
+        y = int(ym_named.group(1))
+        idx = _MONTH_NAME_TO_INDEX.get(ym_named.group(2).lower())
+        if idx and 1970 <= y <= 2100:
+            return f"{y}-{idx:02d}"
+
+    # Month name + 2-digit Year: "Sep-26", "August-26"
+    named_yy = re.match(r"^([A-Za-z]+)\s*[-/., ]\s*(\d{2})$", raw)
     if named_yy:
         idx = _MONTH_NAME_TO_INDEX.get(named_yy.group(1).lower())
         if idx:
             yy = int(named_yy.group(2))
             year = 2000 + yy if yy < 100 else yy
-            return f"{year}-{idx:02d}"
+            if 1970 <= year <= 2100:
+                return f"{year}-{idx:02d}"
 
-    ym = re.fullmatch(r"(\d{4})[/.-](\d{1,2})", raw)
-    if ym:
-        m = int(ym.group(2))
-        if 1 <= m <= 12:
-            return f"{ym.group(1)}-{m:02d}"
+    # Day + Month name without Year: "26-Sep", "26 Sep", "26-September"
+    dm_no_year = re.match(r"^(\d{1,2})(?:st|nd|rd|th)?\s*[-/., ]\s*([A-Za-z]+)$", raw)
+    if dm_no_year:
+        day = int(dm_no_year.group(1))
+        idx = _MONTH_NAME_TO_INDEX.get(dm_no_year.group(2).lower())
+        if idx and 1 <= day <= 31:
+            y = fallback_year or datetime.now().year
+            return f"{y}-{idx:02d}"
 
-    my = re.fullmatch(r"(\d{1,2})[/.-](\d{4})", raw)
+    # Month-Year Numeric: 09/2026 or 9-2026
+    my = re.match(r"^(\d{1,2})[/.-](\d{4})$", raw)
     if my:
         m = int(my.group(1))
-        if 1 <= m <= 12:
-            return f"{my.group(2)}-{m:02d}"
+        y = int(my.group(2))
+        if 1 <= m <= 12 and 1970 <= y <= 2100:
+            return f"{y}-{m:02d}"
 
-    m_yy = re.fullmatch(r"(\d{1,2})[/.-](\d{2})", raw)
+    # Month-Year 2-digit Numeric: 09/26 or 9-26
+    m_yy = re.match(r"^(\d{1,2})[/.-](\d{2})$", raw)
     if m_yy:
         m = int(m_yy.group(1))
         yy = int(m_yy.group(2))
         if 1 <= m <= 12:
             return f"{2000 + yy}-{m:02d}"
 
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"):
-        try:
-            dt = datetime.strptime(raw, fmt)
-            return f"{dt.year}-{dt.month:02d}"
-        except ValueError:
-            continue
     return ""
 
 
@@ -133,13 +205,17 @@ def assert_rows_match_cycle_month(rows: List[HoursMatchRow], cycle_month: Option
     if not expected:
         raise ValueError("Cycle incentive month is missing. Recreate the cycle and try again.")
 
+    fallback_year = None
+    if re.match(r"^\d{4}", expected):
+        fallback_year = int(expected[:4])
+
     found: set[str] = set()
     missing = 0
     wrong = 0
 
     for row in rows:
         raw = _cell(row.month)
-        mk = normalize_month_key(raw)
+        mk = normalize_month_key(raw, fallback_year=fallback_year)
         if not mk:
             missing += 1
             continue
