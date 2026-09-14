@@ -152,6 +152,12 @@ def init_db() -> None:
     )
     if "candidates" in inspector.get_table_names():
         with engine.begin() as connection:
+            # Candidates can be identified by a valid Start ID or Activity ID;
+            # external_candidate_id is optional in the application model.
+            if is_pg:
+                connection.execute(
+                    text("ALTER TABLE candidates ALTER COLUMN external_candidate_id DROP NOT NULL")
+                )
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_activity_id ON candidates (activity_id)"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_start_id ON candidates (start_id)"))
     _add_missing(
