@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.models.hours.schemas import (
     CreateHoursVersionRequest,
@@ -14,11 +14,12 @@ from app.models.hours.schemas import (
     PublishedHoursOut,
     VersionMetaOut,
 )
-from app.services.common.deps import CurrentUser, DbSession
+from app.repositories.entities.user import User
+from app.services.common.deps import CurrentUser, DbSession, get_current_user, require_roles
 from app.services.hours import hours_service
 
-router = APIRouter()
-benchmarks_router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
+benchmarks_router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/versions", response_model=List[VersionMetaOut])
@@ -70,5 +71,7 @@ def put_benchmark(
     division: str,
     payload: HoursBenchmarkUpdate,
     db: DbSession,
+    user: User = Depends(require_roles("ADMIN", "ACCOUNTS")),
 ) -> HoursBenchmarkOut:
+    _ = user
     return hours_service.update_benchmark(db, division, payload, updated_by=None)

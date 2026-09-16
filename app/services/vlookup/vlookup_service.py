@@ -53,6 +53,12 @@ from app.services.vlookup.reconciliation_matcher import ReconciliationMatcher
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_excel_cell(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{value}"
+    return value
+
+
 def _candidate_lookup_keys(candidate) -> List[str]:
     keys: List[str] = []
     for value in (
@@ -119,6 +125,14 @@ def upload_template_and_messy(
 ) -> VLookupUploadResponse:
     batch_id = str(uuid.uuid4())[:8]
     try:
+        max_bytes = 25 * 1024 * 1024
+        template_file.file.seek(0)
+        size = 0
+        while chunk := template_file.file.read(1024 * 1024):
+            size += len(chunk)
+            if size > max_bytes:
+                raise HTTPException(status_code=413, detail="Template file too large (max 25MB)")
+        template_file.file.seek(0)
         template_content = template_file.file.read()
         template_df = _parse_tabular_file(template_content, template_file.filename or "template.csv")
         template_df.columns = [
@@ -203,6 +217,13 @@ def upload_template_and_messy(
                 ),
             )
 
+        messy_file.file.seek(0)
+        size = 0
+        while chunk := messy_file.file.read(1024 * 1024):
+            size += len(chunk)
+            if size > max_bytes:
+                raise HTTPException(status_code=413, detail="Consolidated file too large (max 25MB)")
+        messy_file.file.seek(0)
         messy_content = messy_file.file.read()
         try:
             unfiltered = parse_client_hours_file(
@@ -1341,7 +1362,8 @@ def _excel_download(
     *,
     extra_cols: Optional[List[str]] = None,
 ) -> StreamingResponse:
-    df = pd.DataFrame(data)
+    sanitized = [{key: _sanitize_excel_cell(value) for key, value in row.items()} for row in data]
+    df = pd.DataFrame(sanitized)
     export_cols = [
         "Candidate ID",
         "Candidate Name",

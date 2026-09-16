@@ -1,8 +1,8 @@
 """Cycle HTTP routes."""
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Body, File, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
 
 from app.models.cycles.schemas import (
     AdjustmentCreate,
@@ -25,14 +25,19 @@ from app.models.cycles.schemas import (
     ValidationOut,
 )
 from app.models.incentives.schemas import IncentiveLineOut
-from app.services.common.deps import CurrentUser, DbSession
+from app.repositories.entities.user import User
+from app.services.common.deps import CurrentUser, DbSession, get_current_user, require_roles
 from app.services.cycles import cycle_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.post("", response_model=CycleOut)
-def create_cycle(payload: CycleCreate, db: DbSession, user: CurrentUser) -> CycleOut:
+def create_cycle(
+    payload: CycleCreate,
+    db: DbSession,
+    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+) -> CycleOut:
     return cycle_service.create_cycle(db, payload, created_by=user.id)
 
 
@@ -76,7 +81,14 @@ def get_matches(cycle_id: int, db: DbSession) -> List[MatchOut]:
 
 
 @router.patch("/{cycle_id}/matches/{match_id}", response_model=MatchOut)
-def patch_match(cycle_id: int, match_id: int, payload: MatchUpdate, db: DbSession) -> MatchOut:
+def patch_match(
+    cycle_id: int,
+    match_id: int,
+    payload: MatchUpdate,
+    db: DbSession,
+    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+) -> MatchOut:
+    _ = user
     return cycle_service.update_match(db, cycle_id, match_id, payload)
 
 
@@ -139,12 +151,20 @@ async def upload_hours(
     user: CurrentUser,
     file: UploadFile = File(...),
 ) -> HoursUploadOut:
+    from app.services.common.deps import validate_upload_size
+
+    validate_upload_size(file)
     content = await file.read()
     return cycle_service.upload_hours_file(db, cycle_id, file.filename or "hours.xlsx", content, user=user)
 
 
 @router.post("/{cycle_id}/approve", response_model=CycleOut)
-def approve(cycle_id: int, payload: ApproveRequest, db: DbSession, user: CurrentUser) -> CycleOut:
+def approve(
+    cycle_id: int,
+    payload: ApproveRequest,
+    db: DbSession,
+    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+) -> CycleOut:
     return cycle_service.approve_cycle(db, cycle_id, payload, user=user)
 
 
@@ -157,7 +177,7 @@ def get_approval_results(cycle_id: int, db: DbSession) -> List[CycleApprovalResu
 def calculate(
     cycle_id: int,
     db: DbSession,
-    user: CurrentUser,
+    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
     payload: Optional[CalculateRequest] = Body(default=None),
 ) -> CalculateResult:
     return cycle_service.calculate_cycle(db, cycle_id, user=user, payload=payload)

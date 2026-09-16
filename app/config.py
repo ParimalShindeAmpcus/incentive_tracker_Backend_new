@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     )
 
     # Security / JWT
-    secret_key: str = "change-me"
+    secret_key: str = "dev-secret-key-incentive-tracker-2026"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_minutes: int = 10080
@@ -85,7 +85,14 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
-    def assemble_database_url(self):
+    def validate_security_and_database(self):
+        env_name = str(self.environment or "").strip().lower()
+        insecure_secrets = {"change-me", "your-secret-key-change-this-in-production"}
+        if env_name in {"production", "prod"} and str(self.secret_key or "").strip().lower() in insecure_secrets:
+            raise ValueError("SECRET_KEY must be set to a non-default production secret.")
+        if env_name in {"production", "prod"} and self.default_admin_password == "Admin@123":
+            raise ValueError("Default admin password must be replaced in production.")
+
         if self.db_user and self.db_name:
             password = quote_plus(self.db_password or "")
             object.__setattr__(

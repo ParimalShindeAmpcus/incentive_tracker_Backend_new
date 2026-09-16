@@ -2,7 +2,7 @@
 
 from typing import Annotated, Callable, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -58,6 +58,17 @@ def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def validate_upload_size(file: UploadFile, max_mb: int = 25) -> None:
+    """Ensure uploaded files are within configured size limits without altering the normal request flow."""
+    max_bytes = max_mb * 1024 * 1024
+    size = 0
+    while chunk := file.file.read(1024 * 1024):
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"File too large (max {max_mb}MB)")
+    file.file.seek(0)
 
 
 def require_roles(*roles: str) -> Callable:

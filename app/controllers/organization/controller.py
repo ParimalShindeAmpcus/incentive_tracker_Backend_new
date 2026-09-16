@@ -2,13 +2,13 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.models.organization.schemas import DivisionOut, OrganizationOut
-from app.services.common.deps import DbSession
+from app.services.common.deps import DbSession, get_current_user
 from app.services.organization import organization_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/organizations", response_model=List[OrganizationOut])

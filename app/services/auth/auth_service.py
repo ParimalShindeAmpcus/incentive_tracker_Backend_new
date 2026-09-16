@@ -1,8 +1,11 @@
 """Auth service — orchestration."""
 
+from datetime import datetime, timedelta
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models.auth.schemas import LoginRequest, TokenResponse, UserOut
 from app.repositories.auth import auth_repository
 from app.repositories.entities.user import User
@@ -14,13 +17,26 @@ from app.security.auth import (
 )
 
 
+_login_attempts: dict[str, tuple[int, datetime]] = {}
+
+
 def login(db: Session, payload: LoginRequest) -> TokenResponse:
-    user = auth_repository.get_user_by_email(db, payload.email.lower().strip())
+    settings = get_settings()
+    key = payload.email.lower().strip()
+    now = datetime.utcnow()
+    attempt_count, first_seen = _login_attempts.get(key, (0, now))
+    if attempt_count >= int(getattr(settings, "max_failed_login_attempts", 5)) and now - first_seen < timedelta(minutes=int(getattr(settings, "lockout_minutes", 15))):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many failed login attempts. Please try again later.")
+
+    user = auth_repository.get_user_by_email(db, key)
     if user is None or not verify_password(payload.password, user.hashed_password):
+        failed_count = attempt_count + 1
+        _login_attempts[key] = (failed_count, first_seen)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive")
 
+    _login_attempts.pop(key, None)
     access = create_access_token(str(user.id), {"email": user.email})
     refresh = create_refresh_token(str(user.id))
     return TokenResponse(

@@ -1090,6 +1090,12 @@ def _export_row_from_snapshot(row) -> list:
     ]
 
 
+def _sanitize_excel_value(value: object) -> object:
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{value}"
+    return value
+
+
 def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> StreamingResponse:
     cycle = _require_cycle(db, cycle_id)
     workbook = Workbook()
@@ -1117,7 +1123,7 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
         for row in snapshots:
             if not row.eligible or Decimal(str(row.amount or 0)) <= 0:
                 continue
-            base = _export_row_from_snapshot(row)
+            base = [_sanitize_excel_value(value) for value in _export_row_from_snapshot(row)]
             if nashik:
                 ct = str(row.contract_type or "").upper()
                 candidate_type = "FTE" if ct in {"FULLTIME", "FULL_TIME", "FT", "FTE"} else "W2/C2C"
@@ -1134,7 +1140,7 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
             if not line.eligible or Decimal(str(line.amount or 0)) <= 0:
                 continue
             cand = candidates.get(line.candidate_id) if line.candidate_id else None
-            base = _export_row(cycle, line, cand)
+            base = [_sanitize_excel_value(value) for value in _export_row(cycle, line, cand)]
             if nashik:
                 explanation = line.explanation_json or ""
                 if "nashik_fte" in explanation or '"candidate_type": "FTE"' in explanation:

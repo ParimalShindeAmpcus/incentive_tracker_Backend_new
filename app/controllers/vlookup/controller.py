@@ -1,8 +1,8 @@
 """VLOOKUP hours reconciliation HTTP routes."""
 
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.models.vlookup.schemas import (
@@ -23,10 +23,11 @@ from app.models.vlookup.schemas import (
     VLookupTemplateSearchResponse,
     VLookupUploadResponse,
 )
-from app.services.common.deps import CurrentUser, DbSession
+from app.repositories.entities.user import User
+from app.services.common.deps import CurrentUser, DbSession, get_current_user, require_roles
 from app.services.vlookup import vlookup_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/template", response_model=VLookupTemplateResponse)
@@ -37,7 +38,7 @@ def template() -> VLookupTemplateResponse:
 @router.post("/upload", response_model=VLookupUploadResponse)
 def upload(
     db: DbSession,
-    user: CurrentUser,
+    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
     template_file: UploadFile = File(..., description="Hours Template CSV/XLSX"),
     consolidated_file: Optional[UploadFile] = File(
         None,
@@ -272,7 +273,7 @@ def download_unmatched(
 @router.post("/publish-hours", response_model=VLookupPublishHoursResponse)
 def publish_hours(
     db: DbSession,
-    user: CurrentUser,
+    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
     batch_id: Optional[str] = Query(None),
     division: Optional[str] = Query(None),
     include_review_pending: bool = Query(False),
@@ -294,7 +295,7 @@ def edit_candidate_hours(
     match_id: int,
     body: ManualEditHoursBody,
     db: DbSession,
-    user: CurrentUser,
+    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
 ) -> VLookupActionResponse:
     """Edit candidate hours manually for benchmark purposes."""
     if not body.reviewed_by:

@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.models.candidates.schemas import (
     CandidateOut,
@@ -13,9 +13,9 @@ from app.models.candidates.schemas import (
     PaginatedCandidates,
 )
 from app.services.candidates import candidate_service
-from app.services.common.deps import CurrentUser, DbSession
+from app.services.common.deps import CurrentUser, DbSession, get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 

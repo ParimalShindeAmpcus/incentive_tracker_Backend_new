@@ -2,17 +2,17 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.models.project_end.schemas import (
     CreateProjectEndVersionRequest,
     ProjectEndVersionDetail,
     ProjectEndVersionOut,
 )
-from app.services.common.deps import CurrentUser, DbSession
+from app.services.common.deps import CurrentUser, DbSession, get_current_user
 from app.services.project_end import project_end_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/versions", response_model=List[ProjectEndVersionOut])
