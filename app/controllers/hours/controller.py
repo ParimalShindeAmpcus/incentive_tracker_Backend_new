@@ -1,6 +1,6 @@
 """Hours data + benchmarks HTTP routes."""
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -45,7 +45,7 @@ def get_version(version_id: int, db: DbSession) -> HoursVersionDetail:
 def create_version(
     payload: CreateHoursVersionRequest,
     db: DbSession,
-    user: CurrentUser,
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
 ) -> HoursVersionDetail:
     return hours_service.create_version(db, payload, uploaded_by=user.id)
 
@@ -55,7 +55,7 @@ def patch_hours_row(
     row_id: int,
     payload: HoursRowHoursUpdate,
     db: DbSession,
-    user: CurrentUser,
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
 ) -> HoursRowOut:
     _ = user
     return hours_service.update_row_hours(db, row_id, payload)

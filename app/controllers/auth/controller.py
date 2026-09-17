@@ -11,8 +11,9 @@ router = APIRouter()
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(payload: LoginRequest, db: DbSession, response: Response) -> AuthResponse:
-    access, refresh, user_out = auth_service.login(db, payload)
+def login(payload: LoginRequest, db: DbSession, response: Response, request: Request) -> AuthResponse:
+    fingerprint = auth_service.extract_client_fingerprint(request)
+    access, refresh, user_out = auth_service.login(db, payload, client_fingerprint=fingerprint)
     settings = get_settings()
     secure = settings.environment != "development"
     response.set_cookie(key="access_token", value=access, httponly=True, secure=secure, samesite="lax", max_age=settings.access_token_expire_minutes * 60)
@@ -26,10 +27,11 @@ def login(payload: LoginRequest, db: DbSession, response: Response) -> AuthRespo
 
 
 @router.post("/refresh", response_model=AuthResponse)
-def refresh(db: DbSession, response: Response, refresh_token: str = Cookie(None)) -> AuthResponse:
+def refresh(db: DbSession, response: Response, request: Request, refresh_token: str = Cookie(None)) -> AuthResponse:
     if not refresh_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token missing")
-    access, new_refresh, user_out = auth_service.refresh(db, refresh_token)
+    fingerprint = auth_service.extract_client_fingerprint(request)
+    access, new_refresh, user_out = auth_service.refresh(db, refresh_token, client_fingerprint=fingerprint)
     settings = get_settings()
     secure = settings.environment != "development"
     response.set_cookie(key="access_token", value=access, httponly=True, secure=secure, samesite="lax", max_age=settings.access_token_expire_minutes * 60)

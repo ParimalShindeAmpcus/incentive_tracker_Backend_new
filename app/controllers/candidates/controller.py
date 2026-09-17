@@ -1,6 +1,6 @@
 """Candidate HTTP routes."""
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -12,8 +12,9 @@ from app.models.candidates.schemas import (
     CreateVersionRequest,
     PaginatedCandidates,
 )
+from app.repositories.entities.user import User
 from app.services.candidates import candidate_service
-from app.services.common.deps import CurrentUser, DbSession, get_current_user
+from app.services.common.deps import DbSession, get_current_user, require_roles
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
@@ -38,7 +39,12 @@ def get_candidate(candidate_id: int, db: DbSession) -> CandidateOut:
 
 
 @router.patch("/candidates/{candidate_id}", response_model=CandidateOut)
-def patch_candidate(candidate_id: int, payload: CandidateUpdate, db: DbSession, user: CurrentUser = None) -> CandidateOut:
+def patch_candidate(
+    candidate_id: int,
+    payload: CandidateUpdate,
+    db: DbSession,
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
+) -> CandidateOut:
     return candidate_service.update_candidate(db, candidate_id, payload, user=user)
 
 
@@ -56,7 +62,7 @@ def get_version(version_id: int, db: DbSession) -> CandidateVersionOut:
 def create_version(
     payload: CreateVersionRequest,
     db: DbSession,
-    user: CurrentUser,
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
 ) -> CandidateVersionCreateResponse:
     return candidate_service.create_version(db, payload, user=user)
 

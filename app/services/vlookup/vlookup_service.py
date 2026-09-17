@@ -53,10 +53,7 @@ from app.services.vlookup.reconciliation_matcher import ReconciliationMatcher
 logger = logging.getLogger(__name__)
 
 
-def _sanitize_excel_cell(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
-        return f"'{value}"
-    return value
+from app.core.sanitization import sanitize_excel_cell as _sanitize_excel_cell
 
 
 def _candidate_lookup_keys(candidate) -> List[str]:

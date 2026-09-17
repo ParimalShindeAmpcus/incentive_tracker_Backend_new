@@ -2,7 +2,9 @@
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, status
+from typing import Optional
+
+from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -10,6 +12,7 @@ from app.models.auth.schemas import LoginRequest, UserOut
 from app.repositories.auth import auth_repository
 from app.repositories.entities.user import User
 from app.security.auth import (
+    compute_client_fingerprint,
     create_access_token,
     create_refresh_token,
     decode_token,
@@ -20,7 +23,16 @@ from app.security.auth import (
 _login_attempts: dict[str, tuple[int, datetime]] = {}
 
 
-def login(db: Session, payload: LoginRequest) -> tuple[str, str, UserOut]:
+def extract_client_fingerprint(request: Optional[Request]) -> Optional[str]:
+    """Extract client fingerprint from request headers."""
+    if request is None:
+        return None
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = request.client.host if request.client else ""
+    return compute_client_fingerprint(user_agent=user_agent, client_ip=client_ip)
+
+
+def login(db: Session, payload: LoginRequest, client_fingerprint: Optional[str] = None) -> tuple[str, str, UserOut]:
     settings = get_settings()
     key = payload.email.lower().strip()
     now = datetime.utcnow()
@@ -38,11 +50,12 @@ def login(db: Session, payload: LoginRequest) -> tuple[str, str, UserOut]:
 
     _login_attempts.pop(key, None)
     access = create_access_token(str(user.id), {"email": user.email})
-    refresh = create_refresh_token(str(user.id))
+    extra = {"fpt": client_fingerprint} if client_fingerprint else None
+    refresh = create_refresh_token(str(user.id), extra=extra)
     return access, refresh, UserOut.model_validate(user)
 
 
-def refresh(db: Session, refresh_token: str) -> tuple[str, str, UserOut]:
+def refresh(db: Session, refresh_token: str, client_fingerprint: Optional[str] = None) -> tuple[str, str, UserOut]:
     try:
         payload = decode_token(refresh_token)
     except ValueError as exc:
@@ -54,6 +67,7 @@ def refresh(db: Session, refresh_token: str) -> tuple[str, str, UserOut]:
     sub = payload.get("sub")
     jti = payload.get("jti")
     exp = payload.get("exp")
+    fpt = payload.get("fpt")
     if not jti:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token structure")
 
@@ -65,6 +79,17 @@ def refresh(db: Session, refresh_token: str) -> tuple[str, str, UserOut]:
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject") from exc
 
+    # Validate device / session fingerprint if present
+    if fpt and client_fingerprint and fpt != client_fingerprint:
+        # Mismatch indicates potential session hijacking/token theft -> Revoke token immediately
+        if exp:
+            expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+            auth_repository.revoke_token(db, jti=jti, token_type="refresh", expires_at=expires_at, user_id=user_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session fingerprint mismatch. Token revoked.",
+        )
+
     user = auth_repository.get_user_by_id(db, user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
@@ -75,7 +100,9 @@ def refresh(db: Session, refresh_token: str) -> tuple[str, str, UserOut]:
         auth_repository.revoke_token(db, jti=jti, token_type="refresh", expires_at=expires_at, user_id=user_id)
 
     access = create_access_token(str(user.id), {"email": user.email})
-    new_refresh = create_refresh_token(str(user.id))
+    new_fpt = client_fingerprint or fpt
+    extra = {"fpt": new_fpt} if new_fpt else None
+    new_refresh = create_refresh_token(str(user.id), extra=extra)
     return access, new_refresh, UserOut.model_validate(user)
 
 

@@ -1090,10 +1090,7 @@ def _export_row_from_snapshot(row) -> list:
     ]
 
 
-def _sanitize_excel_value(value: object) -> object:
-    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
-        return f"'{value}"
-    return value
+from app.core.sanitization import sanitize_excel_cell as _sanitize_excel_value
 
 
 def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> StreamingResponse:

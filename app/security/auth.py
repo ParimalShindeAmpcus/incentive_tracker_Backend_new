@@ -1,5 +1,6 @@
 """JWT and password helpers."""
 
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -10,6 +11,12 @@ from passlib.context import CryptContext
 from app.config import get_settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def compute_client_fingerprint(user_agent: Optional[str] = None, client_ip: Optional[str] = None) -> str:
+    """Compute client fingerprint from user-agent to bind refresh tokens."""
+    raw = f"{user_agent or 'unknown'}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def hash_password(password: str) -> str:
