@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.repositories.entities.organization import Division, Organization
 
 
-def list_organizations(db: Session, active_only: bool = False) -> List[Organization]:
+def list_organizations(db: Session, active_only: bool = True) -> List[Organization]:
     q = db.query(Organization).order_by(Organization.name)
     if active_only:
         q = q.filter(Organization.is_active.is_(True))
@@ -17,7 +17,7 @@ def list_organizations(db: Session, active_only: bool = False) -> List[Organizat
 def list_divisions(
     db: Session,
     organization_id: Optional[int] = None,
-    active_only: bool = False,
+    active_only: bool = True,
 ) -> List[Division]:
     q = db.query(Division).order_by(Division.name)
     if organization_id is not None:
@@ -25,6 +25,10 @@ def list_divisions(
     if active_only:
         q = q.filter(Division.is_active.is_(True))
     return q.all()
+
+
+def get_organization_by_id(db: Session, organization_id: int) -> Optional[Organization]:
+    return db.query(Organization).filter(Organization.id == organization_id).first()
 
 
 def get_organization_by_code(db: Session, code: str) -> Optional[Organization]:

@@ -112,7 +112,9 @@ def _restrict_templates_to_nashik_division(
 
 
 def template_info() -> VLookupTemplateResponse:
-    return VLookupTemplateResponse()
+    from app.services.vlookup.template_definition import build_template_description_response
+
+    return VLookupTemplateResponse(**build_template_description_response())
 
 
 def upload_template_and_messy(
@@ -139,12 +141,19 @@ def upload_template_and_messy(
             str(col).lower().strip().replace(" ", "_") for col in template_df.columns
         ]
 
-        required = {"candidate_id", "candidate_name"}
+        from app.services.vlookup.template_definition import (
+            HOURS_TEMPLATE_REQUIRED_COLUMNS,
+            required_template_column_keys,
+        )
+
+        required = required_template_column_keys()
         if not required.issubset(set(template_df.columns)):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Template must include Candidate ID and Candidate Name columns. "
+                    "Template must include "
+                    + " and ".join(HOURS_TEMPLATE_REQUIRED_COLUMNS)
+                    + " columns. "
                     f"Found: {list(template_df.columns)}"
                 ),
             )

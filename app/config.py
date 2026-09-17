@@ -1,6 +1,7 @@
 """Application settings loaded from environment only."""
 
 from functools import lru_cache
+import json
 from typing import List, Optional
 from urllib.parse import quote_plus
 
@@ -33,12 +34,8 @@ class Settings(BaseSettings):
     db_name: Optional[str] = None
     database_url: Optional[str] = None
 
-    # CORS — comma-separated origins (include both localhost and 127.0.0.1)
-    cors_origins: str = (
-        "http://localhost:5173,http://127.0.0.1:5173,"
-        "http://localhost:3000,http://127.0.0.1:3000,"
-        "http://localhost:8080,http://127.0.0.1:8080"
-    )
+    # CORS — comma-separated trusted frontend origins (override via CORS_ORIGINS)
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # Security / JWT
     secret_key: str = "dev-secret-key-incentive-tracker-2026"
@@ -108,14 +105,32 @@ class Settings(BaseSettings):
         return self
 
     def get_cors_origins(self) -> List[str]:
-        val = self.cors_origins.strip()
-        if val.startswith("["):
-            import json
+        """
+        Parse CORS_ORIGINS as a comma-separated list or a JSON array.
+        Wildcards (*) are rejected so credentials remain safe.
+        """
+        raw = (self.cors_origins or "").strip()
+        if not raw:
+            return []
+
+        parsed: List[str]
+        if raw.startswith("["):
             try:
-                return [str(o).strip() for o in json.loads(val)]
-            except Exception:
-                pass
-        return [o.strip() for o in val.split(",") if o.strip()]
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, list):
+                parsed = [str(item).strip() for item in data if str(item).strip()]
+            else:
+                parsed = []
+        else:
+            parsed = [
+                part.strip().strip('"').strip("'")
+                for part in raw.split(",")
+                if part.strip()
+            ]
+
+        return [origin for origin in parsed if origin and origin != "*"]
 
 
 @lru_cache

@@ -127,16 +127,11 @@ class VLookupMatchResponse(BaseModel):
 
 
 class VLookupTemplateResponse(BaseModel):
-    columns: List[str] = Field(
-        default_factory=lambda: [
-            "Candidate ID",
-            "Candidate Name",
-            "Client Name",
-            "Hours Worked",
-            "Month",
-        ]
-    )
-    message: str = "Upload Hours Template + Consolidated File via POST /vlookup/upload"
+    """Hours Template description — fields populated from template_definition."""
+
+    columns: List[str]
+    message: str
+
 
 
 class VLookupPublishHoursResponse(BaseModel):

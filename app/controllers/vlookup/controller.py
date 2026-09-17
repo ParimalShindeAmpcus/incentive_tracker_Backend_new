@@ -131,12 +131,12 @@ def hours_template(
 
 
 @router.get("/consolidated-file", response_model=VLookupMessyFileListResponse)
-@router.get("/messy-file", response_model=VLookupMessyFileListResponse)
 def consolidated_file(
     db: DbSession,
     user: CurrentUser,
     batch_id: Optional[str] = Query(None),
 ) -> VLookupMessyFileListResponse:
+    """Canonical Consolidated File listing (replaces deprecated GET /messy-file)."""
     _ = user
     payload = vlookup_service.list_messy_file(db, batch_id=batch_id)
     return VLookupMessyFileListResponse(**payload)

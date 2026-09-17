@@ -51,28 +51,25 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
         openapi_url="/openapi.json",
     )
+    # Explicit origin allowlist only (from CORS_ORIGINS). No wildcard / intranet regex.
     cors_origins = settings.get_cors_origins()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Accept", "Authorization", "Content-Type", "Origin", "X-Requested-With"],
-        expose_headers=["*"],
+        allow_headers=["Authorization", "Content-Type", "Accept"],
     )
 
     @app.get("/")
     def root():
-        return {
-            "app": settings.app_name,
-            "docs": "/docs",
-            "health": "/health",
-            "api": settings.api_v1_prefix,
-        }
+        """Minimal root response — no app/docs/api surface disclosure."""
+        return {"status": "ok"}
 
-    # Root health (existing contract)
+    # Canonical health check — lightweight process liveness (no auth).
+    # Do not remount under /api/v1/health; that duplicate triggered security audits
+    # and is unused by Docker/K8s/frontend/docs (all use GET /health).
     app.include_router(health_router, prefix="/health", tags=["health"])
-    app.include_router(health_router, prefix=f"{prefix}/health", tags=["health"])
 
     app.include_router(auth_router, prefix=f"{prefix}/auth", tags=["auth"])
     app.include_router(dashboard_router, prefix=f"{prefix}/dashboard", tags=["dashboard"])
