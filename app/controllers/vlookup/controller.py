@@ -150,8 +150,7 @@ def accept_match(
     body: Optional[VLookupReviewBody] = None,
 ) -> VLookupActionResponse:
     payload = body or VLookupReviewBody()
-    if not payload.reviewed_by:
-        payload.reviewed_by = getattr(user, "email", None) or str(user.id)
+    payload.reviewed_by = getattr(user, "email", None) or str(user.id)
     return vlookup_service.accept_match(db, match_id, payload)
 
 
@@ -163,8 +162,7 @@ def reject_match(
     body: Optional[VLookupReviewBody] = None,
 ) -> VLookupActionResponse:
     payload = body or VLookupReviewBody()
-    if not payload.reviewed_by:
-        payload.reviewed_by = getattr(user, "email", None) or str(user.id)
+    payload.reviewed_by = getattr(user, "email", None) or str(user.id)
     return vlookup_service.reject_match(db, match_id, payload)
 
 
@@ -176,8 +174,7 @@ def restore_match(
     body: Optional[VLookupReviewBody] = None,
 ) -> VLookupActionResponse:
     payload = body or VLookupReviewBody()
-    if not payload.reviewed_by:
-        payload.reviewed_by = getattr(user, "email", None) or str(user.id)
+    payload.reviewed_by = getattr(user, "email", None) or str(user.id)
     return vlookup_service.restore_match(db, match_id, payload)
 
 
@@ -188,8 +185,7 @@ def rematch(
     db: DbSession,
     user: CurrentUser,
 ) -> VLookupActionResponse:
-    if not body.reviewed_by:
-        body.reviewed_by = getattr(user, "email", None) or str(user.id)
+    body.reviewed_by = getattr(user, "email", None) or str(user.id)
     return vlookup_service.rematch(db, match_id, body)
 
 
@@ -201,8 +197,7 @@ def rematch_client(
     user: CurrentUser,
 ) -> VLookupActionResponse:
     """Rematch a template candidate to a different client file identity."""
-    if not body.reviewed_by:
-        body.reviewed_by = getattr(user, "email", None) or str(user.id)
+    body.reviewed_by = getattr(user, "email", None) or str(user.id)
     return vlookup_service.rematch_client(db, match_id, body)
 
 
@@ -298,6 +293,5 @@ def edit_candidate_hours(
     user: Annotated[User, Depends(require_roles("ADMIN"))],
 ) -> VLookupActionResponse:
     """Edit candidate hours manually for benchmark purposes."""
-    if not body.reviewed_by:
-        body.reviewed_by = getattr(user, "email", None) or str(user.id)
+    body.reviewed_by = getattr(user, "email", None) or str(user.id)
     return vlookup_service.edit_candidate_hours(db, match_id, body, user)
