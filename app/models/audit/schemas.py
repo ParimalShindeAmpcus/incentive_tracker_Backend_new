@@ -12,8 +12,6 @@ class AuditLogCreate(BaseModel):
     action: AuditAction
     title: str
     details: str
-    user: Optional[str] = None
-    username: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
 

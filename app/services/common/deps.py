@@ -2,7 +2,7 @@
 
 from typing import Annotated, Callable, Optional
 
-from fastapi import Depends, HTTPException, UploadFile, status
+from fastapi import Depends, HTTPException, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -17,23 +17,43 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
+    request: Request,
     db: DbSession,
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)] = None,
 ) -> User:
-    if credentials is None or not credentials.credentials:
+    token = request.cookies.get("access_token")
+    if not token and credentials and credentials.credentials:
+        token = credentials.credentials
+
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        payload = decode_token(credentials.credentials)
+        payload = decode_token(token)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
+
+    jti = payload.get("jti")
+    if not jti:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token structure",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    if auth_repository.is_token_revoked(db, jti):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     if payload.get("type") != "access":
         raise HTTPException(

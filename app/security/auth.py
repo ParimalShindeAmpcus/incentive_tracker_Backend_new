@@ -1,5 +1,6 @@
 """JWT and password helpers."""
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -28,6 +29,7 @@ def _create_token(data: Dict[str, Any], expires_delta: timedelta, token_type: st
             "exp": now + expires_delta,
             "iat": now,
             "type": token_type,
+            "jti": uuid.uuid4().hex,
         }
     )
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)

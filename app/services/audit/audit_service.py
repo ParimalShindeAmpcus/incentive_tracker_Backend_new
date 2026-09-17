@@ -76,8 +76,8 @@ def record_event(
 
 
 def create_log(db: Session, payload: AuditLogCreate, user: User) -> AuditLogOut:
-    user_display = payload.user or _user_display_from_user(user)
-    username = payload.username or _username_from_user(user)
+    user_display = _user_display_from_user(user)
+    username = _username_from_user(user)
     row = audit_repository.write_log(
         db,
         action=payload.action,
@@ -91,31 +91,3 @@ def create_log(db: Session, payload: AuditLogCreate, user: User) -> AuditLogOut:
     db.commit()
     db.refresh(row)
     return AuditLogOut.from_orm_row(row)
-
-
-def record_event(
-    db: Session,
-    *,
-    action: AuditAction,
-    title: str,
-    details: str,
-    user: Optional[User] = None,
-    metadata: Optional[dict[str, Any]] = None,
-    entity_type: Optional[str] = None,
-    entity_id: Optional[str] = None,
-) -> None:
-    """Record an internal audit event; the surrounding service owns the commit."""
-    user_display = _user_display_from_user(user) if user else "System"
-    username = _username_from_user(user) if user else "system"
-    audit_repository.write_log(
-        db,
-        action=action,
-        title=title,
-        details=details,
-        user_display=user_display,
-        username=username,
-        metadata=metadata,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        user_id=user.id if user else None,
-    )

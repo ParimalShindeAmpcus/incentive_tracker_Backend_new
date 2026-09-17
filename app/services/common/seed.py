@@ -25,8 +25,6 @@ DIVISIONS = [
 
 ROLE_DEFS = [
     ("ADMIN", "Full system administrator"),
-    ("ACCOUNTS", "Accounts / payments operator"),
-    ("VIEWER", "Read-only viewer"),
 ]
 
 
@@ -69,7 +67,7 @@ def _seed_roles_and_admin(db: Session) -> None:
             email=email,
             full_name="Default Admin",
             hashed_password=hash_password(settings.default_admin_password),
-            roles=[roles["ADMIN"], roles["ACCOUNTS"]],
+            roles=[roles["ADMIN"]],
             is_active=True,
         )
 

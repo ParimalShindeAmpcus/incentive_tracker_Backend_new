@@ -1,9 +1,11 @@
 """Auth repository — SQL only."""
 
+from datetime import datetime
 from typing import List, Optional, Sequence
 
 from sqlalchemy.orm import Session, joinedload
 
+from app.repositories.entities.auth_revocation import RevokedToken
 from app.repositories.entities.user import Role, User
 
 
@@ -60,3 +62,34 @@ def create_user(
     db.add(user)
     db.flush()
     return user
+
+
+def revoke_token(
+    db: Session,
+    jti: str,
+    token_type: str,
+    expires_at: datetime,
+    user_id: Optional[int] = None,
+) -> None:
+    # Use an upsert-like logic or check if already revoked to avoid unique constraint errors
+    existing = db.query(RevokedToken).filter(RevokedToken.jti == jti).first()
+    if not existing:
+        revoked = RevokedToken(
+            jti=jti,
+            user_id=user_id,
+            token_type=token_type,
+            expires_at=expires_at,
+        )
+        db.add(revoked)
+        db.commit()
+
+
+def is_token_revoked(db: Session, jti: str) -> bool:
+    return db.query(RevokedToken).filter(RevokedToken.jti == jti).first() is not None
+
+
+def cleanup_expired_tokens(db: Session) -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    db.query(RevokedToken).filter(RevokedToken.expires_at < now).delete(synchronize_session=False)
+    db.commit()

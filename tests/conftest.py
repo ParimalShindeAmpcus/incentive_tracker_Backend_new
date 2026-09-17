@@ -50,5 +50,6 @@ def auth_headers(client: TestClient) -> dict[str, str]:
         json={"email": "admin@example.com", "password": "Admin@123"},
     )
     assert response.status_code == 200, response.text
-    token = response.json()["access_token"]
+    token = response.cookies.get("access_token")
+    assert token is not None, "Login did not set access_token cookie"
     return {"Authorization": f"Bearer {token}"}

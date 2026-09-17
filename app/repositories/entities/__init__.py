@@ -28,6 +28,7 @@ from app.repositories.entities.vlookup import (
     VLookupUploadBatch,
     VLookupWeeklyHours,
 )
+from app.repositories.entities.auth_revocation import RevokedToken
 
 __all__ = [
     "AuditAction",
@@ -59,4 +60,5 @@ __all__ = [
     "VLookupTemplateCandidate",
     "VLookupUploadBatch",
     "VLookupWeeklyHours",
+    "RevokedToken",
 ]

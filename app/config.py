@@ -108,7 +108,14 @@ class Settings(BaseSettings):
         return self
 
     def get_cors_origins(self) -> List[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        val = self.cors_origins.strip()
+        if val.startswith("["):
+            import json
+            try:
+                return [str(o).strip() for o in json.loads(val)]
+            except Exception:
+                pass
+        return [o.strip() for o in val.split(",") if o.strip()]
 
 
 @lru_cache

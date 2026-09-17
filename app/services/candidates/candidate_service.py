@@ -15,6 +15,8 @@ from app.models.candidates.schemas import (
 )
 from app.repositories.candidates import candidate_repository
 from app.repositories.entities.candidate import Candidate
+from app.repositories.entities.user import User
+from app.services.audit import audit_service
 
 
 def _to_candidate_out(row: Candidate) -> CandidateOut:
@@ -53,7 +55,7 @@ def get_candidate(db: Session, candidate_id: int) -> CandidateOut:
     return _to_candidate_out(row)
 
 
-def update_candidate(db: Session, candidate_id: int, payload: CandidateUpdate) -> CandidateOut:
+def update_candidate(db: Session, candidate_id: int, payload: CandidateUpdate, user: Optional[User] = None) -> CandidateOut:
     row = candidate_repository.get_candidate(db, candidate_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Candidate not found")
@@ -63,9 +65,16 @@ def update_candidate(db: Session, candidate_id: int, payload: CandidateUpdate) -
     if "client" in data and data["client"]:
         data["normalized_client"] = data["client"].strip().lower()
 
-
     try:
         updated = candidate_repository.update_candidate(db, row, data)
+        audit_service.record_event(
+            db,
+            action="CANDIDATE_UPDATE",
+            title=f"Updated candidate: {updated.candidate_name}",
+            details=f"Updated candidate ID {updated.id} ({updated.start_id or 'No Start ID'})",
+            user=user,
+            metadata={"candidate_id": updated.id, "changes": list(data.keys())},
+        )
         db.commit()
         db.refresh(updated)
         return _to_candidate_out(updated)
@@ -92,7 +101,7 @@ def get_version(db: Session, version_id: int) -> CandidateVersionOut:
 def create_version(
     db: Session,
     payload: CreateVersionRequest,
-    uploaded_by: Optional[int] = None,
+    user: Optional[User] = None,
 ) -> CandidateVersionCreateResponse:
     try:
         version = candidate_repository.create_version(
@@ -101,12 +110,21 @@ def create_version(
             division=payload.division,
             source_filename=payload.source_filename,
             notes=payload.notes,
-            uploaded_by=uploaded_by,
+            uploaded_by=user.id if user else None,
             row_count=len(payload.rows),
         )
         row_dicts = [r.model_dump(exclude_unset=True) for r in payload.rows]
         new_candidates, updated_candidates, duplicate_candidates, rejected_rows = candidate_repository.create_candidates(db, version, row_dicts)
         version.row_count = len(new_candidates) + len(updated_candidates) + len(duplicate_candidates)
+        
+        audit_service.record_event(
+            db,
+            action="FILE_UPLOAD",
+            title=f"Uploaded Candidate Master: {payload.version_label}",
+            details=f"File: {payload.source_filename} | Created: {len(new_candidates)}, Updated: {len(updated_candidates)}, Duplicates: {len(duplicate_candidates)}, Rejected: {len(rejected_rows)}",
+            user=user,
+            metadata={"version_id": version.id, "division": payload.division},
+        )
         db.commit()
         db.refresh(version)
 

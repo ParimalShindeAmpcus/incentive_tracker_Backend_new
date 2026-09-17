@@ -33,11 +33,3 @@ def get_logs(
         skip=skip,
     )
 
-
-@router.post("/logs", response_model=AuditLogOut, status_code=201)
-def create_log(
-    payload: AuditLogCreate,
-    db: DbSession,
-    user: CurrentUser,
-) -> AuditLogOut:
-    return audit_service.create_log(db, payload, user)

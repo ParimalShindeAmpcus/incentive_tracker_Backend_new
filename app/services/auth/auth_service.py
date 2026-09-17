@@ -1,12 +1,12 @@
 """Auth service — orchestration."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models.auth.schemas import LoginRequest, TokenResponse, UserOut
+from app.models.auth.schemas import LoginRequest, UserOut
 from app.repositories.auth import auth_repository
 from app.repositories.entities.user import User
 from app.security.auth import (
@@ -20,7 +20,7 @@ from app.security.auth import (
 _login_attempts: dict[str, tuple[int, datetime]] = {}
 
 
-def login(db: Session, payload: LoginRequest) -> TokenResponse:
+def login(db: Session, payload: LoginRequest) -> tuple[str, str, UserOut]:
     settings = get_settings()
     key = payload.email.lower().strip()
     now = datetime.utcnow()
@@ -39,14 +39,10 @@ def login(db: Session, payload: LoginRequest) -> TokenResponse:
     _login_attempts.pop(key, None)
     access = create_access_token(str(user.id), {"email": user.email})
     refresh = create_refresh_token(str(user.id))
-    return TokenResponse(
-        access_token=access,
-        refresh_token=refresh,
-        user=UserOut.model_validate(user),
-    )
+    return access, refresh, UserOut.model_validate(user)
 
 
-def refresh(db: Session, refresh_token: str) -> TokenResponse:
+def refresh(db: Session, refresh_token: str) -> tuple[str, str, UserOut]:
     try:
         payload = decode_token(refresh_token)
     except ValueError as exc:
@@ -56,6 +52,14 @@ def refresh(db: Session, refresh_token: str) -> TokenResponse:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
 
     sub = payload.get("sub")
+    jti = payload.get("jti")
+    exp = payload.get("exp")
+    if not jti:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token structure")
+
+    if auth_repository.is_token_revoked(db, jti):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token has been revoked")
+
     try:
         user_id = int(sub)
     except (TypeError, ValueError) as exc:
@@ -65,19 +69,45 @@ def refresh(db: Session, refresh_token: str) -> TokenResponse:
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
+    # Revoke the used refresh token (refresh token rotation)
+    if exp:
+        expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+        auth_repository.revoke_token(db, jti=jti, token_type="refresh", expires_at=expires_at, user_id=user_id)
+
     access = create_access_token(str(user.id), {"email": user.email})
     new_refresh = create_refresh_token(str(user.id))
-    return TokenResponse(
-        access_token=access,
-        refresh_token=new_refresh,
-        user=UserOut.model_validate(user),
-    )
+    return access, new_refresh, UserOut.model_validate(user)
 
 
 def me(user: User) -> UserOut:
     return UserOut.model_validate(user)
 
 
-def logout() -> dict:
-    """Logout stub — client discards tokens (stateless JWT)."""
+def logout(db: Session, access_token: str | None = None, refresh_token: str | None = None) -> dict:
+    """Logout — revoke access and refresh tokens."""
+    import jose.jwt
+    
+    auth_repository.cleanup_expired_tokens(db)
+    
+    for token in (access_token, refresh_token):
+        if not token:
+            continue
+        try:
+            # Decode without verifying expiration so we can still extract jti if it's not expired
+            payload = jose.jwt.get_unverified_claims(token)
+            jti = payload.get("jti")
+            exp = payload.get("exp")
+            token_type = payload.get("type", "unknown")
+            sub = payload.get("sub")
+            if jti and exp:
+                expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+                # If already expired, no need to store in revoked table
+                if expires_at > datetime.now(timezone.utc):
+                    user_id = int(sub) if sub and str(sub).isdigit() else None
+                    auth_repository.revoke_token(
+                        db, jti=jti, token_type=token_type, expires_at=expires_at, user_id=user_id
+                    )
+        except Exception:
+            pass  # Malformed tokens can be safely ignored during logout
+            
     return {"message": "logged out"}

@@ -71,7 +71,7 @@ def put_benchmark(
     division: str,
     payload: HoursBenchmarkUpdate,
     db: DbSession,
-    user: User = Depends(require_roles("ADMIN", "ACCOUNTS")),
+    user: User = Depends(require_roles("ADMIN")),
 ) -> HoursBenchmarkOut:
     _ = user
     return hours_service.update_benchmark(db, division, payload, updated_by=None)

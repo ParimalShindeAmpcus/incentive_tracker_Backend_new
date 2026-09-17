@@ -38,7 +38,7 @@ def template() -> VLookupTemplateResponse:
 @router.post("/upload", response_model=VLookupUploadResponse)
 def upload(
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
     template_file: UploadFile = File(..., description="Hours Template CSV/XLSX"),
     consolidated_file: Optional[UploadFile] = File(
         None,
@@ -273,7 +273,7 @@ def download_unmatched(
 @router.post("/publish-hours", response_model=VLookupPublishHoursResponse)
 def publish_hours(
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
     batch_id: Optional[str] = Query(None),
     division: Optional[str] = Query(None),
     include_review_pending: bool = Query(False),
@@ -295,7 +295,7 @@ def edit_candidate_hours(
     match_id: int,
     body: ManualEditHoursBody,
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
 ) -> VLookupActionResponse:
     """Edit candidate hours manually for benchmark purposes."""
     if not body.reviewed_by:

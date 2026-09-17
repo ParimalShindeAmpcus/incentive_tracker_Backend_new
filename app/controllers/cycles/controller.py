@@ -36,7 +36,7 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 def create_cycle(
     payload: CycleCreate,
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
 ) -> CycleOut:
     return cycle_service.create_cycle(db, payload, created_by=user.id)
 
@@ -86,7 +86,7 @@ def patch_match(
     match_id: int,
     payload: MatchUpdate,
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
 ) -> MatchOut:
     _ = user
     return cycle_service.update_match(db, cycle_id, match_id, payload)
@@ -163,7 +163,7 @@ def approve(
     cycle_id: int,
     payload: ApproveRequest,
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
 ) -> CycleOut:
     return cycle_service.approve_cycle(db, cycle_id, payload, user=user)
 
@@ -177,7 +177,7 @@ def get_approval_results(cycle_id: int, db: DbSession) -> List[CycleApprovalResu
 def calculate(
     cycle_id: int,
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN", "ACCOUNTS"))],
+    user: Annotated[User, Depends(require_roles("ADMIN"))],
     payload: Optional[CalculateRequest] = Body(default=None),
 ) -> CalculateResult:
     return cycle_service.calculate_cycle(db, cycle_id, user=user, payload=payload)
