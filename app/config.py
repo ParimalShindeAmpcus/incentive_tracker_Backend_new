@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     # API
     api_v1_prefix: str = "/api/v1"
 
+    # Security headers (SEC-16)
+    # HSTS is intentionally disabled by default so that the local HTTP
+    # development server (http://127.0.0.1:8000) is never affected.
+    # Set HSTS_ENABLED=true only when deploying behind HTTPS in production.
+    hsts_enabled: bool = False
+    hsts_max_age: int = 31_536_000  # 1 year in seconds
+
     # VLOOKUP reconciliation thresholds (identity + client gated)
     threshold_auto_match: float = 88.0
     threshold_suggest: float = 80.0

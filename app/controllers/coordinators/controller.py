@@ -1,6 +1,6 @@
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
-from app.models.coordinators.schemas import BulkMarkLeftResponse, BulkUploadResponse, CoordinatorInput, CoordinatorOut, CoordinatorPage, CoordinatorStatusUpdate, CoordinatorSummary, CoordinatorUpdate
+from app.models.coordinators.schemas import BulkUploadResponse, CoordinatorInput, CoordinatorOut, CoordinatorPage, CoordinatorStatusUpdate, CoordinatorSummary, CoordinatorUpdate
 from app.repositories.entities.coordinator import CoordinatorStatus
 from app.repositories.entities.user import User
 from app.services.common.deps import CurrentUser, DbSession, get_current_user, require_roles
@@ -16,16 +16,10 @@ def get_summary(db: DbSession): return coordinator_service.summary(db)
 def create_coordinator(payload: CoordinatorInput, db: DbSession, user: Annotated[User, Depends(require_roles("ADMIN"))]): return coordinator_service.create(db,payload,user=user)
 @router.post("/bulk-upload", response_model=BulkUploadResponse)
 async def bulk_upload(db: DbSession, user: Annotated[User, Depends(require_roles("ADMIN"))], file: UploadFile = File(...)):
-    from app.services.common.deps import validate_upload_size
+    from app.security.upload import validate_coordinator_upload
 
-    validate_upload_size(file)
-    return coordinator_service.bulk_upload(db, await file.read(), file.filename or "coordinators.csv", user=user)
-@router.post("/bulk-mark-left", response_model=BulkMarkLeftResponse)
-async def bulk_mark_left(db: DbSession, user: Annotated[User, Depends(require_roles("ADMIN"))], file: UploadFile = File(...)):
-    from app.services.common.deps import validate_upload_size
-
-    validate_upload_size(file)
-    return coordinator_service.bulk_mark_left(db, await file.read(), file.filename or "left-coordinators.csv", user=user)
+    content = validate_coordinator_upload(file)
+    return coordinator_service.bulk_upload(db, content, file.filename or "coordinators.xlsx", user=user)
 @router.get("/{coordinator_id}", response_model=CoordinatorOut)
 def get_coordinator(coordinator_id:int, db:DbSession): return coordinator_service.get_coordinator(db,coordinator_id)
 @router.patch("/{coordinator_id}", response_model=CoordinatorOut)

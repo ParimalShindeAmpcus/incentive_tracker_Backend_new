@@ -1,5 +1,6 @@
-import csv, io
+import csv, io, zipfile
 from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 from typing import Optional
 from fastapi import HTTPException, status
 from pydantic import ValidationError
@@ -92,15 +93,98 @@ def delete_left(db, record_id, user: Optional[User] = None):
     if record.employment_status != CoordinatorStatus.LEFT: raise HTTPException(status_code=422, detail="Only coordinators marked Left can be deleted")
     record.is_deleted = True; db.commit()
     audit_service.record_event(db, action="COORDINATOR_DELETE", title=f"Deleted coordinator {record.full_name}", details=f"Soft deleted coordinator {record.full_name}", user=user, entity_type="coordinator", entity_id=str(record.id)); db.commit()
-def _rows(content: bytes, filename: str):
+
+# Minimum required column headers that must be present in an uploaded coordinator file.
+# At least one name column AND the Email column must be present.
+_REQUIRED_COLUMNS_ANY = frozenset({"Coordinator Name", "Full Name"})
+_REQUIRED_COLUMN_EMAIL = "Email"
+
+
+def _rows(content: bytes, filename: str) -> list:
+    """Parse *content* into a list of row dicts.
+
+    Supports XLSX and CSV. Raises HTTP 400 with a safe message for any
+    parsing failure — never propagates raw library exceptions to the caller.
+    """
     if filename.lower().endswith(".xlsx"):
-        sheet = load_workbook(io.BytesIO(content), data_only=True).active
+        try:
+            wb = load_workbook(io.BytesIO(content), data_only=True)
+        except (zipfile.BadZipFile, InvalidFileException, KeyError, Exception) as exc:
+            # Catch all workbook-parse errors and convert to a controlled 400.
+            # The original exception message is intentionally NOT forwarded.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Excel file. The workbook could not be read.",
+            ) from exc
+
+        sheet = wb.active
+        if sheet is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Excel file. No active worksheet found.",
+            )
+
         values = list(sheet.iter_rows(values_only=True))
         if not values:
-            return []
-        headers = [str(value or "").strip() for value in values[0]]
-        return [dict(zip(headers, ["" if value is None else str(value) for value in row])) for row in values[1:]]
-    return list(csv.DictReader(io.StringIO(content.decode("utf-8-sig"))))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded file contains no data.",
+            )
+
+        headers = [str(v or "").strip() for v in values[0]]
+
+        # Validate required columns.
+        header_set = set(headers)
+        if not header_set.intersection(_REQUIRED_COLUMNS_ANY):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Missing required column. "
+                    "The file must contain a 'Coordinator Name' or 'Full Name' column."
+                ),
+            )
+        if _REQUIRED_COLUMN_EMAIL not in header_set:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing required column 'Email' in the uploaded file.",
+            )
+
+        return [
+            dict(zip(headers, ["" if v is None else str(v) for v in row]))
+            for row in values[1:]
+        ]
+
+    # CSV path
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = content.decode("latin-1")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid CSV file. The file could not be decoded as text.",
+            )
+
+    rows = list(csv.DictReader(io.StringIO(text)))
+    if rows:
+        header_set = set(rows[0].keys())
+        if not header_set.intersection(_REQUIRED_COLUMNS_ANY):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Missing required column. "
+                    "The file must contain a 'Coordinator Name' or 'Full Name' column."
+                ),
+            )
+        if _REQUIRED_COLUMN_EMAIL not in header_set:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing required column 'Email' in the uploaded CSV file.",
+            )
+    return rows
+
+
 def bulk_upload(db, content: bytes, filename: str, user: Optional[User] = None):
     issues=[]; created=0
     for index,row in enumerate(_rows(content, filename), 2):
@@ -109,15 +193,3 @@ def bulk_upload(db, content: bytes, filename: str, user: Optional[User] = None):
             create(db,payload,user); created+=1
         except (ValidationError, HTTPException) as exc: issues.append({"source_row":index,"identifier":row.get("Email") or row.get("Coordinator Name") or f"Row {index}","reason":str(getattr(exc,"detail",exc))})
     return {"created_count":created,"issues":issues}
-def bulk_mark_left(db, content: bytes, filename: str, user: Optional[User] = None):
-    issues=[]; changed=0
-    for index,row in enumerate(_rows(content, filename), 2):
-        email=(row.get("Email") or "").strip().lower()
-        if not email: issues.append({"source_row":index,"identifier":f"Row {index}","reason":"Email address is blank"}); continue
-        record=repo.by_email(db,email)
-        if not record: issues.append({"source_row":index,"identifier":email,"reason":"Email was not found"}); continue
-        if record.employment_status != CoordinatorStatus.LEFT: apply_status(record,CoordinatorStatus.LEFT,None); changed+=1
-    db.commit()
-    if changed > 0:
-        audit_service.record_event(db, action="COORDINATOR_UPDATE", title=f"Bulk marked {changed} coordinators as LEFT", details=f"Bulk marked {changed} coordinators as LEFT from {filename}", user=user); db.commit()
-    return {"marked_left_count":changed,"issues":issues}

@@ -6,6 +6,8 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.security.headers import SecurityHeadersMiddleware
+
 from app.config import get_settings
 from app.controllers.audit.controller import router as audit_router
 from app.controllers.auth.controller import router as auth_router
@@ -59,6 +61,16 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Accept"],
+    )
+
+    # SEC-16: add security headers to every response.
+    # Registered after CORS so it wraps the outermost layer and stamps headers
+    # on all responses, including error and 404 responses from Starlette itself.
+    # HSTS is only injected when hsts_enabled=True (production HTTPS only).
+    app.add_middleware(
+        SecurityHeadersMiddleware,
+        hsts_enabled=settings.hsts_enabled,
+        hsts_max_age=settings.hsts_max_age,
     )
 
     @app.get("/")

@@ -51,6 +51,3 @@ class UploadIssue(BaseModel):
 
 class BulkUploadResponse(BaseModel):
     created_count: int; issues: List[UploadIssue]
-
-class BulkMarkLeftResponse(BaseModel):
-    marked_left_count: int; issues: List[UploadIssue]
