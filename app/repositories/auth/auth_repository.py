@@ -71,17 +71,52 @@ def revoke_token(
     expires_at: datetime,
     user_id: Optional[int] = None,
 ) -> None:
-    # Use an upsert-like logic or check if already revoked to avoid unique constraint errors
-    existing = db.query(RevokedToken).filter(RevokedToken.jti == jti).first()
-    if not existing:
-        revoked = RevokedToken(
-            jti=jti,
-            user_id=user_id,
-            token_type=token_type,
-            expires_at=expires_at,
+    """Atomically revoke a token, safe against concurrent logout requests (TOCTOU fix).
+
+    Uses INSERT … ON CONFLICT DO NOTHING for PostgreSQL and an IntegrityError
+    catch for SQLite so that a UNIQUE constraint violation from two simultaneous
+    requests with the same JTI is silently ignored — the token is revoked either
+    way and no exception reaches the caller.
+    """
+    from sqlalchemy import insert
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        bind = db.get_bind() if hasattr(db, "get_bind") else db.bind
+        dialect = bind.dialect.name if bind else "sqlite"
+    except Exception:
+        dialect = "sqlite"
+
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert  # type: ignore[import]
+
+        stmt = (
+            pg_insert(RevokedToken)
+            .values(
+                jti=jti,
+                user_id=user_id,
+                token_type=token_type,
+                expires_at=expires_at,
+            )
+            .on_conflict_do_nothing(index_elements=["jti"])
         )
-        db.add(revoked)
-        db.commit()
+        db.execute(stmt)
+    else:
+        # SQLite / other dialects: attempt an ordinary INSERT and swallow
+        # the unique-constraint IntegrityError from a duplicate JTI.
+        try:
+            stmt = insert(RevokedToken).values(
+                jti=jti,
+                user_id=user_id,
+                token_type=token_type,
+                expires_at=expires_at,
+            )
+            db.execute(stmt)
+        except IntegrityError:
+            db.rollback()
+            return  # Token already revoked — treat as success
+
+    db.commit()
 
 
 def is_token_revoked(db: Session, jti: str) -> bool:

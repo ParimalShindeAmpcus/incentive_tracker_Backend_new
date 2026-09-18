@@ -1,8 +1,21 @@
 """VLOOKUP reconciliation API DTOs."""
 
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+
+class VLookupMatchStatus(str, Enum):
+    """Allowed values for the matches/{status} path parameter (Finding 32)."""
+
+    MATCHED = "matched"
+    NEEDS_REVIEW = "needs_review"
+    UNMATCHED = "unmatched"
+    POTENTIAL_DUPLICATE = "potential_duplicate"
+    CONFLICTING = "conflicting"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
 
 
 class VLookupUploadResponse(BaseModel):

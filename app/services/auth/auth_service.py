@@ -35,7 +35,7 @@ def extract_client_fingerprint(request: Optional[Request]) -> Optional[str]:
 def login(db: Session, payload: LoginRequest, client_fingerprint: Optional[str] = None) -> tuple[str, str, UserOut]:
     settings = get_settings()
     key = payload.email.lower().strip()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     attempt_count, first_seen = _login_attempts.get(key, (0, now))
     if attempt_count >= int(getattr(settings, "max_failed_login_attempts", 5)) and now - first_seen < timedelta(minutes=int(getattr(settings, "lockout_minutes", 15))):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many failed login attempts. Please try again later.")

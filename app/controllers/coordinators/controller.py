@@ -13,7 +13,7 @@ def list_coordinators(db: DbSession, page:int=Query(1,ge=1), page_size:int=Query
 @router.get("/summary", response_model=CoordinatorSummary)
 def get_summary(db: DbSession): return coordinator_service.summary(db)
 @router.post("", response_model=CoordinatorOut, status_code=status.HTTP_201_CREATED)
-def create_coordinator(payload: CoordinatorInput, db: DbSession, user: Annotated[User, Depends(require_roles("ADMIN"))]): return coordinator_service.create(db,payload,user=user)
+def create_coordinator(payload: CoordinatorInput, db: DbSession, user: Annotated[User, Depends(require_roles("ADMIN"))]): return coordinator_service.create(db, payload, user=user)
 @router.post("/bulk-upload", response_model=BulkUploadResponse)
 async def bulk_upload(db: DbSession, user: Annotated[User, Depends(require_roles("ADMIN"))], file: UploadFile = File(...)):
     from app.security.upload import validate_coordinator_upload

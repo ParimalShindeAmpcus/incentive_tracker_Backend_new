@@ -16,12 +16,14 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/versions", response_model=List[ProjectEndVersionOut])
-def list_versions(db: DbSession, division: Optional[str] = Query(None)) -> List[ProjectEndVersionOut]:
+def list_versions(db: DbSession, user: CurrentUser, division: Optional[str] = Query(None)) -> List[ProjectEndVersionOut]:
+    _ = user
     return project_end_service.list_versions(db, division=division)
 
 
 @router.get("/versions/{version_id}", response_model=ProjectEndVersionDetail)
-def get_version(version_id: int, db: DbSession) -> ProjectEndVersionDetail:
+def get_version(version_id: int, db: DbSession, user: CurrentUser) -> ProjectEndVersionDetail:
+    _ = user
     return project_end_service.get_version(db, version_id)
 
 

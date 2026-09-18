@@ -712,7 +712,9 @@ def calculate_special_incentives(
         if len(candidates) >= 2:
             total_base = ZERO
             for c in candidates:
-                base_amt = matrix_amount(c.margin, Decimal("160"))
+                # Placements qualifying for the Recruiter Special Incentive Plan have completed >= 160 hours
+                # and are evaluated against the standard 161+ hours matrix slab (per docx Examples 1-4).
+                base_amt = matrix_amount(c.margin, Decimal("161"))
                 total_base += Decimal(str(base_amt))
             
             avg_bonus = total_base / Decimal(len(candidates))

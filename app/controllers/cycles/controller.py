@@ -32,11 +32,11 @@ from app.services.cycles import cycle_service
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
-@router.post("", response_model=CycleOut)
+@router.post("", response_model=CycleOut, dependencies=[Depends(require_roles("ADMIN"))])
 def create_cycle(
     payload: CycleCreate,
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN"))],
+    user: CurrentUser,
 ) -> CycleOut:
     return cycle_service.create_cycle(db, payload, created_by=user.id)
 
@@ -44,6 +44,7 @@ def create_cycle(
 @router.get("", response_model=List[CycleOut])
 def list_cycles(
     db: DbSession,
+    user: CurrentUser,
     division: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
 ) -> List[CycleOut]:
@@ -51,58 +52,61 @@ def list_cycles(
 
 
 @router.get("/{cycle_id}", response_model=CycleOut)
-def get_cycle(cycle_id: int, db: DbSession) -> CycleOut:
+def get_cycle(cycle_id: int, db: DbSession, user: CurrentUser) -> CycleOut:
     return cycle_service.get_cycle(db, cycle_id)
 
 
-@router.patch("/{cycle_id}", response_model=CycleOut)
-def patch_cycle(cycle_id: int, payload: CycleUpdate, db: DbSession) -> CycleOut:
+@router.patch("/{cycle_id}", response_model=CycleOut, dependencies=[Depends(require_roles("ADMIN"))])
+def patch_cycle(cycle_id: int, payload: CycleUpdate, db: DbSession, user: CurrentUser) -> CycleOut:
     return cycle_service.update_cycle(db, cycle_id, payload)
 
 
-@router.delete("/{cycle_id}")
+@router.delete("/{cycle_id}", dependencies=[Depends(require_roles("ADMIN"))])
 def delete_cycle(cycle_id: int, db: DbSession, user: CurrentUser) -> dict:
     return cycle_service.delete_cycle(db, cycle_id, user=user)
 
 
 @router.get("/{cycle_id}/summary", response_model=CycleSummary)
-def get_summary(cycle_id: int, db: DbSession) -> CycleSummary:
+def get_summary(cycle_id: int, db: DbSession, user: CurrentUser) -> CycleSummary:
     return cycle_service.get_summary(db, cycle_id)
 
 
 @router.get("/{cycle_id}/lines", response_model=List[IncentiveLineOut])
-def get_lines(cycle_id: int, db: DbSession) -> List[IncentiveLineOut]:
+def get_lines(cycle_id: int, db: DbSession, user: CurrentUser) -> List[IncentiveLineOut]:
     return cycle_service.list_lines(db, cycle_id)
 
 
 @router.get("/{cycle_id}/matches", response_model=List[MatchOut])
-def get_matches(cycle_id: int, db: DbSession) -> List[MatchOut]:
+def get_matches(cycle_id: int, db: DbSession, user: CurrentUser) -> List[MatchOut]:
     return cycle_service.list_matches(db, cycle_id)
 
 
-@router.patch("/{cycle_id}/matches/{match_id}", response_model=MatchOut)
+@router.patch("/{cycle_id}/matches/{match_id}", response_model=MatchOut, dependencies=[Depends(require_roles("ADMIN"))])
 def patch_match(
     cycle_id: int,
     match_id: int,
     payload: MatchUpdate,
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN"))],
+    user: CurrentUser,
 ) -> MatchOut:
-    _ = user
     return cycle_service.update_match(db, cycle_id, match_id, payload)
 
 
 @router.get("/{cycle_id}/validations", response_model=List[ValidationOut])
-def get_validations(cycle_id: int, db: DbSession) -> List[ValidationOut]:
+def get_validations(cycle_id: int, db: DbSession, user: CurrentUser) -> List[ValidationOut]:
     return cycle_service.list_validations(db, cycle_id)
 
 
 @router.get("/{cycle_id}/checklist", response_model=List[ChecklistOut])
-def get_checklist(cycle_id: int, db: DbSession) -> List[ChecklistOut]:
+def get_checklist(cycle_id: int, db: DbSession, user: CurrentUser) -> List[ChecklistOut]:
     return cycle_service.list_checklist(db, cycle_id)
 
 
-@router.patch("/{cycle_id}/checklist/{item_id}", response_model=ChecklistOut)
+@router.patch(
+    "/{cycle_id}/checklist/{item_id}",
+    response_model=ChecklistOut,
+    dependencies=[Depends(require_roles("ADMIN", "ACCOUNTS"))],
+)
 def patch_checklist(
     cycle_id: int,
     item_id: int,
@@ -114,7 +118,7 @@ def patch_checklist(
 
 
 @router.get("/{cycle_id}/payment-statuses", response_model=List[PaymentStatusOut])
-def get_payment_statuses(cycle_id: int, db: DbSession) -> List[PaymentStatusOut]:
+def get_payment_statuses(cycle_id: int, db: DbSession, user: CurrentUser) -> List[PaymentStatusOut]:
     return cycle_service.list_payment_statuses(db, cycle_id)
 
 
@@ -130,11 +134,15 @@ def patch_payment_status(
 
 
 @router.get("/{cycle_id}/adjustments", response_model=List[AdjustmentOut])
-def get_adjustments(cycle_id: int, db: DbSession) -> List[AdjustmentOut]:
+def get_adjustments(cycle_id: int, db: DbSession, user: CurrentUser) -> List[AdjustmentOut]:
     return cycle_service.list_adjustments(db, cycle_id)
 
 
-@router.post("/{cycle_id}/adjustments", response_model=AdjustmentOut)
+@router.post(
+    "/{cycle_id}/adjustments",
+    response_model=AdjustmentOut,
+    dependencies=[Depends(require_roles("ADMIN", "ACCOUNTS"))],
+)
 def post_adjustment(
     cycle_id: int,
     payload: AdjustmentCreate,
@@ -158,18 +166,22 @@ async def upload_hours(
     return cycle_service.upload_hours_file(db, cycle_id, file.filename or "hours.xlsx", content, user=user)
 
 
-@router.post("/{cycle_id}/approve", response_model=CycleOut)
+@router.post(
+    "/{cycle_id}/approve",
+    response_model=CycleOut,
+    dependencies=[Depends(require_roles("ADMIN", "ACCOUNTS"))],
+)
 def approve(
     cycle_id: int,
     payload: ApproveRequest,
     db: DbSession,
-    user: Annotated[User, Depends(require_roles("ADMIN"))],
+    user: CurrentUser,
 ) -> CycleOut:
     return cycle_service.approve_cycle(db, cycle_id, payload, user=user)
 
 
 @router.get("/{cycle_id}/approval-results", response_model=List[CycleApprovalResultOut])
-def get_approval_results(cycle_id: int, db: DbSession) -> List[CycleApprovalResultOut]:
+def get_approval_results(cycle_id: int, db: DbSession, user: CurrentUser) -> List[CycleApprovalResultOut]:
     return cycle_service.list_approval_results(db, cycle_id)
 
 

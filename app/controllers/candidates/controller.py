@@ -14,7 +14,7 @@ from app.models.candidates.schemas import (
 )
 from app.repositories.entities.user import User
 from app.services.candidates import candidate_service
-from app.services.common.deps import DbSession, get_current_user, require_roles
+from app.services.common.deps import CurrentUser, DbSession, get_current_user, require_roles
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
@@ -23,6 +23,7 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 @router.get("/candidates", response_model=PaginatedCandidates)
 def list_candidates(
     db: DbSession,
+    user: CurrentUser,
     division: Optional[str] = Query(None),
     project_status: Optional[str] = Query(None, description="Filter by ACTIVE or ENDED project status"),
     page: int = Query(1, ge=1),
@@ -34,7 +35,7 @@ def list_candidates(
 
 
 @router.get("/candidates/{candidate_id}", response_model=CandidateOut)
-def get_candidate(candidate_id: int, db: DbSession) -> CandidateOut:
+def get_candidate(candidate_id: int, db: DbSession, user: CurrentUser) -> CandidateOut:
     return candidate_service.get_candidate(db, candidate_id)
 
 
@@ -49,12 +50,12 @@ def patch_candidate(
 
 
 @router.get("/candidate-data/versions", response_model=List[CandidateVersionOut])
-def list_versions(db: DbSession, division: Optional[str] = Query(None)) -> List[CandidateVersionOut]:
+def list_versions(db: DbSession, user: CurrentUser, division: Optional[str] = Query(None)) -> List[CandidateVersionOut]:
     return candidate_service.list_versions(db, division=division)
 
 
 @router.get("/candidate-data/versions/{version_id}", response_model=CandidateVersionOut)
-def get_version(version_id: int, db: DbSession) -> CandidateVersionOut:
+def get_version(version_id: int, db: DbSession, user: CurrentUser) -> CandidateVersionOut:
     return candidate_service.get_version(db, version_id)
 
 

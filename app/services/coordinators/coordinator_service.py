@@ -63,6 +63,8 @@ def create(db: Session, payload: CoordinatorInput, user: Optional[User] = None):
     db.commit()
     db.refresh(record)
     return record
+
+
 def update(db: Session, record_id: int, payload: CoordinatorUpdate, user: Optional[User] = None):
     record = get_coordinator(db, record_id); data = payload.model_dump(exclude_unset=True)
     if "email" in data and data["email"]:

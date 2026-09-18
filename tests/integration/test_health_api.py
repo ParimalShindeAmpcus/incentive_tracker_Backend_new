@@ -7,19 +7,14 @@ from app.main import app
 from app.services.health import health_service
 
 
-@pytest.mark.asyncio
-async def test_health_endpoint():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/health")
-        assert response.status_code == 200
-        body = response.json()
-        assert body == {"status": "ok"}
+def test_health_endpoint(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
 
 
-@pytest.mark.asyncio
-async def test_health_does_not_expose_sensitive_fields():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        body = (await client.get("/health")).json()
+def test_health_does_not_expose_sensitive_fields(client):
+    body = client.get("/health").json()
     forbidden = {
         "database_url",
         "secret",
@@ -40,11 +35,9 @@ async def test_health_does_not_expose_sensitive_fields():
     assert set(body.keys()) == {"status"}
 
 
-@pytest.mark.asyncio
-async def test_duplicate_api_v1_health_route_removed():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/v1/health")
-        assert response.status_code == 404
+def test_duplicate_api_v1_health_route_removed(client):
+    response = client.get("/api/v1/health")
+    assert response.status_code == 404
 
 
 def test_openapi_has_single_health_path():

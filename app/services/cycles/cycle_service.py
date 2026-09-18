@@ -689,6 +689,50 @@ def upload_hours_file(
 ) -> HoursUploadOut:
     cycle = _require_cycle(db, cycle_id)
     placement_only = is_ampcus_client_division(cycle.division)
+
+    # VULN-INPUT-001: File size limit (15MB) and magic-byte hardening
+    max_file_size = 15 * 1024 * 1024
+    if len(content) > max_file_size:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file exceeds the maximum allowed size limit of 15MB.",
+        )
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty.",
+        )
+
+    lower_fname = (filename or "").lower().strip()
+    if lower_fname.endswith(".xlsx"):
+        if not content.startswith(b"PK\x03\x04"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid file format: Excel .xlsx files must be valid OpenXML spreadsheets.",
+            )
+    elif lower_fname.endswith(".xls"):
+        if not content.startswith(b"\xd0\xcf\x11\xe0"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid file format: Legacy .xls files must be valid compound documents.",
+            )
+    elif lower_fname.endswith(".csv"):
+        try:
+            content[:2048].decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                content[:2048].decode("latin-1")
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid file format: CSV files must contain valid text characters.",
+                ) from exc
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file extension. Only .xlsx, .xls, and .csv files are supported.",
+        )
+
     try:
         rows = parse_hours_template(content, filename, require_hours=not placement_only)
         assert_rows_match_cycle_month(rows, cycle.incentive_month)

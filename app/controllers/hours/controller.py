@@ -23,21 +23,25 @@ benchmarks_router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/versions", response_model=List[VersionMetaOut])
-def list_versions(db: DbSession, division: Optional[str] = Query(None)) -> List[VersionMetaOut]:
+def list_versions(db: DbSession, user: CurrentUser, division: Optional[str] = Query(None)) -> List[VersionMetaOut]:
+    _ = user
     return hours_service.list_versions(db, division=division)
 
 
 @router.get("/published", response_model=PublishedHoursOut)
 def get_published_hours(
     db: DbSession,
+    user: CurrentUser,
     month: str = Query(..., description="Incentive month as YYYY-MM (e.g. 2026-08)"),
 ) -> PublishedHoursOut:
     """Latest published hours_rows for the selected Incentive Month (DB source of truth)."""
+    _ = user
     return hours_service.get_published_for_month(db, month)
 
 
 @router.get("/versions/{version_id}", response_model=HoursVersionDetail)
-def get_version(version_id: int, db: DbSession) -> HoursVersionDetail:
+def get_version(version_id: int, db: DbSession, user: CurrentUser) -> HoursVersionDetail:
+    _ = user
     return hours_service.get_version_detail(db, version_id)
 
 
@@ -62,7 +66,8 @@ def patch_hours_row(
 
 
 @benchmarks_router.get("", response_model=List[HoursBenchmarkOut])
-def list_benchmarks(db: DbSession) -> List[HoursBenchmarkOut]:
+def list_benchmarks(db: DbSession, user: CurrentUser) -> List[HoursBenchmarkOut]:
+    _ = user
     return hours_service.list_benchmarks(db)
 
 

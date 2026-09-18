@@ -13,6 +13,7 @@ from app.models.vlookup.schemas import (
     VLookupDraftOut,
     VLookupHoursTemplateListResponse,
     VLookupMatchesByStatusResponse,
+    VLookupMatchStatus,
     VLookupMessyFileListResponse,
     VLookupPublishHoursResponse,
     VLookupRematchBody,
@@ -76,7 +77,7 @@ def stats(
 
 @router.get("/matches/{status}", response_model=VLookupMatchesByStatusResponse)
 def matches_by_status(
-    status: str,
+    status: VLookupMatchStatus,
     db: DbSession,
     user: CurrentUser,
     batch_id: Optional[str] = Query(None),
@@ -84,7 +85,7 @@ def matches_by_status(
 ) -> VLookupMatchesByStatusResponse:
     _ = user
     return vlookup_service.get_matches_by_status(
-        db, status=status, batch_id=batch_id, month=month
+        db, status=status.value, batch_id=batch_id, month=month
     )
 
 

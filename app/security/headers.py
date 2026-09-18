@@ -7,9 +7,12 @@ Adds comprehensive HTTP security headers to every API response:
   - Strict-Transport-Security: max-age=...; includeSubDomains
   - X-XSS-Protection: 1; mode=block
   - Content-Security-Policy: default-src 'self'; ...
+  - X-Request-ID: request correlation tracing (SEC-22)
 """
 
 from typing import Optional
+import uuid
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -64,6 +67,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         self._referrer_policy = referrer_policy
 
     async def dispatch(self, request: Request, call_next) -> Response:
+        # SEC-22: Assign or propagate a Request ID for cross-service log correlation.
+        # Re-use an existing header so that reverse proxies / load balancers that
+        # inject their own ID (e.g. AWS ALB, nginx) are transparently propagated.
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        # Expose on request.state so downstream handlers/loggers can reference it.
+        request.state.request_id = request_id
+
         response: Response = await call_next(request)
 
         # 1. Prevent MIME-type sniffing attacks.
@@ -94,5 +104,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             or request.headers.get("x-forwarded-proto", "").lower() == "https"
         ):
             response.headers["Strict-Transport-Security"] = self._hsts_value
+
+        # Echo the Request ID back so clients can correlate logs with responses.
+        response.headers["X-Request-ID"] = request_id
 
         return response
