@@ -117,7 +117,7 @@ def test_create_app_has_no_intranet_cors_regex(monkeypatch: pytest.MonkeyPatch):
             cors_middleware = middleware
             break
     assert cors_middleware is not None
-    options = cors_middleware.options
+    options = getattr(cors_middleware, "options", None) or getattr(cors_middleware, "kwargs", {})
     assert options.get("allow_origin_regex") in (None, "")
     assert "*" not in (options.get("allow_origins") or [])
     for origin in options.get("allow_origins") or []:

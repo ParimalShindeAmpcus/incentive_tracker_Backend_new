@@ -8,6 +8,8 @@ from urllib.parse import quote_plus
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.security.headers import DEFAULT_CSP_POLICY
+
 
 class Settings(BaseSettings):
     """Application settings — env-backed with sensible defaults."""
@@ -52,11 +54,11 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     # Security headers (SEC-16)
-    # HSTS is intentionally disabled by default so that the local HTTP
-    # development server (http://127.0.0.1:8000) is never affected.
-    # Set HSTS_ENABLED=true only when deploying behind HTTPS in production.
-    hsts_enabled: bool = False
+    # Enabled by default to satisfy security audit headers (HSTS, CSP, XSS, etc.).
+    # Can be configured or toggled via environment variables if necessary.
+    hsts_enabled: bool = True
     hsts_max_age: int = 31_536_000  # 1 year in seconds
+    csp_policy: str = DEFAULT_CSP_POLICY
 
     # VLOOKUP reconciliation thresholds (identity + client gated)
     threshold_auto_match: float = 88.0

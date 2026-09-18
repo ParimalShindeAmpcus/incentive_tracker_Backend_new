@@ -66,11 +66,13 @@ def create_app() -> FastAPI:
     # SEC-16: add security headers to every response.
     # Registered after CORS so it wraps the outermost layer and stamps headers
     # on all responses, including error and 404 responses from Starlette itself.
-    # HSTS is only injected when hsts_enabled=True (production HTTPS only).
+    # Enforces CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
+    # X-XSS-Protection, and Strict-Transport-Security (HSTS).
     app.add_middleware(
         SecurityHeadersMiddleware,
         hsts_enabled=settings.hsts_enabled,
         hsts_max_age=settings.hsts_max_age,
+        csp_policy=settings.csp_policy,
     )
 
     @app.get("/")
@@ -101,3 +103,5 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+__all__ = ["create_app", "app", "SecurityHeadersMiddleware"]
