@@ -580,16 +580,27 @@ def _fte_recruiter_amount(finder_fee_above: bool, placement_count: int) -> int:
 
 
 def sn_finder_fee_above_from_master(candidate: Candidate) -> bool:
-    """True when Candidate Master Finder Fees is Above $4,500."""
+    """True when Candidate Master Finder Fees is Above $4,500.
+
+    Handles all stored variants: ABOVE$4500, ABOVE_$4500, ABOVE500, ABOVE_500
+    (the 500-variant is treated as the same below/above $4,500 threshold).
+    """
     raw = (
         str(getattr(candidate, "finder_fees", None) or "")
         .strip().upper()
-        .replace(" ", "").replace("-", "").replace("$", "").replace(",", "")
+        .replace(" ", "").replace("-", "").replace("_", "").replace("$", "").replace(",", "")
     )
-    if raw == "ABOVE4500":
+    # Match any ABOVE* variant (ABOVE4500, ABOVE500, ABOVE4,500, etc.)
+    if raw in {"ABOVE4500", "ABOVE500"} or (
+        raw.startswith("ABOVE") and any(ch.isdigit() for ch in raw)
+    ):
         return True
-    if raw == "BELOW4500":
+    # Match any BELOW* variant (BELOW4500, BELOW500, BELOW4,500, etc.)
+    if raw in {"BELOW4500", "BELOW500"} or (
+        raw.startswith("BELOW") and any(ch.isdigit() for ch in raw)
+    ):
         return False
+    # Fallback: numeric finders_fee amount on Candidate Master
     fee = getattr(candidate, "finders_fee", None)
     if fee is not None:
         try:
@@ -630,7 +641,7 @@ def calculate_fte_placement(
     details_base = {
         "contract_type": "FULLTIME",
         "atc_fte": True,
-        "finder_fees": finder_raw,
+        "finder_fees": "ABOVE_4500" if finder_fee_above else ("BELOW_4500" if finder_raw not in {"", "NONE", "NULL", "N/A", "NA"} else "NONE"),
         "finder_fee_above_threshold": finder_fee_above,
         "placement_count_this_month": placement_count_this_month,
         "payment_status": payment_status,

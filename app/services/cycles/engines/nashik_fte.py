@@ -330,7 +330,7 @@ def calculate_nashik_fte_placement(
         "ninety_day_eligible_date": eligible_on.isoformat() if eligible_on else None,
         "days_completed": days_done,
         "fte_min_days": FTE_MIN_DAYS,
-        "finder_fees": getattr(c, "finder_fees", None) or "NONE",
+        "finder_fees": "ABOVE_4500" if fee_above else ("BELOW_4500" if fee_resolved is not None else "NONE"),
         "finder_fee_label": finder_fee_label(c),
         "finder_fee_above_threshold": fee_above,
         "placement_month": placement_month_from_start(c.start_date),

@@ -108,21 +108,38 @@ def is_fte_contract(contract_type: Optional[str]) -> bool:
 
 
 def sn_finder_fee_above_from_master(c: "Candidate") -> bool:
-    """Return True when the Candidate Master finder_fees indicates above $4,500."""
+    """Return True when the Candidate Master finder_fees indicates above $4,500.
+
+    Handles all stored variants: ABOVE4500, ABOVE_4500, ABOVE500, ABOVE_500
+    (the 500-variant is treated as the same below/above $4,500 threshold).
+    """
     raw = (
         str(getattr(c, "finder_fees", None) or "")
         .strip().upper()
-        .replace(" ", "").replace("-", "").replace("$", "").replace(",", "")
+        .replace(" ", "").replace("-", "").replace("_", "").replace("$", "").replace(",", "")
     )
-    return raw in {"ABOVE500", "ABOVE_500", "ABOVE4500"}
+    # Match any ABOVE* variant (ABOVE4500, ABOVE500, etc.)
+    if raw in {"ABOVE4500", "ABOVE500"} or (
+        raw.startswith("ABOVE") and any(ch.isdigit() for ch in raw)
+    ):
+        return True
+    return False
 
 
 def sn_finder_fee_label(c: "Candidate") -> str:
     """Return a human-readable label for the candidate's finder's fee tier."""
-    raw = str(getattr(c, "finder_fees", None) or "NONE").strip().upper()
-    if raw in {"ABOVE_500", "ABOVE500", "ABOVE4500"}:
+    raw = (
+        str(getattr(c, "finder_fees", None) or "NONE")
+        .strip().upper()
+        .replace(" ", "").replace("-", "").replace("_", "").replace("$", "").replace(",", "")
+    )
+    if raw in {"ABOVE4500", "ABOVE500"} or (
+        raw.startswith("ABOVE") and any(ch.isdigit() for ch in raw)
+    ):
         return "Above $4500"
-    if raw in {"BELOW_500", "BELOW500", "BELOW4500"}:
+    if raw in {"BELOW4500", "BELOW500"} or (
+        raw.startswith("BELOW") and any(ch.isdigit() for ch in raw)
+    ):
         return "Below $4500"
     return "None"
 
@@ -578,7 +595,7 @@ def calculate_fte_placement(
         ),
         "days_completed": days_done,
         "fte_min_days": int(FTE_MIN_DAYS),
-        "finder_fees": finder_raw,
+        "finder_fees": "ABOVE_4500" if fee_above else ("BELOW_4500" if finder_raw not in {"", "NONE", "NULL", "N/A", "NA"} else "NONE"),
         "finder_fee_label": sn_finder_fee_label(c),
         "finder_fee_above_threshold": fee_above,
         "placement_count_this_month": placement_count_this_month,
