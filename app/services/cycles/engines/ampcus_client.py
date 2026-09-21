@@ -579,7 +579,7 @@ def _fte_recruiter_amount(finder_fee_above: bool, placement_count: int) -> int:
     return slabs[0]
 
 
-def _finder_fee_above_from_master(candidate: Candidate) -> bool:
+def sn_finder_fee_above_from_master(candidate: Candidate) -> bool:
     """True when Candidate Master Finder Fees is Above $4,500."""
     raw = (
         str(getattr(candidate, "finder_fees", None) or "")
@@ -622,7 +622,7 @@ def calculate_fte_placement(
 
     payment_status = str(getattr(payment, "status", "PAYMENT_PENDING") or "PAYMENT_PENDING").upper()
     paid = payment_status in {"RECEIVED", "PAYMENT_RECEIVED"}
-    finder_fee_above = _finder_fee_above_from_master(candidate)
+    finder_fee_above = sn_finder_fee_above_from_master(candidate)
     finder_raw = str(getattr(candidate, "finder_fees", None) or "NONE").strip().upper()
 
     days_completed = (cycle_end - candidate.start_date).days if candidate.start_date else 0

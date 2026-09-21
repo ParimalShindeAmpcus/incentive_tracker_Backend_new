@@ -496,7 +496,7 @@ def run_cycle_calculation(
             start_month = (
                 cand.start_date.strftime("%Y-%m") if cand.start_date else (cycle.incentive_month or "")
             )
-            fee_above = finder_fee_above_from_master(cand)  # True or False
+            fee_above = sn_finder_fee_above_from_master(cand)  # True or False
             # Key includes tier so below-$4500 and above-$4500 are counted independently
             tier_key = (str(cand.recruiter or "").strip().lower(), start_month, fee_above)
             atc_fte_month_counts[tier_key] += 1
@@ -509,7 +509,7 @@ def run_cycle_calculation(
                 start_month = (
                     candidate.start_date.strftime("%Y-%m") if candidate.start_date else (cycle.incentive_month or "")
                 )
-                fee_above = finder_fee_above_from_master(candidate)
+                fee_above = sn_finder_fee_above_from_master(candidate)
                 tier_key = (str(candidate.recruiter or "").strip().lower(), start_month, fee_above)
                 placement_count = atc_fte_month_counts.get(tier_key, 1)
 

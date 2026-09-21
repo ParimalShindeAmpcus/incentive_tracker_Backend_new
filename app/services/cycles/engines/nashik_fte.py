@@ -103,7 +103,7 @@ def finder_fee_is_set(candidate: Candidate) -> bool:
     return resolve_finder_fee_above(candidate) is not None
 
 
-def finder_fee_above_from_master(candidate: Candidate) -> bool:
+def sn_finder_fee_above_from_master(candidate: Candidate) -> bool:
     """True when Candidate Master Finder Fees is Above $4500."""
     return resolve_finder_fee_above(candidate) is True
 

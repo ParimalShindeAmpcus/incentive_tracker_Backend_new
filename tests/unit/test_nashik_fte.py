@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from app.services.cycles.engines.nashik_fte import (
     build_nashik_fte_slab_counts,
     calculate_nashik_fte_placement,
-    finder_fee_above_from_master,
+    sn_finder_fee_above_from_master,
     nashik_fte_placement_count_for_candidate,
     ninety_day_eligible_date,
     placement_month_from_start,
@@ -65,10 +65,10 @@ def test_ninety_day_eligible_date():
     assert ninety_day_eligible_date(date(2026, 1, 1)) == date(2026, 4, 1)
 
 
-def test_finder_fee_above_from_master():
-    assert finder_fee_above_from_master(_cand(finder_fees="ABOVE_500")) is True
-    assert finder_fee_above_from_master(_cand(finder_fees="BELOW_500")) is False
-    assert finder_fee_above_from_master(_cand(finder_fees="NONE")) is False
+def test_sn_finder_fee_above_from_master():
+    assert sn_finder_fee_above_from_master(_cand(finder_fees="ABOVE_500")) is True
+    assert sn_finder_fee_above_from_master(_cand(finder_fees="BELOW_500")) is False
+    assert sn_finder_fee_above_from_master(_cand(finder_fees="NONE")) is False
 
 
 def test_placement_month_from_start_ignores_cycle_month():

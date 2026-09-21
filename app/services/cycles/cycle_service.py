@@ -61,7 +61,7 @@ from app.services.cycles.engines.sambhaji_nagar import (
 from app.services.incentives.nashik_rules import is_nashik_division
 from app.services.cycles.engines.nashik_fte import (
     days_completed_from_start,
-    finder_fee_above_from_master,
+    sn_finder_fee_above_from_master,
     finder_fee_label,
     ninety_day_eligible_date,
 )
@@ -348,7 +348,7 @@ def list_payment_statuses(db: Session, cycle_id: int) -> List[PaymentStatusOut]:
             )
             if nashik and is_fte_contract(cand.contract_type):
                 # Nashik FTE: Finder Fee + days come from Candidate Master (not re-entered).
-                payload["finder_fee_above_threshold"] = finder_fee_above_from_master(cand)
+                payload["finder_fee_above_threshold"] = sn_finder_fee_above_from_master(cand)
                 payload["days_completed"] = days_completed_from_start(cand.start_date, as_of)
                 eligible_on = ninety_day_eligible_date(cand.start_date)
                 payload["ninety_day_eligible_date"] = eligible_on
