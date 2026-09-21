@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.repositories.entities.candidate import Candidate
 from app.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
@@ -26,37 +26,47 @@ def is_ampcus_inhouse_division(division: Optional[str]) -> bool:
 
 
 def is_ampcus_inhouse_candidate(
+    candidate: Any = None,
     *,
     division: Optional[str] = None,
     organization: Optional[str] = None,
+    client: Optional[str] = None,
+    end_client: Optional[str] = None,
     candidate_source: Optional[str] = None,
     contract_type: Optional[str] = None,
 ) -> bool:
     """
     True only for genuine Ampcus Tech In-House placements.
-
-    Do NOT treat bare FULLTIME as In-House — Nashik FTE / other Full-Time
-    placements must not auto-enter the In-House cycle.
+    In-House is separated strictly based on organization, client name, or end client name
+    containing Ampcus Tech In-House / Ampcus Inhouse / Ampcusinhouse / Ampcus Tech Internal / Inhouse.
+    Location is completely irrelevant for In-House qualification.
     """
-    if is_ampcus_inhouse_division(division):
+    if candidate is not None:
+        div = getattr(candidate, "division", None) or division
+        org = getattr(candidate, "organization", None) or organization
+        cl = getattr(candidate, "client", None) or client
+        ecl = getattr(candidate, "end_client", None) or end_client
+        src = getattr(candidate, "candidate_source", None) or candidate_source
+    else:
+        div = division
+        org = organization
+        cl = client
+        ecl = end_client
+        src = candidate_source
+
+    if is_ampcus_inhouse_division(div):
         return True
 
-    org_blob = f"{organization or ''} {candidate_source or ''}".strip().lower()
-    org_compact = org_blob.replace(" ", "").replace("-", "").replace("_", "")
-    contract = str(contract_type or "").strip().upper().replace(" ", "").replace("-", "").replace("_", "")
+    text_blob = f"{org or ''} {cl or ''} {ecl or ''} {src or ''}".strip().lower()
+    compact = text_blob.replace(" ", "").replace("-", "").replace("_", "")
 
-    # Explicit In-House contract type.
-    if contract == "INHOUSE":
+    # In-House qualification: organization, client, or end_client indicates In-House
+    if "inhouse" in compact:
         return True
-
-    # Organisation / source must clearly indicate Ampcus Tech In-House.
-    if "inhouse" in org_compact and (
-        "ampcustech" in org_compact or "ampcustechnology" in org_compact or "ampcus" in org_compact
-    ):
+    if "ampcus" in text_blob and ("in house" in text_blob.replace("-", " ") or "internal" in text_blob):
         return True
-
-    # Phrases like "Ampcus Tech Inhouse" / "Ampcus Tech - In House"
-    if "ampcus" in org_blob and "in house" in org_blob.replace("-", " "):
+    ct = str(contract_type or "").strip().upper().replace(" ", "").replace("-", "").replace("_", "")
+    if ct == "INHOUSE":
         return True
 
     return False

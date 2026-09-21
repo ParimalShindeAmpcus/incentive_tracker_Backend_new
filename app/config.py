@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 import json
+from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote_plus
 
@@ -10,12 +11,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.security.headers import DEFAULT_CSP_POLICY
 
+BASE_DIR = Path(__file__).resolve().parents[1]
+ENV_FILE = BASE_DIR / ".env"
+
 
 class Settings(BaseSettings):
     """Application settings — env-backed with sensible defaults."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(str(ENV_FILE), ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

@@ -79,13 +79,11 @@ def candidate_matches_division(candidate: Candidate, cycle_division: str) -> boo
             is_ampcus_tech_client = True
         return is_ampcus_tech_client
 
+    if is_ampcus_inhouse_candidate(candidate):
+        return is_ampcus_inhouse_division(cycle_division)
+
     if is_ampcus_inhouse_division(cycle_division):
-        return is_ampcus_inhouse_candidate(
-            division=candidate.division,
-            organization=candidate.organization,
-            candidate_source=candidate.candidate_source,
-            contract_type=candidate.contract_type,
-        )
+        return is_ampcus_inhouse_candidate(candidate)
 
     if is_sambhaji_nagar_division(cycle_division):
         loc = (candidate.recruiter_location or "").lower()
@@ -120,6 +118,16 @@ def resolve_candidates_for_cycle(db: Session, cycle) -> List[Candidate]:
         masters = candidate_repository.list_candidates_for_cycle(
             db, version_id=cycle.candidate_version_id
         )
+        if is_ampcus_inhouse_division(cycle.division):
+            return [
+                c for c in masters
+                if is_ampcus_inhouse_candidate(c) and not is_seed_candidate(c)
+            ]
+        if is_nashik_division(cycle.division):
+            return [
+                c for c in masters
+                if candidate_matches_division(c, "nashik") and not is_seed_candidate(c)
+            ]
         return [c for c in masters if not is_seed_candidate(c)]
 
     masters = candidate_repository.list_candidates_for_cycle(db, division=cycle.division)
