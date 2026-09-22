@@ -1065,7 +1065,7 @@ def _format_export_month(value: Any) -> str:
     return raw
 
 
-def _export_row(cycle, line, cand) -> list:
+def _export_row_from_line(line, cand, cycle, hod_map: dict) -> list:
     meta = _parse_explanation(getattr(line, "explanation_json", None))
     role = line.role or ""
     coord_type = "Crm" if role == "CRM" else ("Asso Director" if role == "Associate Director" else role)
