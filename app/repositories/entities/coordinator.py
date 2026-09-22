@@ -24,6 +24,7 @@ class CoordinatorRecord(Base):
     bank_name: Mapped[Optional[str]] = mapped_column(String(255))
     account_number: Mapped[Optional[str]] = mapped_column(String(100))
     ifsc_code: Mapped[Optional[str]] = mapped_column(String(50))
+    hod_name: Mapped[Optional[str]] = mapped_column(String(255))
     incentive_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

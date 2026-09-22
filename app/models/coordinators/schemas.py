@@ -14,6 +14,7 @@ class CoordinatorInput(BaseModel):
     bank_name: Optional[str] = None
     account_number: Optional[str] = None
     ifsc_code: Optional[str] = None
+    hod_name: str = Field(min_length=1, max_length=255)
 
 class CoordinatorUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -26,6 +27,7 @@ class CoordinatorUpdate(BaseModel):
     bank_name: Optional[str] = None
     account_number: Optional[str] = None
     ifsc_code: Optional[str] = None
+    hod_name: Optional[str] = None
 
 class CoordinatorStatusUpdate(BaseModel):
     employment_status: CoordinatorStatus
@@ -35,10 +37,11 @@ class CoordinatorListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int; full_name: str; normalized_name: str; email: EmailStr; organization: str; role_title: str
     employment_status: CoordinatorStatus; start_date: Optional[date]; exit_date: Optional[date]; incentive_eligible: bool
+    hod_name: Optional[str] = None
     created_at: Optional[datetime] = None; updated_at: Optional[datetime] = None
 
 class CoordinatorOut(CoordinatorListItem):
-    bank_name: Optional[str] = None; account_number: Optional[str] = None; ifsc_code: Optional[str] = None
+    bank_name: Optional[str] = None; account_number: Optional[str] = None; ifsc_code: Optional[str] = None; hod_name: Optional[str] = None
 
 class CoordinatorPage(BaseModel):
     items: List[CoordinatorListItem]; total: int; page: int; page_size: int

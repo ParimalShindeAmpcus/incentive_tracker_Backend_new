@@ -1104,11 +1104,11 @@ def _export_row(cycle, line, cand) -> list:
         float(line.hours or 0),
         int(round(float(line.amount or 0))),
         incentive_type,
-        "",  # Team column: header kept, values intentionally blank in Excel export
+        hod_map.get(line.person, ""),
     ]
 
 
-def _export_row_from_snapshot(row) -> list:
+def _export_row_from_snapshot(row, hod_map: dict) -> list:
     role = row.role or ""
     coord_type = "Crm" if role == "CRM" else ("Asso Director" if role == "Associate Director" else role)
     incentive_type = "Recurring" if (row.incentive_type or "").upper() == "RECURRING" else "One-time"
@@ -1130,7 +1130,7 @@ def _export_row_from_snapshot(row) -> list:
         float(row.hours or 0),
         int(round(float(row.amount or 0))),
         incentive_type,
-        "",  # Team column: header kept, values intentionally blank in Excel export
+        hod_map.get(row.person, ""),
     ]
 
 
@@ -1143,6 +1143,10 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
     sheet = workbook.active
     sheet.title = "Sheet1"
     nashik = is_nashik_division(cycle.division)
+    
+    from app.repositories.entities.coordinator import CoordinatorRecord
+    coords = db.query(CoordinatorRecord).all()
+    hod_map = {c.full_name: (c.hod_name or "") for c in coords}
     headers = [
         "Coordinator Name",
         "Coordinator Type",
@@ -1164,7 +1168,7 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
         for row in snapshots:
             if not row.eligible or Decimal(str(row.amount or 0)) <= 0:
                 continue
-            base = [_sanitize_excel_value(value) for value in _export_row_from_snapshot(row)]
+            base = [_sanitize_excel_value(value) for value in _export_row_from_snapshot(row, hod_map)]
             if nashik:
                 ct = str(row.contract_type or "").upper()
                 candidate_type = "FTE" if ct in {"FULLTIME", "FULL_TIME", "FT", "FTE"} else "W2/C2C"
@@ -1178,10 +1182,10 @@ def export_cycle(db: Session, cycle_id: int, user: Optional[User] = None) -> Str
             for cand in candidate_repository.list_all_candidates(db)
         }
         for line in lines:
-            if not line.eligible or Decimal(str(line.amount or 0)) <= 0:
+            if not line.eligible or float(line.amount or 0) <= 0:
                 continue
-            cand = candidates.get(line.candidate_id) if line.candidate_id else None
-            base = [_sanitize_excel_value(value) for value in _export_row(cycle, line, cand)]
+            cand = candidates.get(line.candidate_id)
+            base = [_sanitize_excel_value(value) for value in _export_row_from_line(line, cand, cycle, hod_map)]
             if nashik:
                 explanation = line.explanation_json or ""
                 if "nashik_fte" in explanation or '"candidate_type": "FTE"' in explanation:

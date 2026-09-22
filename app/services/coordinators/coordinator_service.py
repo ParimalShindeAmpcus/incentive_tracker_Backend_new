@@ -46,7 +46,7 @@ def summary(db):
 def create(db: Session, payload: CoordinatorInput, user: Optional[User] = None):
     email = str(payload.email).lower()
     if repo.by_email(db, email): raise HTTPException(status_code=409, detail="A coordinator with this email already exists")
-    record = CoordinatorRecord(full_name=payload.full_name.strip(), normalized_name=norm(payload.full_name), email=email, organization=payload.organization.strip(), role_title=payload.role_title.strip(), start_date=payload.start_date, bank_name=payload.bank_name, account_number=payload.account_number, ifsc_code=payload.ifsc_code.upper() if payload.ifsc_code else None)
+    record = CoordinatorRecord(full_name=payload.full_name.strip(), normalized_name=norm(payload.full_name), email=email, organization=payload.organization.strip(), role_title=payload.role_title.strip(), start_date=payload.start_date, bank_name=payload.bank_name, account_number=payload.account_number, ifsc_code=payload.ifsc_code.upper() if payload.ifsc_code else None, hod_name=payload.hod_name.strip() if payload.hod_name else None)
     apply_status(record, payload.employment_status, payload.exit_date)
     db.add(record)
     db.flush()
@@ -72,7 +72,7 @@ def update(db: Session, record_id: int, payload: CoordinatorUpdate, user: Option
         if existing and existing.id != record.id: raise HTTPException(status_code=409, detail="A coordinator with this email already exists")
         record.email = str(data.pop("email")).lower()
     if "full_name" in data and data["full_name"]: record.full_name=data["full_name"].strip(); record.normalized_name=norm(record.full_name)
-    for field in ("organization", "role_title", "start_date", "bank_name", "account_number", "ifsc_code"):
+    for field in ("organization", "role_title", "start_date", "bank_name", "account_number", "ifsc_code", "hod_name"):
         if field in data: setattr(record, field, data[field].strip().upper() if field == "ifsc_code" and data[field] else data[field])
     apply_status(record, data.get("employment_status", record.employment_status), data.get("exit_date", record.exit_date))
     db.commit()
@@ -100,6 +100,7 @@ def delete_left(db, record_id, user: Optional[User] = None):
 # At least one name column AND the Email column must be present.
 _REQUIRED_COLUMNS_ANY = frozenset({"Coordinator Name", "Full Name"})
 _REQUIRED_COLUMN_EMAIL = "Email"
+_REQUIRED_COLUMN_HOD = "HOD Name"
 
 
 def _rows(content: bytes, filename: str) -> list:
@@ -150,6 +151,11 @@ def _rows(content: bytes, filename: str) -> list:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Missing required column 'Email' in the uploaded file.",
             )
+        if _REQUIRED_COLUMN_HOD not in header_set:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing required column 'HOD Name' in the uploaded file.",
+            )
 
         return [
             dict(zip(headers, ["" if v is None else str(v) for v in row]))
@@ -184,6 +190,11 @@ def _rows(content: bytes, filename: str) -> list:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Missing required column 'Email' in the uploaded CSV file.",
             )
+        if _REQUIRED_COLUMN_HOD not in header_set:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing required column 'HOD Name' in the uploaded CSV file.",
+            )
     return rows
 
 
@@ -191,7 +202,7 @@ def bulk_upload(db, content: bytes, filename: str, user: Optional[User] = None):
     issues=[]; created=0
     for index,row in enumerate(_rows(content, filename), 2):
         try:
-            payload=CoordinatorInput(full_name=row.get("Coordinator Name") or row.get("Full Name") or "", email=row.get("Email") or "", organization=row.get("Organization") or "", role_title=row.get("Role") or row.get("Role / Title") or "", employment_status=row.get("Employment Status") or "ACTIVE", exit_date=row.get("Exit Date") or None, bank_name=row.get("Bank Name") or None, account_number=row.get("Account Number") or None, ifsc_code=row.get("IFSC Code") or None)
+            payload=CoordinatorInput(full_name=row.get("Coordinator Name") or row.get("Full Name") or "", email=row.get("Email") or "", organization=row.get("Organization") or "", role_title=row.get("Role") or row.get("Role / Title") or "", employment_status=row.get("Employment Status") or "ACTIVE", exit_date=row.get("Exit Date") or None, bank_name=row.get("Bank Name") or None, account_number=row.get("Account Number") or None, ifsc_code=row.get("IFSC Code") or None, hod_name=row.get("HOD Name") or None)
             create(db,payload,user); created+=1
         except (ValidationError, HTTPException) as exc: issues.append({"source_row":index,"identifier":row.get("Email") or row.get("Coordinator Name") or f"Row {index}","reason":str(getattr(exc,"detail",exc))})
     return {"created_count":created,"issues":issues}
