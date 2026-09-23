@@ -157,8 +157,8 @@ def upload_template_and_messy(
 
         template_months = sorted(
             {
-                normalize_month_year(str(v))
-                for v in template_df.get("month", pd.Series(dtype=str)).dropna().unique()
+            normalize_month_year(str(v))
+            for v in template_df.get("month", pd.Series(dtype=str)).dropna().unique()
                 if str(v).strip()
                 and str(v).lower() != "nan"
                 and normalize_month_year(str(v))
@@ -394,7 +394,7 @@ def upload_template_and_messy(
             (parsed.get("warnings") or [])
             + ([month_note] if month_note else [])
             + ([nashik_scope_note] if nashik_scope_note else [])
-        )
+            )
 
         upload_batch = VLookupUploadBatch(
             batch_id=batch_id,
