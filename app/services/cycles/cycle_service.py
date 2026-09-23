@@ -1068,7 +1068,7 @@ def _format_export_month(value: Any) -> str:
 def _export_row_from_line(line, cand, cycle, hod_map: dict) -> list:
     meta = _parse_explanation(getattr(line, "explanation_json", None))
     role = line.role or ""
-    coord_type = "Crm" if role == "CRM" else ("Asso Director" if role == "Associate Director" else role)
+    coord_type = "CRM" if role == "CRM" else ("Asso Director" if role == "Associate Director" else role)
     incentive_type = "Recurring" if line.incentive_type == "RECURRING" else "One-time"
     start = ""
     if cand and cand.start_date:
@@ -1110,7 +1110,7 @@ def _export_row_from_line(line, cand, cycle, hod_map: dict) -> list:
 
 def _export_row_from_snapshot(row, hod_map: dict) -> list:
     role = row.role or ""
-    coord_type = "Crm" if role == "CRM" else ("Asso Director" if role == "Associate Director" else role)
+    coord_type = "CRM" if role == "CRM" else ("Asso Director" if role == "Associate Director" else role)
     incentive_type = "Recurring" if (row.incentive_type or "").upper() == "RECURRING" else "One-time"
     start = _format_start_date(row.start_date)
     margin_val: Any = ""
