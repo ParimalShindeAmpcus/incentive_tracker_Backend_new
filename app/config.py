@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     # API
     api_v1_prefix: str = "/api/v1"
 
+    # SMTP Email Settings
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = "nikita.ampcus@gmail.com"
+    smtp_password: str = "heuzmnqoouwylcss"
+    smtp_from_email: str = "nikita.ampcus@gmail.com"
+    smtp_from_name: str = "Incentive Tracker Portal"
+
     # Special Incentive (Recruiter of the Month) — tie payout policy
     # true: each tied winner receives ₹5,000; false: list tie with incentive 0
     special_incentive_tie_pay_all: bool = True

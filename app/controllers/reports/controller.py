@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.models.reports.schemas import (
     ReportCycleItem,
@@ -13,9 +13,11 @@ from app.models.reports.schemas import (
     ReportMonthsResponse,
     ReportResponse,
     ReportTeamsResponse,
+    SendReportEmailRequest,
+    SendReportEmailResponse,
 )
 from app.services.common.deps import CurrentUser, DbSession
-from app.services.reports import reports_service
+from app.services.reports import email_service, reports_service
 
 router = APIRouter(prefix="/reports")
 
@@ -144,3 +146,37 @@ def get_report_employees(
         hod=None if not hod or hod == "ALL" else hod,
     )
     return ReportEmployeesResponse(employees=employees)
+
+
+@router.post("/send-email", response_model=SendReportEmailResponse)
+def send_report_email_endpoint(
+    payload: SendReportEmailRequest,
+    db: DbSession,
+    user: CurrentUser,
+) -> SendReportEmailResponse:
+    """Generates the report attachment in memory and sends it to recipient email addresses via Gmail SMTP."""
+    _ = user
+    db_rows = []
+    if not payload.selected_rows:
+        from_d = date.fromisoformat(payload.from_date) if payload.from_date else None
+        to_d = date.fromisoformat(payload.to_date) if payload.to_date else None
+        report_data = reports_service.get_report(
+            db,
+            division=None if not payload.division or payload.division == "ALL" else payload.division,
+            hod=None if not payload.hod or payload.hod == "ALL" else payload.hod,
+            employee_name=payload.employee,
+            from_date=from_d,
+            to_date=to_d,
+            approved_only=True,
+        )
+        db_rows = [row.model_dump() for row in report_data.rows]
+    else:
+        db_rows = payload.selected_rows
+
+    try:
+        return email_service.send_report_email(payload, db_rows)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

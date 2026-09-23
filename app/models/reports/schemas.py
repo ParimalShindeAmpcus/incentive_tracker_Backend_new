@@ -66,3 +66,25 @@ class ReportCyclesResponse(BaseModel):
 
 class ReportMonthsResponse(BaseModel):
     months: List[str]
+
+
+class SendReportEmailRequest(BaseModel):
+    to_emails: List[str]
+    cc_emails: Optional[List[str]] = None
+    subject: Optional[str] = None
+    body_text: Optional[str] = None
+    file_format: str = "EXCEL"  # "EXCEL" or "CSV"
+    division: Optional[str] = None
+    hod: Optional[str] = None
+    employee: Optional[str] = None
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    selected_rows: Optional[List[dict]] = None
+
+
+class SendReportEmailResponse(BaseModel):
+    success: bool
+    message: str
+    recipients_sent: List[str]
+    filename_attached: str
+
