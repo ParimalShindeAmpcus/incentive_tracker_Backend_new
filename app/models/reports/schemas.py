@@ -26,6 +26,11 @@ class ReportRowOut(BaseModel):
     cycle_id: Optional[int] = None
     cycle_name: Optional[str] = None
     incentive_month: Optional[str] = None
+    metric_type: str = "HOURS"
+    monthly_hours: Optional[Union[Decimal, float, int]] = None
+    monthly_days: Optional[int] = None
+    validation_summary: Optional[str] = None
+    rule_applied: Optional[str] = None
 
 
 class ReportResponse(BaseModel):
@@ -36,3 +41,28 @@ class ReportResponse(BaseModel):
 
 class ReportTeamsResponse(BaseModel):
     teams: List[str]
+
+
+class ReportHODsResponse(BaseModel):
+    hods: List[str]
+
+
+class ReportEmployeesResponse(BaseModel):
+    employees: List[str]
+
+
+class ReportCycleItem(BaseModel):
+    id: int
+    name: str
+    division: str
+    incentive_month: str
+    status: str
+    row_count: int = 0
+
+
+class ReportCyclesResponse(BaseModel):
+    cycles: List[ReportCycleItem]
+
+
+class ReportMonthsResponse(BaseModel):
+    months: List[str]

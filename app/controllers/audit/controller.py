@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, status
 
 from app.models.audit.schemas import AuditLogCreate, AuditLogOut
 from app.repositories.entities.audit import AuditAction
@@ -33,3 +33,11 @@ def get_logs(
         skip=skip,
     )
 
+
+@router.post("/logs", response_model=AuditLogOut, status_code=status.HTTP_201_CREATED)
+def create_log(
+    payload: AuditLogCreate,
+    db: DbSession,
+    user: CurrentUser,
+) -> AuditLogOut:
+    return audit_service.create_log(db, payload, user)

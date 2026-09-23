@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # API
     api_v1_prefix: str = "/api/v1"
 
+    # Special Incentive (Recruiter of the Month) — tie payout policy
+    # true: each tied winner receives ₹5,000; false: list tie with incentive 0
+    special_incentive_tie_pay_all: bool = True
+
     # Security headers (SEC-16)
     # Enabled by default to satisfy security audit headers (HSTS, CSP, XSS, etc.).
     # Can be configured or toggled via environment variables if necessary.

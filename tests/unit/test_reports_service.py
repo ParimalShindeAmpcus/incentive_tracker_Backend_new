@@ -13,7 +13,7 @@ from app.services.reports.reports_service import (
 
 
 def test_coordinator_type_labels():
-    assert _coordinator_type_label("CRM") == "Crm"
+    assert _coordinator_type_label("CRM") == "CRM"
     assert _coordinator_type_label("Associate Director") == "Asso Director"
     assert _coordinator_type_label("Recruiter") == "Recruiter"
 
@@ -73,3 +73,66 @@ def test_to_row_shape():
     assert mapped.incentive_amount_inr == Decimal("2500")
     assert mapped.incentive_type == "Recurring"
     assert mapped.team == "Majid Khan"
+
+
+def test_to_row_excluded_recruiter():
+    row = {
+        "person": "Arjun Singh",
+        "role": "Recruiter",
+        "line_candidate_name": "Rakesh Yadav",
+        "amount": Decimal("0.00"),
+        "hours": Decimal("172"),
+        "line_margin": Decimal("14.05"),
+        "incentive_type": "RECURRING",
+        "cycle_id": 1,
+        "cycle_name": "June 2026 Sambhaji Nagar",
+        "division": "sambhajiNagar",
+        "incentive_month": "2026-06",
+        "external_candidate_id": "ACT20250",
+        "candidate_name": "Rakesh Yadav",
+        "start_date": date(2026, 5, 31),
+        "contract_type": "W2",
+        "candidate_source": "LinkedIn",
+        "organization": "Ampcus Inc",
+        "candidate_margin": Decimal("14.05"),
+        "eligible": False,
+        "reason": "PAYMENT_PENDING",
+    }
+    mapped = _to_row(row)
+    assert mapped.coordinator_name == "Arjun Singh"
+    assert mapped.coordinator_type == "Recruiter"
+    assert mapped.candidate_id == "ACT20250"
+    assert mapped.incentive_amount_inr == Decimal("0")
+    assert mapped.incentive_type == "Recurring"
+
+
+def test_to_row_pending_leadership():
+    row = {
+        "person": "Manoj Tiwari",
+        "role": "CRM",
+        "line_candidate_name": "Rakesh Yadav",
+        "amount": Decimal("0.00"),
+        "hours": Decimal("172"),
+        "line_margin": Decimal("14.05"),
+        "incentive_type": "ONE_TIME",
+        "cycle_id": 1,
+        "cycle_name": "June 2026 Sambhaji Nagar",
+        "division": "sambhajiNagar",
+        "incentive_month": "2026-06",
+        "external_candidate_id": "ACT20250",
+        "candidate_name": "Rakesh Yadav",
+        "start_date": date(2026, 5, 31),
+        "contract_type": "W2",
+        "candidate_source": "LinkedIn",
+        "organization": "Ampcus Inc",
+        "candidate_margin": Decimal("14.05"),
+        "eligible": False,
+        "reason": "PAYMENT_PENDING",
+    }
+    mapped = _to_row(row)
+    assert mapped.coordinator_name == "Manoj Tiwari"
+    assert mapped.coordinator_type == "CRM"
+    assert mapped.candidate_id == "ACT20250"
+    assert mapped.incentive_amount_inr == Decimal("0")
+    assert mapped.incentive_type == "One-time"
+

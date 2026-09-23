@@ -25,6 +25,7 @@ from app.controllers.project_end.controller import router as project_end_router
 from app.controllers.coordinators.controller import router as coordinators_router
 from app.controllers.reports.controller import router as reports_router
 from app.controllers.vlookup.controller import router as vlookup_router
+from app.controllers.special_incentive.controller import router as special_incentive_router
 from app.core.db import init_db
 from app.services.common.seed import seed_database
 
@@ -101,6 +102,11 @@ def create_app() -> FastAPI:
     app.include_router(audit_router, prefix=f"{prefix}/audit", tags=["audit"])
     app.include_router(vlookup_router, prefix=f"{prefix}/vlookup", tags=["vlookup"])
     app.include_router(reports_router, prefix=prefix, tags=["reports"])
+    app.include_router(
+        special_incentive_router,
+        prefix=f"{prefix}/special-incentive",
+        tags=["special-incentive"],
+    )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
