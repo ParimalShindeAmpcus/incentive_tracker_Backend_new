@@ -623,7 +623,7 @@ def run_cycle_calculation(
                     eff_candidate.incentive_active = True
 
             drafts = calculate_inhouse_placement(eff_candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
-            if any(line.reason == "INHOUSE_90_DAY_REQUIREMENT_NOT_MET" for line in drafts):
+            if any(line.reason in {"INHOUSE_90_DAY_REQUIREMENT_NOT_MET", "INHOUSE_STARTED_BEFORE_POLICY_DATE", "MISSING_START_DATE"} for line in drafts):
                 not_90_days += 1
             if any(line.reason == "CANDIDATE_INACTIVE" for line in drafts):
                 inactive += 1

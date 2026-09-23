@@ -137,7 +137,11 @@ def calculate_placement(c: Candidate, *, cycle_end: date, coordinators: Dict[str
     days = (cycle_end - c.start_date).days if getattr(c, "start_date", None) else 0
 
     # --- Candidate-level gates (all roles excluded together) ---
-    if not getattr(c, "start_date", None) or c.start_date < MIN_START or days < 90:
+    if not getattr(c, "start_date", None):
+        return [_line(c, role, person, 0, False, "MISSING_START_DATE", days) for role, person in people.items()]
+    if c.start_date < MIN_START:
+        return [_line(c, role, person, 0, False, "INHOUSE_STARTED_BEFORE_POLICY_DATE", days) for role, person in people.items()]
+    if days < 90:
         return [_line(c, role, person, 0, False, "INHOUSE_90_DAY_REQUIREMENT_NOT_MET", days) for role, person in people.items()]
     # W2: Added ABSCOND to catch absconded candidates
     if getattr(c, "incentive_active", True) is False or any(x in status for x in ("INACTIVE", "TERMINAT", "RESIGN", "LEFT", "ABSCOND")):
