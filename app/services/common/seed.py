@@ -71,6 +71,24 @@ def _seed_roles_and_admin(db: Session) -> None:
             is_active=True,
         )
 
+    # Additional Admin accounts
+    additional_admins = [
+        ("priya@example.com", "Priya"),
+        ("abhishek@example.com", "Abhishek"),
+    ]
+    for admin_email, admin_name in additional_admins:
+        e = admin_email.lower().strip()
+        u = auth_repository.get_user_by_email(db, e)
+        if u is None:
+            auth_repository.create_user(
+                db,
+                email=e,
+                full_name=admin_name,
+                hashed_password=hash_password(settings.default_admin_password),
+                roles=[roles["ADMIN"]],
+                is_active=True,
+            )
+
 
 def _seed_organization(db: Session):
     org = organization_repository.get_organization_by_code(db, "DEFAULT")
