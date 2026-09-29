@@ -85,15 +85,29 @@ Default standalone configuration:
 - `MIS_DB_NAME=mis_prism_db`, `MIS_DB_SCHEMA=mis`
 - `PRISM_DB_NAME=mis_prism_db`, `PRISM_DB_SCHEMA=prism`
 
-### 3. Merge Existing Databases (Optional / First-Time Migration)
+### 3. Create Standalone Database & Tables (Single File)
 
-To merge existing `mis_db` and `incentive_tracker` into `mis_prism_db`:
+Create the unified standalone database (`mis_prism_db`) with all schemas, tables, and views:
 
 ```bash
-python scripts/merge_to_single_db.py
+python create_db.py
+# Or:
+python scripts/create_db.py
+# Optional reset: python scripts/create_db.py --reset
 ```
 
-### 4. Run the Unified Backend
+### 4. Seed Test Users & Data (Single File)
+
+Seed test users, roles, organizations, dropdowns, and sample records for both Starts MIS and PRISM:
+
+```bash
+python seed_data.py
+# Or:
+python scripts/seed_data.py
+# Options: --mis-only, --prism-only, --reset-passwords
+```
+
+### 5. Run the Unified Backend
 
 ```bash
 python main.py
