@@ -1,0 +1,570 @@
+"""Cycle repository — SQL only."""
+
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import List, Optional
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from prism.repositories.entities.cycle import (
+    CycleApprovalResult,
+    CycleChecklistItem,
+    CycleHoursMatch,
+    CycleManualAdjustment,
+    CyclePaymentStatus,
+    CycleStatus,
+    CycleValidationResult,
+    IncentiveCycle,
+    MatchResult,
+)
+from prism.repositories.entities.incentive import IncentiveLine
+
+
+def create_cycle(db: Session, data: dict) -> IncentiveCycle:
+    cycle = IncentiveCycle(**data)
+    db.add(cycle)
+    db.flush()
+    return cycle
+
+
+def resolve_cycle_status_filter(status: Optional[str]) -> Optional[List[CycleStatus]]:
+    """Map a UI/API status value to DB enums. None means no status filter.
+
+    Dashboard badges collapse MATCHED/VALIDATED into Draft and PAID/CLOSED into Approved.
+    """
+    if not status:
+        return None
+    key = str(status).strip().upper()
+    if not key or key in {"ALL", "*"}:
+        return None
+    groups = {
+        "DRAFT": [CycleStatus.DRAFT, CycleStatus.MATCHED, CycleStatus.VALIDATED],
+        "CALCULATED": [CycleStatus.CALCULATED],
+        "APPROVED": [CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED],
+        "PAID": [CycleStatus.PAID],
+        "CLOSED": [CycleStatus.CLOSED],
+        "MATCHED": [CycleStatus.MATCHED],
+        "VALIDATED": [CycleStatus.VALIDATED],
+    }
+    if key in groups:
+        return groups[key]
+    try:
+        return [CycleStatus(key)]
+    except ValueError:
+        return []
+
+
+def list_cycles(
+    db: Session,
+    *,
+    division: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[IncentiveCycle]:
+    q = db.query(IncentiveCycle)
+    if division:
+        q = q.filter(IncentiveCycle.division == division)
+    statuses = resolve_cycle_status_filter(status)
+    if statuses is not None:
+        if not statuses:
+            return []
+        q = q.filter(IncentiveCycle.status.in_(statuses))
+    return q.order_by(IncentiveCycle.id.desc()).all()
+
+
+def get_cycle(db: Session, cycle_id: int) -> Optional[IncentiveCycle]:
+    return db.query(IncentiveCycle).filter(IncentiveCycle.id == cycle_id).first()
+
+
+def update_cycle(db: Session, cycle: IncentiveCycle, data: dict) -> IncentiveCycle:
+    for key, value in data.items():
+        if key == "status" and value is not None:
+            setattr(cycle, key, CycleStatus(value) if isinstance(value, str) else value)
+        else:
+            setattr(cycle, key, value)
+    db.add(cycle)
+    db.flush()
+    return cycle
+
+
+def delete_cycle(db: Session, cycle: IncentiveCycle) -> None:
+    db.delete(cycle)
+    db.flush()
+
+
+def list_matches(db: Session, cycle_id: int) -> List[CycleHoursMatch]:
+    return (
+        db.query(CycleHoursMatch)
+        .filter(CycleHoursMatch.cycle_id == cycle_id)
+        .order_by(CycleHoursMatch.id)
+        .all()
+    )
+
+
+def get_match(db: Session, match_id: int) -> Optional[CycleHoursMatch]:
+    return db.query(CycleHoursMatch).filter(CycleHoursMatch.id == match_id).first()
+
+
+def update_match(db: Session, match: CycleHoursMatch, data: dict) -> CycleHoursMatch:
+    for key, value in data.items():
+        if key == "match_result" and value is not None:
+            setattr(match, key, MatchResult(value) if isinstance(value, str) else value)
+        else:
+            setattr(match, key, value)
+    db.add(match)
+    db.flush()
+    return match
+
+
+def list_validations(db: Session, cycle_id: int) -> List[CycleValidationResult]:
+    return (
+        db.query(CycleValidationResult)
+        .filter(CycleValidationResult.cycle_id == cycle_id)
+        .order_by(CycleValidationResult.id)
+        .all()
+    )
+
+
+def list_checklist(db: Session, cycle_id: int) -> List[CycleChecklistItem]:
+    return (
+        db.query(CycleChecklistItem)
+        .filter(CycleChecklistItem.cycle_id == cycle_id)
+        .order_by(CycleChecklistItem.id)
+        .all()
+    )
+
+
+def get_checklist_item(db: Session, item_id: int) -> Optional[CycleChecklistItem]:
+    return db.query(CycleChecklistItem).filter(CycleChecklistItem.id == item_id).first()
+
+
+def update_checklist_item(
+    db: Session,
+    item: CycleChecklistItem,
+    *,
+    is_checked: bool,
+    notes: Optional[str],
+    checked_by: Optional[int],
+) -> CycleChecklistItem:
+    item.is_checked = is_checked
+    if notes is not None:
+        item.notes = notes
+    item.checked_by = checked_by
+    item.checked_at = datetime.now(timezone.utc) if is_checked else None
+    db.add(item)
+    db.flush()
+    return item
+
+
+def ensure_default_checklist(db: Session, cycle_id: int) -> List[CycleChecklistItem]:
+    existing = list_checklist(db, cycle_id)
+    if existing:
+        return existing
+    defaults = [
+        ("data_uploaded", "Source data uploaded"),
+        ("matches_reviewed", "Matches reviewed"),
+        ("validations_cleared", "Validations cleared"),
+        ("calculations_reviewed", "Calculations reviewed"),
+    ]
+    items = []
+    for key, label in defaults:
+        item = CycleChecklistItem(cycle_id=cycle_id, item_key=key, label=label, is_checked=False)
+        db.add(item)
+        items.append(item)
+    db.flush()
+    return items
+
+
+def list_payment_statuses(db: Session, cycle_id: int) -> List[CyclePaymentStatus]:
+    return (
+        db.query(CyclePaymentStatus)
+        .filter(CyclePaymentStatus.cycle_id == cycle_id)
+        .order_by(CyclePaymentStatus.id)
+        .all()
+    )
+
+
+def clear_payment_statuses(db: Session, cycle_id: int) -> None:
+    db.query(CyclePaymentStatus).filter(CyclePaymentStatus.cycle_id == cycle_id).delete(
+        synchronize_session=False
+    )
+    db.flush()
+
+
+def ensure_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) -> List[CyclePaymentStatus]:
+    existing = {row.candidate_id for row in list_payment_statuses(db, cycle_id)}
+    created = []
+    for candidate_id in candidate_ids:
+        if candidate_id not in existing:
+            row = CyclePaymentStatus(cycle_id=cycle_id, candidate_id=candidate_id, status="PAYMENT_PENDING")
+            db.add(row)
+            created.append(row)
+    db.flush()
+    return created
+
+
+def sync_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) -> List[CyclePaymentStatus]:
+    existing = {row.candidate_id: row for row in list_payment_statuses(db, cycle_id)}
+    target_ids = set(candidate_ids)
+    for cand_id, row in existing.items():
+        if cand_id not in target_ids:
+            db.delete(row)
+    created = []
+    for candidate_id in target_ids:
+        if candidate_id not in existing:
+            new_row = CyclePaymentStatus(cycle_id=cycle_id, candidate_id=candidate_id, status="PAYMENT_PENDING")
+            db.add(new_row)
+            created.append(new_row)
+    db.flush()
+    return created
+
+
+def replace_payment_statuses(db: Session, cycle_id: int, candidate_ids: List[int]) -> List[CyclePaymentStatus]:
+    clear_payment_statuses(db, cycle_id)
+    created: List[CyclePaymentStatus] = []
+    for candidate_id in candidate_ids:
+        row = CyclePaymentStatus(cycle_id=cycle_id, candidate_id=candidate_id, status="PAYMENT_PENDING")
+        db.add(row)
+        created.append(row)
+    db.flush()
+    return created
+
+
+def prior_nashik_fte_payment_received_ids(
+    db: Session,
+    *,
+    exclude_cycle_id: int,
+    candidate_ids: Optional[List[int]] = None,
+) -> dict[int, CyclePaymentStatus]:
+    """
+    Map candidate_id → prior payment-status row where Nashik FTE payment was already
+    marked RECEIVED in an approved/paid/closed prior cycle.
+    """
+    from prism.repositories.entities.candidate import Candidate
+    from prism.services.cycles.engines.sambhaji_nagar import is_fte_contract
+    from prism.services.incentives.nashik_rules import is_nashik_division
+
+    q = (
+        db.query(CyclePaymentStatus, IncentiveCycle, Candidate)
+        .join(IncentiveCycle, IncentiveCycle.id == CyclePaymentStatus.cycle_id)
+        .join(Candidate, Candidate.id == CyclePaymentStatus.candidate_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            CyclePaymentStatus.status.in_(["RECEIVED", "PAYMENT_RECEIVED"]),
+        )
+        .order_by(IncentiveCycle.incentive_month.desc(), CyclePaymentStatus.id.desc())
+    )
+    if candidate_ids:
+        q = q.filter(CyclePaymentStatus.candidate_id.in_(candidate_ids))
+
+    found: dict[int, CyclePaymentStatus] = {}
+    for pay_row, cycle, cand in q.all():
+        if not is_nashik_division(cycle.division):
+            continue
+        if not is_fte_contract(cand.contract_type):
+            continue
+        if pay_row.candidate_id in found:
+            continue
+        found[pay_row.candidate_id] = pay_row
+    return found
+
+
+def apply_nashik_fte_prior_payment_carryforward(
+    db: Session,
+    cycle_id: int,
+    *,
+    candidate_ids: Optional[List[int]] = None,
+) -> set[int]:
+    """
+    Nashik FTE: if payment was already marked RECEIVED in a prior approved cycle
+    and hierarchy one-time was paid, carry RECEIVED into the current cycle and
+    return those candidate IDs (hidden from payment-marking UI).
+
+    Payment-received without hierarchy payout yet still carries RECEIVED so
+    calculation stays correct, and those candidates are also hidden from re-marking.
+    """
+    prior_received = prior_nashik_fte_payment_received_ids(
+        db, exclude_cycle_id=cycle_id, candidate_ids=candidate_ids
+    )
+    if not prior_received:
+        return set()
+
+    # Do not ask to mark payment again once it was received in a prior approved cycle.
+    hide_ids = set(prior_received.keys())
+
+    current_rows = {
+        row.candidate_id: row
+        for row in list_payment_statuses(db, cycle_id)
+        if row.candidate_id in hide_ids
+    }
+    for cid, prior_row in prior_received.items():
+        row = current_rows.get(cid)
+        if row is None:
+            continue
+        status_u = str(row.status or "").upper()
+        if status_u not in {"RECEIVED", "PAYMENT_RECEIVED"}:
+            row.status = "RECEIVED"
+            if prior_row.payment_received_date and not row.payment_received_date:
+                row.payment_received_date = prior_row.payment_received_date
+            note = (row.notes or "").strip()
+            carry_note = "Payment already received in a previous Nashik cycle; carried forward."
+            if carry_note not in note:
+                row.notes = f"{note}\n{carry_note}".strip() if note else carry_note
+            db.add(row)
+    db.flush()
+    return hide_ids
+
+
+def get_payment_status(db: Session, status_id: int) -> Optional[CyclePaymentStatus]:
+    return db.query(CyclePaymentStatus).filter(CyclePaymentStatus.id == status_id).first()
+
+
+def update_payment_status(
+    db: Session,
+    row: CyclePaymentStatus,
+    *,
+    status: str,
+    payment_received_date=None,
+    payment_reference: Optional[str] = None,
+    notes: Optional[str],
+    updated_by: Optional[int],
+    finder_fee_above_threshold: Optional[bool] = None,
+) -> CyclePaymentStatus:
+    row.status = status
+    if payment_received_date is not None:
+        row.payment_received_date = payment_received_date
+    if payment_reference is not None:
+        row.payment_reference = payment_reference
+    if notes is not None:
+        row.notes = notes
+    if finder_fee_above_threshold is not None:
+        row.finder_fee_above_threshold = finder_fee_above_threshold
+    row.updated_by = updated_by
+    db.add(row)
+    db.flush()
+    return row
+
+
+def list_adjustments(db: Session, cycle_id: int) -> List[CycleManualAdjustment]:
+    return (
+        db.query(CycleManualAdjustment)
+        .filter(CycleManualAdjustment.cycle_id == cycle_id)
+        .order_by(CycleManualAdjustment.id)
+        .all()
+    )
+
+
+def create_adjustment(db: Session, data: dict) -> CycleManualAdjustment:
+    row = CycleManualAdjustment(**data)
+    db.add(row)
+    db.flush()
+    return row
+
+
+def list_lines(db: Session, cycle_id: int) -> List[IncentiveLine]:
+    return (
+        db.query(IncentiveLine)
+        .filter(IncentiveLine.cycle_id == cycle_id)
+        .order_by(IncentiveLine.id)
+        .all()
+    )
+
+
+def replace_matches(db: Session, cycle_id: int, rows: List[dict]) -> List[CycleHoursMatch]:
+    db.query(CycleHoursMatch).filter(CycleHoursMatch.cycle_id == cycle_id).delete(synchronize_session=False)
+    created: List[CycleHoursMatch] = []
+    for data in rows:
+        payload = dict(data)
+        raw_result = payload.get("match_result")
+        if isinstance(raw_result, str):
+            payload["match_result"] = MatchResult(raw_result)
+        row = CycleHoursMatch(cycle_id=cycle_id, **payload)
+        db.add(row)
+        created.append(row)
+    db.flush()
+    return created
+
+
+def replace_validations(db: Session, cycle_id: int, rows: List[dict]) -> List[CycleValidationResult]:
+    db.query(CycleValidationResult).filter(CycleValidationResult.cycle_id == cycle_id).delete(
+        synchronize_session=False
+    )
+    created: List[CycleValidationResult] = []
+    for data in rows:
+        row = CycleValidationResult(cycle_id=cycle_id, **data)
+        db.add(row)
+        created.append(row)
+    db.flush()
+    return created
+
+
+def summary_counts(db: Session, cycle_id: int) -> dict:
+    match_count = db.query(func.count(CycleHoursMatch.id)).filter(CycleHoursMatch.cycle_id == cycle_id).scalar() or 0
+    validation_count = (
+        db.query(func.count(CycleValidationResult.id)).filter(CycleValidationResult.cycle_id == cycle_id).scalar() or 0
+    )
+    checklist_total = (
+        db.query(func.count(CycleChecklistItem.id)).filter(CycleChecklistItem.cycle_id == cycle_id).scalar() or 0
+    )
+    checklist_checked = (
+        db.query(func.count(CycleChecklistItem.id))
+        .filter(CycleChecklistItem.cycle_id == cycle_id, CycleChecklistItem.is_checked.is_(True))
+        .scalar()
+        or 0
+    )
+    line_count = db.query(func.count(IncentiveLine.id)).filter(IncentiveLine.cycle_id == cycle_id).scalar() or 0
+    total_amount = (
+        db.query(func.coalesce(func.sum(IncentiveLine.amount), 0))
+        .filter(IncentiveLine.cycle_id == cycle_id)
+        .scalar()
+    )
+    return {
+        "match_count": match_count,
+        "validation_count": validation_count,
+        "checklist_total": checklist_total,
+        "checklist_checked": checklist_checked,
+        "line_count": line_count,
+        "total_amount": Decimal(str(total_amount or 0)),
+    }
+
+
+def list_approval_results(db: Session, cycle_id: int) -> List[CycleApprovalResult]:
+    return (
+        db.query(CycleApprovalResult)
+        .filter(CycleApprovalResult.cycle_id == cycle_id)
+        .order_by(CycleApprovalResult.id)
+        .all()
+    )
+
+
+def has_approval_results(db: Session, cycle_id: int) -> bool:
+    return (
+        db.query(CycleApprovalResult.id)
+        .filter(CycleApprovalResult.cycle_id == cycle_id)
+        .first()
+        is not None
+    )
+
+
+def list_completed_cycles_missing_approval_results(db: Session) -> List[IncentiveCycle]:
+    completed = {CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED}
+    subq = db.query(CycleApprovalResult.cycle_id).distinct()
+    return (
+        db.query(IncentiveCycle)
+        .filter(IncentiveCycle.status.in_(completed), ~IncentiveCycle.id.in_(subq))
+        .order_by(IncentiveCycle.id)
+        .all()
+    )
+
+
+def sn_cumulative_hours_by_candidate(
+    db: Session,
+    candidate_ids: List[int],
+    exclude_cycle_id: int,
+    division: str = "sambhajiNagar",
+) -> dict:
+    """Return sum of accepted hours_worked per candidate_id from all finalized SN cycles.
+
+    Only APPROVED, PAID, and CLOSED cycles are included; the current (being-calculated)
+    cycle is excluded via ``exclude_cycle_id``.  Only accepted rows
+    (CycleHoursMatch.accepted=True) are summed.
+
+    Returns a dict of {candidate_id: Decimal(total_hours)}.
+    """
+    if not candidate_ids:
+        return {}
+
+    rows = (
+        db.query(CycleHoursMatch.candidate_id, func.sum(CycleHoursMatch.hours_worked))
+        .join(IncentiveCycle, IncentiveCycle.id == CycleHoursMatch.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.division == division,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            CycleHoursMatch.candidate_id.in_(candidate_ids),
+            CycleHoursMatch.accepted.is_(True),
+        )
+        .group_by(CycleHoursMatch.candidate_id)
+        .all()
+    )
+    return {cand_id: Decimal(str(total or 0)) for cand_id, total in rows}
+
+
+def sn_paid_recruiter_hours_by_candidate(
+    db: Session,
+    candidate_ids: List[int],
+    exclude_cycle_id: int,
+    division: str = "sambhajiNagar",
+) -> dict:
+    """Return sum of paid hours for the Recruiter role per candidate_id from all finalized SN cycles.
+
+    Only APPROVED, PAID, and CLOSED cycles are included.
+    We look at IncentiveLine where role = 'Recruiter' and eligible = True.
+    """
+    if not candidate_ids:
+        return {}
+
+    rows = (
+        db.query(IncentiveLine.candidate_id, func.sum(IncentiveLine.hours))
+        .join(IncentiveCycle, IncentiveCycle.id == IncentiveLine.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.division == division,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            IncentiveLine.candidate_id.in_(candidate_ids),
+            IncentiveLine.role == "Recruiter",
+            IncentiveLine.eligible.is_(True),
+            IncentiveLine.incentive_type != "FULL_TIME",
+        )
+        .group_by(IncentiveLine.candidate_id)
+        .all()
+    )
+    return {cand_id: Decimal(str(total or 0)) for cand_id, total in rows}
+
+
+def replace_approval_results(
+    db: Session, cycle_id: int, rows: List[dict]
+) -> List[CycleApprovalResult]:
+    db.query(CycleApprovalResult).filter(CycleApprovalResult.cycle_id == cycle_id).delete(
+        synchronize_session=False
+    )
+    created: List[CycleApprovalResult] = []
+    for data in rows:
+        row = CycleApprovalResult(cycle_id=cycle_id, **data)
+        db.add(row)
+        created.append(row)
+    db.flush()
+    return created
+
+
+def sn_hours_already_approved_this_month(
+    db: Session,
+    candidate_ids: List[int],
+    exclude_cycle_id: int,
+    month: str,
+    division: str = "sambhajiNagar",
+) -> dict:
+    """Return max accepted hours per candidate_id from finalized SN cycles in the SAME month."""
+    if not candidate_ids or not month:
+        return {}
+
+    rows = (
+        db.query(
+            CycleHoursMatch.candidate_id,
+            func.max(CycleHoursMatch.hours_worked)
+        )
+        .join(IncentiveCycle, IncentiveCycle.id == CycleHoursMatch.cycle_id)
+        .filter(
+            IncentiveCycle.id != exclude_cycle_id,
+            IncentiveCycle.incentive_month == month,
+            IncentiveCycle.division == division,
+            IncentiveCycle.status.in_([CycleStatus.APPROVED, CycleStatus.PAID, CycleStatus.CLOSED]),
+            CycleHoursMatch.candidate_id.in_(candidate_ids),
+            CycleHoursMatch.accepted.is_(True),
+        )
+        .group_by(CycleHoursMatch.candidate_id)
+        .all()
+    )
+    return {cand_id: Decimal(str(max_hours or 0)) for cand_id, max_hours in rows}
+

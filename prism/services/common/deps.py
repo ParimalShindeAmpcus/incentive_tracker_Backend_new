@@ -1,0 +1,108 @@
+"""Shared FastAPI dependencies."""
+
+from typing import Annotated, Callable, Optional
+
+from fastapi import Depends, HTTPException, Request, UploadFile, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
+
+from prism.core.db import get_db
+from prism.repositories.auth import auth_repository
+from prism.repositories.entities.user import User
+from prism.security.auth import decode_token
+
+DbSession = Annotated[Session, Depends(get_db)]
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    request: Request,
+    db: DbSession,
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)] = None,
+) -> User:
+    token = request.cookies.get("access_token")
+    if not token and credentials and credentials.credentials:
+        token = credentials.credentials
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        payload = decode_token(token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    jti = payload.get("jti")
+    if not jti:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token structure",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    if auth_repository.is_token_revoked(db, jti):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    sub = payload.get("sub")
+    if sub is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
+
+    try:
+        user_id = int(sub)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject") from exc
+
+    user = auth_repository.get_user_by_id(db, user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def validate_upload_size(file: UploadFile, max_mb: int = 25) -> None:
+    """Ensure uploaded files are within configured size limits without altering the normal request flow."""
+    max_bytes = max_mb * 1024 * 1024
+    size = 0
+    while chunk := file.file.read(1024 * 1024):
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"File too large (max {max_mb}MB)")
+    file.file.seek(0)
+
+
+def require_roles(*roles: str) -> Callable:
+    """Dependency factory: require the current user to have at least one of the given roles."""
+
+    allowed = {r.upper() for r in roles}
+
+    def _checker(user: CurrentUser) -> User:
+        user_role_names = {r.name.upper() for r in (user.roles or [])}
+        if allowed and user_role_names.isdisjoint(allowed):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires one of roles: {', '.join(sorted(allowed))}",
+            )
+        return user
+
+    return _checker
