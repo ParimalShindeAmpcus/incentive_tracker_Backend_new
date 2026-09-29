@@ -19,7 +19,11 @@ def get_engine():
     global _engine, _SessionLocal
     if _engine is None:
         settings = get_settings()
-        _engine = create_engine(settings.database_url, pool_pre_ping=True)
+        connect_args = {}
+        if "postgresql" in (settings.database_url or ""):
+            schema = getattr(settings, "prism_db_schema", "prism") or "prism"
+            connect_args["options"] = f"-c search_path={schema},public"
+        _engine = create_engine(settings.database_url, pool_pre_ping=True, connect_args=connect_args)
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
     return _engine
 
@@ -40,12 +44,19 @@ def init_db() -> None:
     import prism.repositories.entities  # noqa: F401
 
     engine = get_engine()
+    settings = get_settings()
+    dialect = engine.dialect.name
+    is_pg = dialect == "postgresql"
+
+    if is_pg:
+        schema = getattr(settings, "prism_db_schema", "prism") or "prism"
+        with engine.begin() as connection:
+            connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
+
     Base.metadata.create_all(bind=engine)
 
     # create_all does not alter existing tables — add columns introduced after first create.
     inspector = inspect(engine)
-    dialect = engine.dialect.name
-    is_pg = dialect == "postgresql"
 
     # Obsolete tables removed from the codebase (2026-08). Dropped in FK-safe order
     # so every environment converges on the new schema at startup.
@@ -241,7 +252,7 @@ def init_db() -> None:
                     """
                     SELECT data_type, udt_name, character_maximum_length
                     FROM information_schema.columns
-                    WHERE table_schema = 'public'
+                    WHERE table_schema IN ('prism', 'public')
                       AND table_name = 'audit_logs'
                       AND column_name = 'action'
                     """

@@ -73,8 +73,8 @@ def _seed_roles_and_admin(db: Session) -> None:
 
     # Additional Admin accounts
     additional_admins = [
-        ("priya@example.com", "Priya"),
-        ("abhishek@example.com", "Abhishek"),
+        ("priya@ampcustech.com", "Priya"),
+        ("abhijeet@ampcustech.com", "Abhijit"),
     ]
     for admin_email, admin_name in additional_admins:
         e = admin_email.lower().strip()

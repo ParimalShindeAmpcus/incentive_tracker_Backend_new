@@ -37,8 +37,9 @@ class Settings(BaseSettings):
     db_password: Optional[str] = Field(default=None, validation_alias=AliasChoices("PRISM_DB_PASSWORD", "db_password", "DB_PASSWORD"))
     db_host: str = Field(default="localhost", validation_alias=AliasChoices("PRISM_DB_HOST", "db_host", "DB_HOST"))
     db_port: int = Field(default=5432, validation_alias=AliasChoices("PRISM_DB_PORT", "db_port", "DB_PORT"))
-    db_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("PRISM_DB_NAME", "db_name", "DB_NAME"))
+    db_name: Optional[str] = Field(default="mis_prism_db", validation_alias=AliasChoices("PRISM_DB_NAME", "db_name", "DB_NAME"))
     database_url: Optional[str] = Field(default=None, validation_alias=AliasChoices("PRISM_DATABASE_URL", "database_url", "DATABASE_URL"))
+    prism_db_schema: str = Field(default="prism", validation_alias=AliasChoices("PRISM_DB_SCHEMA", "DB_SCHEMA"))
 
     # CORS — comma-separated trusted frontend origins (override via CORS_ORIGINS)
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

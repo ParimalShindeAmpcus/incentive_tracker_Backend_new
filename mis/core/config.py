@@ -12,10 +12,11 @@ class Settings(BaseSettings):
 
     DB_HOST: str = Field(default="localhost", validation_alias=AliasChoices("MIS_DB_HOST", "DB_HOST"))
     DB_USER: str = Field(default="postgres", validation_alias=AliasChoices("MIS_DB_USER", "DB_USER"))
-    DB_NAME: str = Field(default="mis_db", validation_alias=AliasChoices("MIS_DB_NAME", "DB_NAME"))
+    DB_NAME: str = Field(default="mis_prism_db", validation_alias=AliasChoices("MIS_DB_NAME", "DB_NAME"))
     PASSWORD: str = Field(default="postgres", validation_alias=AliasChoices("MIS_DB_PASSWORD", "PASSWORD", "DB_PASSWORD"))
     PORT: int = Field(default=5432, validation_alias=AliasChoices("MIS_DB_PORT", "PORT", "DB_PORT"))
     DATABASE_URL: str | None = Field(default=None, validation_alias=AliasChoices("MIS_DATABASE_URL", "DATABASE_URL"))
+    MIS_DB_SCHEMA: str = Field(default="mis", validation_alias=AliasChoices("MIS_DB_SCHEMA", "DB_SCHEMA"))
 
     REDIS_URL: str = "redis://localhost:6379/0"
     CORS_ORIGINS: str = (

@@ -36,10 +36,11 @@ mis-prism-backend/
 
 ## 🚀 Key Features
 
-1. **Dual Database Connections**:
-   - **MIS Services** connect asynchronously (`asyncpg`) to `MIS_DB_NAME` (default: `mis_db`).
-   - **PRISM Services** connect synchronously (`psycopg2`) to `PRISM_DB_NAME` (default: `incentive_tracker`).
-   - Tables and business logic remain completely isolated without cross-database interference.
+1. **Unified Standalone Database with Schema Separation**:
+   - Both **Starts MIS** and **PRISM** connect to a single standalone PostgreSQL database (`mis_prism_db` by default).
+   - **Schema `mis`**: Dedicated schema for Starts MIS (AsyncPG async engine, Alembic migrations, candidate starts, approvals, users).
+   - **Schema `prism`**: Dedicated schema for PRISM (Psycopg2 sync engine, cycle calculations, hours reconciliation, benchmarks).
+   - Prevents table collisions (e.g. `users`, `roles`, `organizations`, `audit_logs`) while enabling seamless future cross-module joins and single-database backups.
 
 2. **Common Authentication Router**:
    - `POST /api/v1/auth/login`: Accepts `{ "email", "password", "app": "mis" | "prism" }` and authenticates against the specified workspace.
@@ -53,7 +54,7 @@ mis-prism-backend/
      - Key endpoints remain available at `/api/v1/...` so existing integrations and legacy requests continue to function seamlessly.
 
 4. **Unified Health Check**:
-   - `GET /health` checks real-time database connectivity for both `mis` and `prism` databases and returns detailed statuses.
+   - `GET /health` checks real-time database connectivity for both `mis` and `prism` schemas and returns detailed statuses.
 
 ---
 
@@ -79,11 +80,20 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-Set your database credentials:
-- `MIS_DB_USER`, `MIS_DB_PASSWORD`, `MIS_DB_NAME`
-- `PRISM_DB_USER`, `PRISM_DB_PASSWORD`, `PRISM_DB_NAME`
+Default standalone configuration:
+- `DB_NAME=mis_prism_db`
+- `MIS_DB_NAME=mis_prism_db`, `MIS_DB_SCHEMA=mis`
+- `PRISM_DB_NAME=mis_prism_db`, `PRISM_DB_SCHEMA=prism`
 
-### 3. Run the Unified Backend
+### 3. Merge Existing Databases (Optional / First-Time Migration)
+
+To merge existing `mis_db` and `incentive_tracker` into `mis_prism_db`:
+
+```bash
+python scripts/merge_to_single_db.py
+```
+
+### 4. Run the Unified Backend
 
 ```bash
 python main.py
