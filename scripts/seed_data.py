@@ -531,16 +531,25 @@ NASHIK_SLABS = [
 
 def seed_prism(conn, reset_passwords: bool = False):
     print("\n--- Seeding PRISM (Schema: prism) ---")
+
+    # 1. Use the official PRISM seed service to seed roles, admin users, org, divisions, benchmarks, and all slabs
+    try:
+        from prism.services.common.seed import seed_database as seed_prism_database
+        seed_prism_database()
+        print("  -> PRISM roles, admin accounts, organizations, benchmarks, and slabs initialized.")
+    except Exception as e:
+        print(f"  [WARN] Note on PRISM seed service: {e}")
+
     cur = conn.cursor()
     cur.execute("SET search_path = prism, public;")
 
-    # 1. Organization & Divisions
-    print("  -> Seeding PRISM organization and divisions...")
+    # Ensure organization & divisions exist with is_active = TRUE
+    print("  -> Ensuring PRISM organization and divisions...")
     cur.execute("SELECT id FROM organizations WHERE code = 'DEFAULT';")
     row = cur.fetchone()
     if not row:
         cur.execute(
-            "INSERT INTO organizations (code, name) VALUES ('DEFAULT', 'Default Organization') RETURNING id;"
+            "INSERT INTO organizations (code, name, is_active) VALUES ('DEFAULT', 'Default Organization', TRUE) RETURNING id;"
         )
         org_id = cur.fetchone()[0]
     else:
@@ -552,15 +561,15 @@ def seed_prism(conn, reset_passwords: bool = False):
         r = cur.fetchone()
         if not r:
             cur.execute(
-                "INSERT INTO divisions (organization_id, code, name) VALUES (%s, %s, %s) RETURNING id;",
+                "INSERT INTO divisions (organization_id, code, name, is_active) VALUES (%s, %s, %s, TRUE) RETURNING id;",
                 (org_id, code, name),
             )
             div_ids[code] = cur.fetchone()[0]
         else:
             div_ids[code] = r[0]
 
-    # 2. Hours Benchmarks
-    print("  -> Seeding PRISM hours benchmarks (160h)...")
+    # Hours Benchmarks
+    print("  -> Ensuring PRISM hours benchmarks (160h)...")
     for code, name in PRISM_DIVISIONS:
         cur.execute(
             """
@@ -573,8 +582,8 @@ def seed_prism(conn, reset_passwords: bool = False):
             (code, f"Default monthly hours benchmark for {name}", code),
         )
 
-    # 3. Roles & Users
-    print(f"  -> Seeding PRISM admin users (Default password: {DEFAULT_PRISM_PASSWORD})...")
+    # Roles & Users
+    print(f"  -> Ensuring PRISM admin users (Default password: {DEFAULT_PRISM_PASSWORD})...")
     cur.execute("SELECT id FROM roles WHERE name = 'ADMIN';")
     r = cur.fetchone()
     if not r:
@@ -611,8 +620,8 @@ def seed_prism(conn, reset_passwords: bool = False):
                 (u_id, admin_role_id),
             )
 
-    # 4. Nashik Incentive Slabs
-    print("  -> Seeding PRISM Nashik calculation slabs...")
+    # Nashik Incentive Slabs (All slabs)
+    print("  -> Ensuring PRISM Nashik calculation slabs...")
     for low, high, amt in NASHIK_SLABS:
         cur.execute(
             """
