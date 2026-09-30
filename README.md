@@ -1,38 +1,9 @@
-# Unified MIS & PRISM Backend
+# Unified PRISM
 
 This repository unifies **Starts MIS** and **PRISM (Incentive Tracker)** backend services into a single, high-performance, modular FastAPI application.
 
 ---
 
-## 🏛 Architecture Overview
-
-```
-mis-prism-backend/
-├── main.py                    # Unified FastAPI entry point (Lifespan, Common Auth, Dual DB Health)
-├── mis/                       # Modular Starts MIS Application
-│   ├── api/                   # MIS REST endpoints (/api/v1/mis/* and /api/v1/*)
-│   ├── core/                  # MIS Configuration (AsyncPG settings, security)
-│   ├── db/                    # Async SQLAlchemy session (connects to mis_db)
-│   ├── models/                # MIS SQLAlchemy models (User, Role, Start, Master, etc.)
-│   ├── schemas/               # MIS Pydantic schemas
-│   ├── services/              # MIS business logic (Email Ingestion, JobDiva, Starts)
-│   └── middleware/            # MIS security & CORS handlers
-├── prism/                     # Modular PRISM (Incentive Tracker) Application
-│   ├── controllers/           # PRISM REST controllers (/api/v1/prism/* and /api/v1/*)
-│   ├── core/                  # PRISM DB session (Sync psycopg2 connects to incentive_tracker)
-│   ├── models/                # PRISM schemas & DTOs
-│   ├── repositories/          # PRISM ORM entities and database operations
-│   ├── services/              # PRISM calculation engines (CandidateMatcher, IncentiveRules)
-│   ├── security/              # PRISM JWT, CSRF, and security headers
-│   └── config.py              # PRISM settings & environment config
-├── alembic/                   # MIS database migrations
-├── migrations/                # PRISM database migrations
-├── sql/                       # Schema scripts
-├── requirements.txt           # Unified Python dependencies
-└── Dockerfile                 # Production container image
-```
-
----
 
 ## 🚀 Key Features
 
