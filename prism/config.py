@@ -61,9 +61,9 @@ class Settings(BaseSettings):
     # SMTP Email Settings
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
-    smtp_user: str = "nikita.ampcus@gmail.com"
-    smtp_password: str = "heuzmnqoouwylcss"
-    smtp_from_email: str = "nikita.ampcus@gmail.com"
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
     smtp_from_name: str = "Incentive Tracker Portal"
 
     # Special Incentive (Recruiter of the Month) — tie payout policy
