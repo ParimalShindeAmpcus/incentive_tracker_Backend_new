@@ -245,6 +245,7 @@ class InhouseCandidateOverride(BaseModel):
     placement_level: Optional[str] = None
     employment_status: Optional[str] = None
     manually_excluded: Optional[bool] = None
+    manually_included: Optional[bool] = None
 
 
 class CalculateRequest(BaseModel):

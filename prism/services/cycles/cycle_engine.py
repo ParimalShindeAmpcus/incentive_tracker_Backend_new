@@ -584,9 +584,12 @@ def run_cycle_calculation(
             candidate = by_pk[pk]
             override = _find_candidate_override(candidate, overrides_by_key)
             is_manually_excluded = False
+            is_manually_included = False
             if override:
                 if override.get("manually_excluded") is True:
                     is_manually_excluded = True
+                if override.get("manually_included") is True:
+                    is_manually_included = True
                 lvl = override.get("job_level")
                 if lvl and str(lvl).strip():
                     clean = str(lvl).strip()
@@ -596,7 +599,7 @@ def run_cycle_calculation(
                         db.add(candidate)
                         db.flush()
 
-            if is_manually_excluded or _candidate_matches_excluded_keys(candidate, excluded_keys):
+            if (is_manually_excluded or _candidate_matches_excluded_keys(candidate, excluded_keys)) and not is_manually_included:
                 manually_excluded += 1
                 lines.append(
                     _ineligible_line(
@@ -610,22 +613,45 @@ def run_cycle_calculation(
                 continue
 
             eff_candidate = candidate
+            cand_status_upper = str(getattr(candidate, "status", None) or "").upper()
+            is_candidate_db_inactive = (
+                getattr(candidate, "incentive_active", True) is False
+                or getattr(candidate, "is_active", True) is False
+                or any(x in cand_status_upper for x in ("INACTIVE", "TERMINAT", "RESIGN", "LEFT", "ABSCOND", "EXCLUDE"))
+            )
+            is_candidate_db_ended = bool(getattr(candidate, "end_date", None) and candidate.end_date <= window.end)
+
             if override and override.get("employment_status"):
                 status_clean = str(override["employment_status"]).strip().upper()
                 eff_candidate = SimpleNamespace(**{
                     col.name: getattr(candidate, col.name)
                     for col in candidate.__table__.columns
                 })
-                eff_candidate.status = status_clean
-                if status_clean in {"RESIGNED", "TERMINATED", "INACTIVE", "LEFT", "ABSCOND"}:
-                    eff_candidate.incentive_active = False
+                if status_clean in {"INACTIVE", "PROJECT_ENDED", "RESIGNED", "TERMINATED", "LEFT", "ABSCOND"}:
+                    eff_candidate.incentive_active = is_manually_included
                 elif status_clean == "ACTIVE":
-                    eff_candidate.incentive_active = True
+                    if is_manually_included or (not is_candidate_db_inactive and not is_candidate_db_ended):
+                        eff_candidate.incentive_active = True
+                    else:
+                        eff_candidate.incentive_active = False
+            elif is_candidate_db_inactive or is_candidate_db_ended:
+                eff_candidate = SimpleNamespace(**{
+                    col.name: getattr(candidate, col.name)
+                    for col in candidate.__table__.columns
+                })
+                if not is_manually_included:
+                    eff_candidate.incentive_active = False
 
-            drafts = calculate_inhouse_placement(eff_candidate, cycle_end=window.end, coordinators=coordinators, paid_keys=paid_keys)
+            drafts = calculate_inhouse_placement(
+                eff_candidate,
+                cycle_end=window.end,
+                coordinators=coordinators,
+                paid_keys=paid_keys,
+                manually_included=is_manually_included,
+            )
             if any(line.reason in {"INHOUSE_90_DAY_REQUIREMENT_NOT_MET", "INHOUSE_STARTED_BEFORE_POLICY_DATE", "MISSING_START_DATE"} for line in drafts):
                 not_90_days += 1
-            if any(line.reason == "CANDIDATE_INACTIVE" for line in drafts):
+            if any(line.reason in {"CANDIDATE_INACTIVE", "PROJECT_ENDED"} for line in drafts):
                 inactive += 1
             if any(line.reason == "ALREADY_PAID" for line in drafts):
                 already_paid_count += 1

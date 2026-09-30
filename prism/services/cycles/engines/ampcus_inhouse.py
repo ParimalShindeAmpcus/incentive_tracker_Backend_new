@@ -131,7 +131,14 @@ def _limit_roles_inhouse(people: Dict[str, Optional[str]], amounts: Dict[str, in
     return excluded_roles
 
 
-def calculate_placement(c: Candidate, *, cycle_end: date, coordinators: Dict[str, CoordinatorRecord], paid_keys: Optional[set[str]] = None) -> List[LineDraft]:
+def calculate_placement(
+    c: Candidate,
+    *,
+    cycle_end: date,
+    coordinators: Dict[str, CoordinatorRecord],
+    paid_keys: Optional[set[str]] = None,
+    manually_included: bool = False,
+) -> List[LineDraft]:
     people = {"Recruiter": getattr(c, "recruiter", None), "Manager": getattr(c, "manager", None), "Center Head": getattr(c, "center_head", None) or getattr(c, "avp", None)}
     status = str(getattr(c, "status", None) or "").upper()
     days = (cycle_end - c.start_date).days if getattr(c, "start_date", None) else 0
@@ -143,9 +150,20 @@ def calculate_placement(c: Candidate, *, cycle_end: date, coordinators: Dict[str
         return [_line(c, role, person, 0, False, "INHOUSE_STARTED_BEFORE_POLICY_DATE", days) for role, person in people.items()]
     if days < 90:
         return [_line(c, role, person, 0, False, "INHOUSE_90_DAY_REQUIREMENT_NOT_MET", days) for role, person in people.items()]
-    # W2: Added ABSCOND to catch absconded candidates
-    if getattr(c, "incentive_active", True) is False or any(x in status for x in ("INACTIVE", "TERMINAT", "RESIGN", "LEFT", "ABSCOND")):
-        return [_line(c, role, person, 0, False, "CANDIDATE_INACTIVE", days) for role, person in people.items()]
+
+    if not manually_included:
+        # Inactive or excluded candidate
+        if (
+            getattr(c, "incentive_active", True) is False
+            or getattr(c, "is_active", True) is False
+            or any(x in status for x in ("INACTIVE", "TERMINAT", "RESIGN", "LEFT", "ABSCOND", "EXCLUDE"))
+        ):
+            return [_line(c, role, person, 0, False, "CANDIDATE_INACTIVE", days) for role, person in people.items()]
+
+        # Project ended
+        end_d = getattr(c, "end_date", None)
+        if (end_d and end_d <= cycle_end) or "PROJECT_ENDED" in status:
+            return [_line(c, role, person, 0, False, "PROJECT_ENDED", days) for role, person in people.items()]
 
     raw_job_level = getattr(c, "job_level", None)
     job_level_clean = str(raw_job_level or "").strip().lower()
