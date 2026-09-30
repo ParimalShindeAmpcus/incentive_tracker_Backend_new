@@ -13,7 +13,8 @@ from mis.core.config import settings
 def get_db_connection():
     """Context manager for acquiring and closing a PostgreSQL connection."""
     conn_str = settings.sync_database_url
-    conn = psycopg2.connect(conn_str)
+    schema = getattr(settings, "MIS_DB_SCHEMA", "mis") or "mis"
+    conn = psycopg2.connect(conn_str, options=f"-c search_path={schema},public")
     try:
         yield conn
     finally:
