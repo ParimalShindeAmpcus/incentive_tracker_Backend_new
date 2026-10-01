@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -48,7 +49,7 @@ except ImportError as e:
 
 
 
-DEFAULT_MIS_PASSWORD = "Password@123"
+DEFAULT_MIS_PASSWORD = "Pass@123"
 DEFAULT_PRISM_PASSWORD = "Admin@123"
 
 
@@ -73,15 +74,15 @@ MIS_ROLES = [
     ("MIS", "Admin"),
     ("RECRUITER", "Recruiter"),
     ("MANAGER", "Manager"),
-    ("HOD", "Head of Department"),
-    ("ONBOARD_TEAM", "Onboarding Team"),
+    ("HOD", "HOD"),
+    ("ONBOARD_TEAM", "Onboard Team"),
     ("TEAM_LEAD", "Team Lead"),
     ("CRM", "CRM"),
     ("SENIOR_MANAGER", "Senior Manager"),
     ("ASSOCIATE_DIRECTOR", "Associate Director"),
     ("DIRECTOR", "Director"),
     ("CENTER_HEAD", "Center Head"),
-    ("AVP", "Assistant Vice President"),
+    ("AVP", "AVP"),
 ]
 
 MIS_ORGANIZATIONS = [
@@ -90,8 +91,7 @@ MIS_ORGANIZATIONS = [
     ("AMPCUS_CYBER", "Ampcus Cyber"),
     ("BRAVENS_INC", "Bravens Inc"),
     ("APOKRIN_LLC", "Apokrin LLC"),
-    ("ITECH_INC", "ITech Inc"),
-    ("DEFAULT", "Default Organization"),
+    ("ITECH_INC", "ITech Inc")
 ]
 
 MIS_ONBOARDING_ORGS = [
@@ -106,6 +106,60 @@ MIS_DROPDOWNS = [
     ("CONTRACT_TYPE", "T4", 3),
     ("CONTRACT_TYPE", "FTE", 4),
     ("CONTRACT_TYPE", "SOW", 5),
+    # JOB_LEVEL
+    ("JOB_LEVEL", "Junior", 1),
+    ("JOB_LEVEL", "Mid", 2),
+    ("JOB_LEVEL", "Mid-Level", 3),
+    ("JOB_LEVEL", "Senior", 4),
+    ("JOB_LEVEL", "Lead", 5),
+    ("JOB_LEVEL", "Architect", 6),
+    ("JOB_LEVEL", "Manager", 7),
+    ("JOB_LEVEL", "Director", 8),
+    ("JOB_LEVEL", "NA", 9),
+    # RESUME_SOURCE
+    ("RESUME_SOURCE", "LinkedIn", 1),
+    ("RESUME_SOURCE", "LinkedIn RPS", 2),
+    ("RESUME_SOURCE", "Dice", 3),
+    ("RESUME_SOURCE", "Monster", 4),
+    ("RESUME_SOURCE", "Indeed", 5),
+    ("RESUME_SOURCE", "CareerBuilder", 6),
+    ("RESUME_SOURCE", "Referral", 7),
+    ("RESUME_SOURCE", "Internal Database", 8),
+    ("RESUME_SOURCE", "Company Website", 9),
+    ("RESUME_SOURCE", "JobDiva", 10),
+    ("RESUME_SOURCE", "Other", 11),
+    # WORK_AUTHORIZATION
+    ("WORK_AUTHORIZATION", "US Citizen", 1),
+    ("WORK_AUTHORIZATION", "Green Card", 2),
+    ("WORK_AUTHORIZATION", "GC", 3),
+    ("WORK_AUTHORIZATION", "H1B", 4),
+    ("WORK_AUTHORIZATION", "OPT", 5),
+    ("WORK_AUTHORIZATION", "TN", 6),
+    ("WORK_AUTHORIZATION", "CPT/OPT", 7),
+    ("WORK_AUTHORIZATION", "H4 EAD", 8),
+    ("WORK_AUTHORIZATION", "L2 EAD", 9),
+    ("WORK_AUTHORIZATION", "EAD", 10),
+    ("WORK_AUTHORIZATION", "Canadian Citizen", 11),
+    # RECRUITER_LOCATION
+    ("RECRUITER_LOCATION", "Nashik", 1),
+    ("RECRUITER_LOCATION", "Sambhaji Nagar", 3),
+    ("RECRUITER_LOCATION", "Pune", 3),
+    ("RECRUITER_LOCATION", "Hyderabad", 4),
+    # TEAM
+    ("TEAM", "Alpha", 1),
+    ("TEAM", "Bravo", 2),
+    # TAXES_ADMIN_PAYROLL_CHARGES
+    ("TAXES_ADMIN_PAYROLL_CHARGES", "0", 1),
+    ("TAXES_ADMIN_PAYROLL_CHARGES", "5", 2),
+    ("TAXES_ADMIN_PAYROLL_CHARGES", "15.4", 3),
+    ("TAXES_ADMIN_PAYROLL_CHARGES", "20.4", 4),
+    # ORGANIZATION
+    ("ORGANIZATION", "Ampcus Inc", 1),
+    ("ORGANIZATION", "Ampcus Tech", 2),
+    ("ORGANIZATION", "Ampcus Cyber", 3),
+    ("ORGANIZATION", "Bravens Inc", 4),
+    ("ORGANIZATION", "Apokrin LLC", 5),
+    ("ORGANIZATION", "ITech Inc", 6),
     # EMPLOYMENT_TYPE
     ("EMPLOYMENT_TYPE", "Full Time", 1),
     ("EMPLOYMENT_TYPE", "Part Time", 2),
@@ -141,55 +195,255 @@ MIS_DROPDOWNS = [
     ("MARGIN_REMARKS", "Standard", 1),
     ("MARGIN_REMARKS", "Approved by VP", 2),
     ("MARGIN_REMARKS", "Special Margin", 3),
-    # ORGANIZATION
-    ("ORGANIZATION", "Ampcus Inc", 1),
-    ("ORGANIZATION", "Ampcus Tech", 2),
-    ("ORGANIZATION", "Ampcus Cyber", 3),
-    ("ORGANIZATION", "Bravens Inc", 4),
-    ("ORGANIZATION", "Apokrin LLC", 5),
-    ("ORGANIZATION", "ITech Inc", 6),
     # CURRENCY
     ("CURRENCY", "USD", 1),
-    ("CURRENCY", "CAD", 2),
-    ("CURRENCY", "INR", 3),
-    # JOB_LEVEL
-    ("JOB_LEVEL", "Junior", 1),
-    ("JOB_LEVEL", "Mid-Level", 2),
-    ("JOB_LEVEL", "Senior", 3),
-    ("JOB_LEVEL", "Lead", 4),
-    ("JOB_LEVEL", "Architect", 5),
-    # TAXES_ADMIN_PAYROLL_CHARGES
-    ("TAXES_ADMIN_PAYROLL_CHARGES", "0", 1),
-    ("TAXES_ADMIN_PAYROLL_CHARGES", "5", 2),
-    ("TAXES_ADMIN_PAYROLL_CHARGES", "15.4", 3),
-    ("TAXES_ADMIN_PAYROLL_CHARGES", "20.4", 4),
+    ("CURRENCY", "INR", 2)
 ]
 
-MIS_TEST_USERS = [
-    # (email, full_name, role_code, org_code, emp_code)
-    ("admin1@bravens.com", "Deepak Kumar", "MIS", "BRAVENS_INC", "EMP-001"),
-    ("admin2@bravens.com", "Meera Iyer", "MIS", "BRAVENS_INC", "EMP-002"),
-    ("admin@bravens.com", "System Admin", "MIS", "BRAVENS_INC", "EMP-003"),
-    ("mis.admin@ampcus.com", "Ampcus MIS Admin", "MIS", "AMPCUS_INC", "EMP-004"),
-    ("manager1@bravens.com", "Karan Malhotra", "MANAGER", "BRAVENS_INC", "EMP-010"),
-    ("manager2@bravens.com", "Pooja Reddy", "MANAGER", "BRAVENS_INC", "EMP-011"),
-    ("manager@ampcus.com", "Ampcus Manager", "MANAGER", "AMPCUS_INC", "EMP-012"),
-    ("recruiter1@bravens.com", "Arjun Singh", "RECRUITER", "BRAVENS_INC", "EMP-020"),
-    ("recruiter2@bravens.com", "Neha Patel", "RECRUITER", "BRAVENS_INC", "EMP-021"),
-    ("recruiter@ampcus.com", "Ampcus Recruiter", "RECRUITER", "AMPCUS_INC", "EMP-022"),
-    ("b.ampcus@gmail.com", "Bhushan Chitte", "RECRUITER", "AMPCUS_INC", "EMP-023"),
-    ("hod1@bravens.com", "Sanjay Mehta", "HOD", "BRAVENS_INC", "EMP-030"),
-    ("hod@ampcus.com", "Ampcus HOD", "HOD", "AMPCUS_INC", "EMP-031"),
-    ("onboarding1@bravens.com", "Sneha Nair", "ONBOARD_TEAM", "BRAVENS_INC", "EMP-040"),
-    ("onboarding2@bravens.com", "Rahul Verma", "ONBOARD_TEAM", "BRAVENS_INC", "EMP-041"),
-    ("teamlead1@bravens.com", "Vivek Chauhan", "TEAM_LEAD", "BRAVENS_INC", "EMP-050"),
-    ("teamlead@ampcus.com", "Ampcus Team Lead", "TEAM_LEAD", "AMPCUS_INC", "EMP-051"),
-    ("crm1@bravens.com", "Manoj Tiwari", "CRM", "BRAVENS_INC", "EMP-060"),
-    ("seniormanager1@bravens.com", "Rajesh Khanna", "SENIOR_MANAGER", "BRAVENS_INC", "EMP-070"),
-    ("associatedirector1@bravens.com", "Ashwin Menon", "ASSOCIATE_DIRECTOR", "BRAVENS_INC", "EMP-080"),
-    ("director1@bravens.com", "Nikhil Bansal", "DIRECTOR", "BRAVENS_INC", "EMP-090"),
-    ("centerhead1@bravens.com", "Suresh Pillai", "CENTER_HEAD", "BRAVENS_INC", "EMP-100"),
-    ("avp1@bravens.com", "Harsh Vardhan", "AVP", "BRAVENS_INC", "EMP-110"),
+USERS = [
+    {
+        "full_name": "System Admin",
+        "email": "admin@example.com",
+        "role": "MIS",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        "is_super_admin": True,
+    },
+    {
+        "full_name": "Arjun Singh",
+        "email": "recruiter1@bravens.com",
+        "role": "RECRUITER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Neha Patel",
+        "email": "recruiter2@bravens.com",
+        "role": "RECRUITER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Rohit Sharma",
+        "email": "recruiter3@bravens.com",
+        "role": "RECRUITER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Priya Desai",
+        "email": "recruiter4@bravens.com",
+        "role": "RECRUITER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Amit Kumar",
+        "email": "recruiter5@bravens.com",
+        "role": "RECRUITER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Sanjay Mehta",
+        "email": "hod1@bravens.com",
+        "role": "HOD",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Anita Rao",
+        "email": "hod2@bravens.com",
+        "role": "HOD",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Vikram Gupta",
+        "email": "hod3@bravens.com",
+        "role": "HOD",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Sneha Nair",
+        "email": "onboarding1@bravens.com",
+        "role": "ONBOARD_TEAM",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Rahul Verma",
+        "email": "onboarding2@bravens.com",
+        "role": "ONBOARD_TEAM",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Divya Joshi",
+        "email": "onboarding3@bravens.com",
+        "role": "ONBOARD_TEAM",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Deepak Kumar",
+        "email": "admin1@bravens.com",
+        "role": "MIS",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        "is_super_admin": True,
+    },
+    {
+        "full_name": "Meera Iyer",
+        "email": "admin2@bravens.com",
+        "role": "MIS",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        "is_super_admin": True,
+    },
+    {
+        "full_name": "Karan Malhotra",
+        "email": "manager1@bravens.com",
+        "role": "MANAGER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Pooja Reddy",
+        "email": "manager2@bravens.com",
+        "role": "MANAGER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Vivek Chauhan",
+        "email": "teamlead1@bravens.com",
+        "role": "TEAM_LEAD",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Shreya Kapoor",
+        "email": "teamlead2@bravens.com",
+        "role": "TEAM_LEAD",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Manoj Tiwari",
+        "email": "crm1@bravens.com",
+        "role": "CRM",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Kavita Bhatia",
+        "email": "crm2@bravens.com",
+        "role": "CRM",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Rajesh Khanna",
+        "email": "seniormanager1@bravens.com",
+        "role": "SENIOR_MANAGER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Sunita Agarwal",
+        "email": "seniormanager2@bravens.com",
+        "role": "SENIOR_MANAGER",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Ashwin Menon",
+        "email": "associatedirector1@bravens.com",
+        "role": "ASSOCIATE_DIRECTOR",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Ritu Chawla",
+        "email": "associatedirector2@bravens.com",
+        "role": "ASSOCIATE_DIRECTOR",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Nikhil Bansal",
+        "email": "director1@bravens.com",
+        "role": "DIRECTOR",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Alka Saxena",
+        "email": "director2@bravens.com",
+        "role": "DIRECTOR",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Suresh Pillai",
+        "email": "centerhead1@bravens.com",
+        "role": "CENTER_HEAD",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Geeta Krishnan",
+        "email": "centerhead2@bravens.com",
+        "role": "CENTER_HEAD",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Harsh Vardhan",
+        "email": "avp1@bravens.com",
+        "role": "AVP",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        },
+    {
+        "full_name": "Nandini Pillai",
+        "email": "avp2@bravens.com",
+        "role": "AVP",
+        "org": "Ampcus Inc",
+        "team": "Alpha",
+        "password": "Pass@123",
+        }
 ]
 
 
@@ -212,6 +466,7 @@ def seed_mis(conn, reset_passwords: bool = False):
             org_ids[code] = cur.fetchone()[0]
         else:
             org_ids[code] = row[0]
+            cur.execute("UPDATE organizations SET name = %s, is_active = TRUE WHERE id = %s;", (name, row[0]))
 
     # 2. Roles
     print("  -> Seeding roles...")
@@ -224,6 +479,7 @@ def seed_mis(conn, reset_passwords: bool = False):
             role_ids[code] = cur.fetchone()[0]
         else:
             role_ids[code] = row[0]
+            cur.execute("UPDATE roles SET name = %s WHERE id = %s;", (name, row[0]))
 
     # 3. Onboarding Organizations & Mappings
     print("  -> Seeding onboarding organizations...")
@@ -239,6 +495,7 @@ def seed_mis(conn, reset_passwords: bool = False):
             onboard_ids[code] = cur.fetchone()[0]
         else:
             onboard_ids[code] = row[0]
+            cur.execute("UPDATE onboarding_organizations SET name = %s, is_active = TRUE WHERE id = %s;", (name, row[0]))
 
     # Mappings
     bravens_onboard_id = onboard_ids.get("BRAVENS_ONBOARD")
@@ -283,130 +540,125 @@ def seed_mis(conn, reset_passwords: bool = False):
             (category, value, order, category, value),
         )
 
-    # 5. Users
-    print(f"  -> Seeding MIS test users (Default password: {DEFAULT_MIS_PASSWORD})...")
-    default_pw_hash = mis_hash_password(DEFAULT_MIS_PASSWORD)
+    # 5. Clean up old test users not in USERS list
+    new_emails = [u["email"].lower().strip() for u in USERS]
+    cur.execute("SELECT id, email FROM users WHERE email NOT IN %s;", (tuple(new_emails),))
+    obsolete_users = cur.fetchall()
+    if obsolete_users:
+        obs_ids = [row[0] for row in obsolete_users]
+        cur.execute("DELETE FROM recruiter_manager_mapping WHERE recruiter_id = ANY(%s) OR manager_id = ANY(%s);", (obs_ids, obs_ids))
+        cur.execute("DELETE FROM notifications WHERE user_id = ANY(%s);", (obs_ids,))
+        cur.execute("DELETE FROM password_reset_tokens WHERE user_id = ANY(%s);", (obs_ids,))
+        cur.execute("DELETE FROM audit_logs WHERE actor_id = ANY(%s);", (obs_ids,))
+        cur.execute("DELETE FROM approvals WHERE actor_id = ANY(%s);", (obs_ids,))
+        cur.execute("DELETE FROM incentives WHERE recruiter_id = ANY(%s) OR manager_id = ANY(%s);", (obs_ids, obs_ids))
+        cur.execute("SELECT id FROM users WHERE email = 'recruiter1@bravens.com';")
+        r_row = cur.fetchone()
+        fallback_rec_id = r_row[0] if r_row else None
+
+        cur.execute("SELECT id FROM users WHERE email = 'manager1@bravens.com';")
+        m_row = cur.fetchone()
+        fallback_mgr_id = m_row[0] if m_row else None
+
+        if fallback_rec_id:
+            cur.execute("UPDATE candidate_start SET recruiter_id = %s WHERE recruiter_id = ANY(%s);", (fallback_rec_id, obs_ids))
+        else:
+            cur.execute("DELETE FROM candidate_start WHERE recruiter_id = ANY(%s);", (obs_ids,))
+
+        if fallback_mgr_id:
+            cur.execute("UPDATE candidate_start SET mapped_manager_id = %s WHERE mapped_manager_id = ANY(%s);", (fallback_mgr_id, obs_ids))
+            cur.execute("UPDATE candidate_start SET submission_manager_id = %s WHERE submission_manager_id = ANY(%s);", (fallback_mgr_id, obs_ids))
+        else:
+            cur.execute("UPDATE candidate_start SET mapped_manager_id = NULL WHERE mapped_manager_id = ANY(%s);", (obs_ids,))
+            cur.execute("UPDATE candidate_start SET submission_manager_id = NULL WHERE submission_manager_id = ANY(%s);", (obs_ids,))
+
+        cur.execute("UPDATE candidate_start SET created_by = NULL WHERE created_by = ANY(%s);", (obs_ids,))
+        cur.execute("UPDATE candidate_start SET updated_by = NULL WHERE updated_by = ANY(%s);", (obs_ids,))
+        cur.execute("DELETE FROM users WHERE id = ANY(%s);", (obs_ids,))
+
+    # 6. Seed USERS
+    print(f"  -> Seeding MIS test users ({len(USERS)} users, Default password: {DEFAULT_MIS_PASSWORD})...")
+    cur.execute("UPDATE users SET employee_code = 'TEMP-' || id;")
     user_ids = {}
 
-    for email, full_name, role_code, org_code, emp_code in MIS_TEST_USERS:
-        oid = org_ids.get(org_code, org_ids["BRAVENS_INC"])
-        rid = role_ids.get(role_code, role_ids["RECRUITER"])
-        onboard_id = ampcus_onboard_id if "ampcus" in org_code.lower() else bravens_onboard_id
+    for idx, u in enumerate(USERS):
+        email = u["email"].lower().strip()
+        full_name = u["full_name"]
+        role_code = u["role"]
+        rid = role_ids.get(role_code, role_ids.get("RECRUITER"))
+        oid = org_ids.get("AMPCUS_INC", 1)
+        onboard_id = ampcus_onboard_id if role_code == "ONBOARD_TEAM" else None
+        team_name = u.get("team", "Alpha")
+        emp_code = f"EMP-{idx + 1:03d}"
+        user_pw = u.get("password", DEFAULT_MIS_PASSWORD)
+        user_pw_hash = mis_hash_password(user_pw)
+        is_super = u.get("is_super_admin", False)
 
-        cur.execute("SELECT id, password_hash FROM users WHERE email = %s;", (email,))
+        cur.execute("SELECT id FROM users WHERE email = %s;", (email,))
         row = cur.fetchone()
         if not row:
             cur.execute(
                 """
                 INSERT INTO users (
                     organization_id, role_id, onboarding_organization_id,
-                    employee_code, full_name, email, password_hash, is_active, is_super_admin
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s)
+                    employee_code, full_name, email, password_hash, team_name,
+                    is_active, is_super_admin
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s)
                 RETURNING id;
                 """,
-                (oid, rid, onboard_id, emp_code, full_name, email, default_pw_hash, role_code == "MIS"),
+                (oid, rid, onboard_id, emp_code, full_name, email, user_pw_hash, team_name, is_super),
             )
             user_ids[email] = cur.fetchone()[0]
         else:
             user_ids[email] = row[0]
-            if reset_passwords:
-                cur.execute("UPDATE users SET password_hash = %s WHERE id = %s;", (default_pw_hash, row[0]))
+            cur.execute(
+                """
+                UPDATE users SET 
+                    organization_id = %s,
+                    role_id = %s,
+                    onboarding_organization_id = %s,
+                    employee_code = %s,
+                    full_name = %s,
+                    password_hash = %s,
+                    team_name = %s,
+                    is_active = TRUE,
+                    is_super_admin = %s
+                WHERE id = %s;
+                """,
+                (oid, rid, onboard_id, emp_code, full_name, user_pw_hash, team_name, is_super, row[0]),
+            )
 
-    # 6. Recruiter-Manager Mapping
+    # 7. Recruiter-Manager Mapping
     print("  -> Seeding recruiter-manager mappings...")
-    mgr1_id = user_ids.get("manager1@bravens.com")
+    ampcus_org_id = org_ids.get("AMPCUS_INC", 1)
     rec1_id = user_ids.get("recruiter1@bravens.com")
-    bhushan_id = user_ids.get("b.ampcus@gmail.com")
-    ampcus_mgr_id = user_ids.get("manager@ampcus.com")
-    ampcus_rec_id = user_ids.get("recruiter@ampcus.com")
+    rec2_id = user_ids.get("recruiter2@bravens.com")
+    rec3_id = user_ids.get("recruiter3@bravens.com")
+    rec4_id = user_ids.get("recruiter4@bravens.com")
+    rec5_id = user_ids.get("recruiter5@bravens.com")
+    mgr1_id = user_ids.get("manager1@bravens.com")
+    mgr2_id = user_ids.get("manager2@bravens.com")
 
-    mappings = [
-        (rec1_id, mgr1_id, org_ids["BRAVENS_INC"]),
-        (bhushan_id, mgr1_id, org_ids["BRAVENS_INC"]),
-        (ampcus_rec_id, ampcus_mgr_id, org_ids["AMPCUS_INC"]),
-    ]
+    cur.execute("DELETE FROM recruiter_manager_mapping;")
+    mappings = []
     for r_id, m_id, o_id in mappings:
         if r_id and m_id:
             cur.execute(
                 """
                 INSERT INTO recruiter_manager_mapping (recruiter_id, manager_id, organization_id, is_active)
-                SELECT %s, %s, %s, TRUE
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM recruiter_manager_mapping WHERE recruiter_id = %s AND is_active = TRUE
-                );
+                VALUES (%s, %s, %s, TRUE);
                 """,
-                (r_id, m_id, o_id, r_id),
+                (r_id, m_id, o_id),
             )
 
-    # 7. Sample Starts (Submissions)
-    print("  -> Seeding sample candidate starts...")
-    sample_starts = [
-        (
-            "ACT-JOB-001",
-            "David Miller",
-            "david.miller@example.com",
-            "W2",
-            "Apple Inc",
-            "Apple Inc",
-            "Software Engineer",
-            date(2026, 6, 15),
-            Decimal("65.00"),
-            Decimal("85.00"),
-            Decimal("18.50"),
-            "DRAFT",
-            rec1_id,
-            mgr1_id,
-        ),
-        (
-            "ACT-JOB-002",
-            "Sarah Connor",
-            "sarah.c@example.com",
-            "C2C",
-            "Google LLC",
-            "Alphabet",
-            "Cloud Architect",
-            date(2026, 7, 1),
-            Decimal("75.00"),
-            Decimal("105.00"),
-            Decimal("24.00"),
-            "SUBMITTED",
-            rec1_id,
-            mgr1_id,
-        ),
-        (
-            "ACT-JOB-003",
-            "Michael Scott",
-            "michael.s@example.com",
-            "W2",
-            "Microsoft",
-            "Microsoft Corp",
-            "DevOps Engineer",
-            date(2026, 8, 1),
-            Decimal("70.00"),
-            Decimal("96.50"),
-            Decimal("22.50"),
-            "MANAGER_REVIEW",
-            bhushan_id or rec1_id,
-            mgr1_id,
-        ),
-        (
-            "ACT-JOB-004",
-            "Emily Watson",
-            "emily.w@example.com",
-            "FTE",
-            "Amazon",
-            "AWS",
-            "Data Scientist",
-            date(2026, 8, 15),
-            Decimal("80.00"),
-            Decimal("120.00"),
-            Decimal("35.00"),
-            "APPROVED",
-            rec1_id,
-            mgr1_id,
-        ),
-    ]
+    # 7.5 Email Import Logs (Mock Automated Ingestion Batch)
+    batch_id = None
 
+    # 8. Sample Starts (Submissions)
+    print("  -> Seeding sample candidate starts...")
+    sample_starts = []
+
+    start_ids = {}
     for (
         act_id,
         c_name,
@@ -422,6 +674,14 @@ def seed_mis(conn, reset_passwords: bool = False):
         stat,
         rec_id,
         mgr_id,
+        r_source,
+        w_auth,
+        r_loc,
+        w_loc,
+        c_loc,
+        sub_comp,
+        sub_email,
+        sub_phone,
     ) in sample_starts:
         if not rec_id or not mgr_id:
             continue
@@ -435,8 +695,8 @@ def seed_mis(conn, reset_passwords: bool = False):
                 INSERT INTO imported_jobdiva_records (
                     activity_id, candidate_full_name, candidate_email,
                     job_company, job_title, start_date, end_client_name,
-                    organization_id, is_consumed
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+                    organization_id, import_batch_id, is_consumed
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
                 RETURNING id;
                 """,
                 (
@@ -447,34 +707,56 @@ def seed_mis(conn, reset_passwords: bool = False):
                     title,
                     s_date,
                     end_client,
-                    org_ids["BRAVENS_INC"],
+                    ampcus_org_id,
+                    batch_id,
                 ),
             )
             imported_id = cur.fetchone()[0]
         else:
             imported_id = job_row[0]
+            cur.execute(
+                """
+                UPDATE imported_jobdiva_records SET
+                    candidate_full_name = %s,
+                    candidate_email = %s,
+                    job_company = %s,
+                    job_title = %s,
+                    start_date = %s,
+                    end_client_name = %s,
+                    import_batch_id = COALESCE(import_batch_id, %s)
+                WHERE id = %s;
+                """,
+                (c_name, c_email, client, title, s_date, end_client, batch_id, imported_id),
+            )
 
-        # 2. Insert candidate start
+        # 2. Insert or update candidate start
         cur.execute("SELECT id FROM candidate_start WHERE activity_id = %s;", (act_id,))
-        if not cur.fetchone():
+        start_row = cur.fetchone()
+        if not start_row:
             cur.execute(
                 """
                 INSERT INTO candidate_start (
                     imported_record_id, activity_id, organization_id, recruiter_id,
                     mapped_manager_id, submission_manager_id,
                     candidate_name, candidate_email, contract_type, client_name, end_client_name,
-                    job_title, start_date, pay_rate, gross_bill_rate, margin, status
+                    job_title, start_date, pay_rate, gross_bill_rate, margin, status,
+                    resume_source, work_authorization, recruiter_location, work_location, candidate_location,
+                    sub_contractor_company, sub_contractor_email, sub_contractor_contact,
+                    team_manager, head_of_department, team_lead, crm, onboarding_coordinator
                 ) VALUES (
                     %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s
-                );
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    'Karan Malhotra', 'Sanjay Mehta', 'Vivek Chauhan', 'Manoj Tiwari', 'Sneha Nair'
+                ) RETURNING id;
                 """,
                 (
                     imported_id,
                     act_id,
-                    org_ids["BRAVENS_INC"],
+                    ampcus_org_id,
                     rec_id,
                     mgr_id,
                     mgr_id,
@@ -489,8 +771,230 @@ def seed_mis(conn, reset_passwords: bool = False):
                     brate,
                     margin,
                     stat,
+                    r_source,
+                    w_auth,
+                    r_loc,
+                    w_loc,
+                    c_loc,
+                    sub_comp,
+                    sub_email,
+                    sub_phone,
                 ),
             )
+            start_ids[act_id] = cur.fetchone()[0]
+        else:
+            start_ids[act_id] = start_row[0]
+            cur.execute(
+                """
+                UPDATE candidate_start SET
+                    recruiter_id = %s,
+                    mapped_manager_id = %s,
+                    submission_manager_id = %s,
+                    organization_id = %s,
+                    candidate_name = %s,
+                    candidate_email = %s,
+                    contract_type = %s,
+                    client_name = %s,
+                    end_client_name = %s,
+                    job_title = %s,
+                    start_date = %s,
+                    pay_rate = %s,
+                    gross_bill_rate = %s,
+                    margin = %s,
+                    status = %s,
+                    resume_source = %s,
+                    work_authorization = %s,
+                    recruiter_location = %s,
+                    work_location = %s,
+                    candidate_location = %s,
+                    sub_contractor_company = %s,
+                    sub_contractor_email = %s,
+                    sub_contractor_contact = %s,
+                    team_manager = 'Karan Malhotra',
+                    head_of_department = 'Sanjay Mehta',
+                    team_lead = 'Vivek Chauhan',
+                    crm = 'Manoj Tiwari',
+                    onboarding_coordinator = 'Sneha Nair'
+                WHERE id = %s;
+                """,
+                (
+                    rec_id,
+                    mgr_id,
+                    mgr_id,
+                    ampcus_org_id,
+                    c_name,
+                    c_email,
+                    ctype,
+                    client,
+                    end_client,
+                    title,
+                    s_date,
+                    prate,
+                    brate,
+                    margin,
+                    stat,
+                    r_source,
+                    w_auth,
+                    r_loc,
+                    w_loc,
+                    c_loc,
+                    sub_comp,
+                    sub_email,
+                    sub_phone,
+                    start_row[0],
+                ),
+            )
+
+    # 9. Subcontractors
+    print("  -> Seeding subcontractors...")
+    admin1_id = user_ids.get("admin1@bravens.com")
+    subcontractors = []
+    for name, email, phone in subcontractors:
+        cur.execute("SELECT id FROM subcontractors WHERE name = %s;", (name,))
+        s_row = cur.fetchone()
+        if not s_row:
+            cur.execute(
+                """
+                INSERT INTO subcontractors (organization_id, name, email, contact_phone, is_active, created_by)
+                VALUES (%s, %s, %s, %s, TRUE, %s);
+                """,
+                (ampcus_org_id, name, email, phone, admin1_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE subcontractors SET 
+                    organization_id = %s, email = %s, contact_phone = %s, is_active = TRUE 
+                WHERE id = %s;
+                """,
+                (ampcus_org_id, email, phone, s_row[0]),
+            )
+
+    # 10. Email Templates
+    print("  -> Seeding email templates...")
+    email_templates = [
+        (
+            "START_CREATED",
+            "Start Form Created",
+            "New Candidate Start Submitted: {{candidate_name}}",
+            "<p>Hello,</p><p>A new start has been recorded for <strong>{{candidate_name}}</strong> (Activity: {{activity_id}}) at {{client_name}}.</p>",
+        ),
+        (
+            "MANAGER_APPROVAL_REQUEST",
+            "Manager Review Request",
+            "Action Required: Review Candidate Start {{activity_id}}",
+            "<p>Hello Manager,</p><p>Please review and approve the candidate start for <strong>{{candidate_name}}</strong>.</p>",
+        ),
+        (
+            "MIS_APPROVAL_REQUEST",
+            "MIS Review Request",
+            "MIS Verification Required: {{activity_id}}",
+            "<p>Hello MIS Team,</p><p>Manager approval has completed for <strong>{{candidate_name}}</strong>. Please perform MIS verification.</p>",
+        ),
+        (
+            "START_APPROVED",
+            "Start Approved",
+            "Candidate Start Approved: {{candidate_name}}",
+            "<p>Congratulations,</p><p>The start form for <strong>{{candidate_name}}</strong> has been fully approved.</p>",
+        ),
+        (
+            "START_REJECTED",
+            "Start Rejected",
+            "Candidate Start Rejected: {{candidate_name}}",
+            "<p>Notice: The start form for {{candidate_name}} was rejected. Reason: {{rejection_reason}}.</p>",
+        ),
+    ]
+    for code, name, subject, body in email_templates:
+        cur.execute("SELECT id FROM email_templates WHERE code = %s;", (code,))
+        et_row = cur.fetchone()
+        if not et_row:
+            cur.execute(
+                """
+                INSERT INTO email_templates (organization_id, code, name, subject, body_html, is_active, created_by)
+                VALUES (%s, %s, %s, %s, %s, TRUE, %s);
+                """,
+                (ampcus_org_id, code, name, subject, body, admin1_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE email_templates SET 
+                    organization_id = %s, name = %s, subject = %s, body_html = %s, is_active = TRUE
+                WHERE id = %s;
+                """,
+                (ampcus_org_id, name, subject, body, et_row[0]),
+            )
+
+    # 11. App Settings
+    print("  -> Seeding application settings...")
+    app_settings = [
+        (
+            "MARGIN_THRESHOLD_SETTINGS",
+            '{"min_margin": 15.0, "high_margin": 30.0, "requires_vp_approval": 10.0}',
+        ),
+        (
+            "EMAIL_INGESTION_CONFIG",
+            '{"sync_interval_minutes": 30, "auto_match": true, "sender_whitelist": ["jobdiva@ampcus.com"]}',
+        ),
+        (
+            "PORTAL_BRANDING",
+            '{"portal_name": "Starts MIS", "theme": "dark", "company_name": "Ampcus Inc"}',
+        ),
+    ]
+    for key, val_json in app_settings:
+        cur.execute("SELECT id FROM app_settings WHERE key = %s AND organization_id = %s;", (key, ampcus_org_id))
+        st_row = cur.fetchone()
+        if not st_row:
+            cur.execute(
+                """
+                INSERT INTO app_settings (organization_id, key, value_json, updated_by)
+                VALUES (%s, %s, %s::jsonb, %s);
+                """,
+                (ampcus_org_id, key, val_json, admin1_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE app_settings SET value_json = %s::jsonb, updated_by = %s WHERE id = %s;
+                """,
+                (val_json, admin1_id, st_row[0]),
+            )
+
+    # 12. Incentives & Approvals for Sample Starts
+    # Mock data removed
+
+    # 13. Notifications
+    print("  -> Seeding sample notifications...")
+    notifications = []
+    for uid, s_id, n_type, title, msg in notifications:
+        if uid:
+            cur.execute(
+                """
+                INSERT INTO notifications (user_id, candidate_start_id, type, title, message, is_read)
+                SELECT %s, %s, %s, %s, %s, FALSE
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM notifications WHERE user_id = %s AND title = %s
+                );
+                """,
+                (uid, s_id, n_type, title, msg, uid, title),
+            )
+
+    # 14. Audit Logs
+    print("  -> Seeding audit log history...")
+    cur.execute("DELETE FROM audit_logs;")
+    audit_samples = []
+    for org_id, actor_id, ent_type, ent_id, action, before_j, after_j in audit_samples:
+        if ent_id and actor_id:
+            cur.execute(
+                """
+                INSERT INTO audit_logs (organization_id, actor_id, entity_type, entity_id, action, before_json, after_json)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb);
+                """,
+                (org_id, actor_id, ent_type, ent_id, action, before_j, after_j),
+            )
+
+    # 15. Password Reset Tokens
+    # Mock data removed
 
     cur.close()
     print("  [OK] Starts MIS seeding completed successfully.")
@@ -503,16 +1007,12 @@ def seed_mis(conn, reset_passwords: bool = False):
 PRISM_DIVISIONS = [
     ("nashik", "Nashik Division"),
     ("sambhajiNagar", "Sambhaji Nagar Division"),
-    ("ampcusTechClient", "Ampcus Tech (Client)"),
+    ("ampcusTechClient", "Ampcus Tech Client"),
     ("ampcusTechInhouse", "Ampcus Tech In-House"),
 ]
 
 PRISM_ADMINS = [
-    ("admin@example.com", "Default Admin"),
-    ("priya@ampcustech.com", "Priya"),
-    ("abhijeet@ampcustech.com", "Abhijit"),
-    ("priya@example.com", "Priya Example"),
-    ("abhishek@example.com", "Abhishek Example"),
+    ("admin@example.com", "Default Admin")
 ]
 
 NASHIK_SLABS = [
@@ -613,8 +1113,10 @@ def seed_prism(conn, reset_passwords: bool = False):
             )
         else:
             u_id = u[0]
-            if reset_passwords:
-                cur.execute("UPDATE users SET hashed_password = %s WHERE id = %s;", (prism_pw_hash, u_id))
+            cur.execute(
+                "UPDATE users SET hashed_password = %s, full_name = %s, is_active = TRUE WHERE id = %s;",
+                (prism_pw_hash, full_name, u_id),
+            )
             cur.execute(
                 "INSERT INTO user_roles (user_id, role_id) VALUES (%s, %s) ON CONFLICT DO NOTHING;",
                 (u_id, admin_role_id),
@@ -638,67 +1140,9 @@ def seed_prism(conn, reset_passwords: bool = False):
         )
 
     # 5. Sample Candidates for Testing Cycles
-    print("  -> Seeding sample PRISM candidates...")
-    cur.execute("SELECT id FROM candidate_data_versions ORDER BY id ASC LIMIT 1;")
-    v_row = cur.fetchone()
-    if not v_row:
-        cur.execute(
-            """
-            INSERT INTO candidate_data_versions (version_label, source_filename, row_count, notes)
-            VALUES ('Initial Seed Version', 'seed_candidates.xlsx', 2, 'Initial seed candidates for testing')
-            RETURNING id;
-            """
-        )
-        version_id = cur.fetchone()[0]
-    else:
-        version_id = v_row[0]
-
-    candidates = [
-        (
-            "CAND-NASHIK-001",
-            "John Doe",
-            date(2026, 6, 1),
-            "W2",
-            "JobDiva",
-            "Ampcus Inc",
-            Decimal("15.00"),
-            "Priya",
-            "Manager A",
-            "nashik",
-        ),
-        (
-            "CAND-INHOUSE-002",
-            "Jane Smith",
-            date(2026, 7, 1),
-            "FTE",
-            "LinkedIn",
-            "Ampcus Tech",
-            Decimal("18.50"),
-            "Abhijit",
-            "Manager B",
-            "ampcusTechInhouse",
-        ),
-    ]
-
+    candidates = []
     for ext_id, cname, sdate, ctype, source, org, margin, rec, mgr, div in candidates:
-        cur.execute("SELECT id FROM candidates WHERE external_candidate_id = %s;", (ext_id,))
-        if not cur.fetchone():
-            cur.execute(
-                """
-                INSERT INTO candidates (
-                    source_version_id, last_touched_version_id, external_candidate_id,
-                    candidate_name, normalized_name, start_date, contract_type,
-                    candidate_source, organization, margin, recruiter, manager,
-                    status, is_active, incentive_active, ownership_confirmed
-                ) VALUES (
-                    %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s,
-                    'Active', TRUE, TRUE, TRUE
-                );
-                """,
-                (version_id, version_id, ext_id, cname, cname.strip().lower(), sdate, ctype, source, org, margin, rec, mgr),
-            )
+        pass
 
     cur.close()
     print("  [OK] PRISM seeding completed successfully.")
@@ -715,16 +1159,10 @@ def print_credentials_summary():
     print("\n1. STARTS MIS (New Starts Portal)")
     print(f"   Default Password for all test users: '{DEFAULT_MIS_PASSWORD}'")
     print("   ---------------------------------------------------------------")
-    print(f"   {'Role':<22} | {'Email':<26} | {'Full Name'}")
+    print(f"   {'Role':<22} | {'Email':<28} | {'Full Name'}")
     print("   ---------------------------------------------------------------")
-    print(f"   {'Admin (MIS)':<22} | {'admin1@bravens.com':<26} | Deepak Kumar")
-    print(f"   {'Admin (MIS)':<22} | {'mis.admin@ampcus.com':<26} | Ampcus MIS Admin")
-    print(f"   {'Recruiter':<22} | {'recruiter1@bravens.com':<26} | Arjun Singh")
-    print(f"   {'Recruiter':<22} | {'b.ampcus@gmail.com':<26} | Bhushan Chitte")
-    print(f"   {'Manager':<22} | {'manager1@bravens.com':<26} | Karan Malhotra")
-    print(f"   {'HOD':<22} | {'hod1@bravens.com':<26} | Sanjay Mehta")
-    print(f"   {'Onboarding Team':<22} | {'onboarding1@bravens.com':<26} | Sneha Nair")
-    print(f"   {'Team Lead':<22} | {'teamlead1@bravens.com':<26} | Vivek Chauhan")
+    for u in USERS:
+        print(f"   {u['role']:<22} | {u['email']:<28} | {u['full_name']}")
 
     print("\n2. PRISM (Incentive Tracker Portal)")
     print(f"   Default Password for PRISM users: '{DEFAULT_PRISM_PASSWORD}'")
@@ -732,8 +1170,7 @@ def print_credentials_summary():
     print(f"   {'Role':<22} | {'Email':<26} | {'Full Name'}")
     print("   ---------------------------------------------------------------")
     print(f"   {'Admin':<22} | {'admin@example.com':<26} | Default Admin")
-    print(f"   {'Admin':<22} | {'priya@ampcustech.com':<26} | Priya")
-    print(f"   {'Admin':<22} | {'abhijeet@ampcustech.com':<26} | Abhijit")
+    
 
     print("\n3. API & Web UI URLs")
     print("   Backend API:   http://localhost:8000")
