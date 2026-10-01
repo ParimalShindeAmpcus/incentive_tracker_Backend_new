@@ -55,26 +55,27 @@ def build_start_visibility_conditions(user: User) -> list:
     user_email = (user.email or "").strip().lower()
     user_name = (user.full_name or "").strip().lower()
 
+    creator_conditions = [CandidateStart.recruiter_id == user.id]
+    if user.id:
+        creator_conditions.append(CandidateStart.created_by == user.id)
+    if user_email:
+        creator_conditions.append(
+            func.lower(func.trim(CandidateStart.user_email)) == user_email
+        )
+
     if role_code == "RECRUITER":
-        creator_conditions = [CandidateStart.recruiter_id == user.id]
-        if user.id:
-            creator_conditions.append(CandidateStart.created_by == user.id)
-        if user_email:
-            creator_conditions.append(
-                func.lower(func.trim(CandidateStart.user_email)) == user_email
-            )
         return [or_(*creator_conditions)]
 
     # For all leadership, HOD, manager, director, team lead, onboarding roles:
-    # Can view ONLY New Starts where their own user name is assigned/mentioned.
+    # Can view New Starts where their own user name is assigned/mentioned or where they are the creator/recruiter
     if not user_name:
-        return [CandidateStart.id == -1]
+        return [or_(*creator_conditions)]
 
     name_conditions = [
         func.lower(func.trim(col)) == user_name
         for col in HIERARCHY_COLUMNS
     ]
-    return [or_(*name_conditions)]
+    return [or_(*name_conditions, *creator_conditions)]
 
 
 def can_user_view_start(
@@ -96,16 +97,16 @@ def can_user_view_start(
     user_name = (user.full_name or "").strip().lower()
     start_user_email = (start.user_email or "").strip().lower()
 
-    # Recruiter can view only New Starts created/assigned to themselves
-    if role_code == "RECRUITER":
-        return bool(
-            start.recruiter_id == user.id
-            or (start.created_by is not None and start.created_by == user.id)
-            or (user_email and start_user_email == user_email)
-        )
+    # Recruiter or creator can view New Starts created/assigned to themselves
+    if (
+        start.recruiter_id == user.id
+        or (start.created_by is not None and start.created_by == user.id)
+        or (user_email and start_user_email == user_email)
+    ):
+        return True
 
     # Leadership, HOD, Manager, Director, Team Lead, CRM, Onboard, etc.:
-    # Can view ONLY New Starts where their own user name is assigned/mentioned
+    # Can view New Starts where their own user name is assigned/mentioned
     if user_name:
         hierarchy_values = (
             start.head_of_department,
