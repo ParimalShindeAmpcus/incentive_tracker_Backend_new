@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from mis.core.deps import get_current_user
 from mis.core.constants import (
@@ -143,6 +144,26 @@ async def _insert_start_notification(
         ),
         params,
     )
+
+
+async def _get_onboarding_users_for_start(
+    db: AsyncSession,
+    start: "CandidateStart",
+) -> list["User"]:
+    """Return User objects whose full_name matches the onboarding_coordinator field of the start."""
+    coord_name = (start.onboarding_coordinator or "").strip()
+    if not coord_name:
+        return []
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.role))
+        .where(
+            func.lower(func.trim(User.full_name)) == coord_name.lower(),
+            User.deleted_at.is_(None),
+            User.is_active.is_(True),
+        )
+    )
+    return list(result.scalars().all())
 
 
 def _pending_notification_copy(status: str, candidate_label: str) -> tuple[str, str] | None:
@@ -304,6 +325,7 @@ async def _apply_start_review(
             "comments": comments,
         },
     )
+    candidate_label = start.candidate_name or start.activity_id
     if action == "APPROVE" and is_acting_as_hod:
         if is_ampcus:
             await _insert_start_notification(
@@ -313,7 +335,7 @@ async def _apply_start_review(
                 notif_type="START_APPROVED",
                 title="Start approved",
                 message=(
-                    f"Your start for {start.candidate_name or start.activity_id} "
+                    f"Your start for {candidate_label} "
                     f"was approved by {actor.full_name} (HOD)."
                 ),
             )
@@ -325,10 +347,25 @@ async def _apply_start_review(
                 notif_type="START_APPROVED",
                 title="Start approved by HOD",
                 message=(
-                    f"Your start for {start.candidate_name or start.activity_id} "
+                    f"Your start for {candidate_label} "
                     f"was approved by {actor.full_name} (HOD) and sent to onboarding for review."
                 ),
             )
+            # Notify the onboarding coordinator that a new start awaits their review
+            onboarding_users = await _get_onboarding_users_for_start(db, start)
+            for ob_user in onboarding_users:
+                await _insert_start_notification(
+                    db,
+                    user_id=ob_user.id,
+                    start_id=start.id,
+                    notif_type="START_PENDING",
+                    title="New start pending your review",
+                    message=(
+                        f"The start for {candidate_label} has been approved by "
+                        f"{actor.full_name} (HOD) and requires your onboarding review."
+                    ),
+                    once=True,
+                )
     elif action == "APPROVE" and role_code in ONBOARD_ROLES:
         await _insert_start_notification(
             db,
@@ -337,7 +374,7 @@ async def _apply_start_review(
             notif_type="START_APPROVED",
             title="Start approved by onboarding",
             message=(
-                f"Your start for {start.candidate_name or start.activity_id} "
+                f"Your start for {candidate_label} "
                 f"was approved by {actor.full_name} (onboarding)."
             ),
         )
@@ -349,7 +386,7 @@ async def _apply_start_review(
             notif_type="START_APPROVED",
             title="Start approved",
             message=(
-                f"Your start for {start.candidate_name or start.activity_id} "
+                f"Your start for {candidate_label} "
                 f"was approved by {actor.full_name}."
             ),
         )
@@ -780,9 +817,8 @@ async def create_start(
             },
         )
 
-    pending_copy = _pending_notification_copy(
-        submit_status, start.candidate_name or start.activity_id
-    )
+    candidate_label = start.candidate_name or start.activity_id
+    pending_copy = _pending_notification_copy(submit_status, candidate_label)
     if pending_copy:
         title, message = pending_copy
         await _insert_start_notification(
@@ -794,6 +830,38 @@ async def create_start(
             message=message,
             once=True,
         )
+
+    # Notify the HOD when a recruiter submits a start for HOD review
+    if submit_status in HOD_REVIEWABLE_STATUSES_SET and start.submission_manager_id:
+        await _insert_start_notification(
+            db,
+            user_id=start.submission_manager_id,
+            start_id=start.id,
+            notif_type="START_PENDING",
+            title="New start submitted for your approval",
+            message=(
+                f"{recruiter.full_name} has submitted a start for {candidate_label} "
+                f"and it requires your HOD approval."
+            ),
+            once=True,
+        )
+
+    # Notify the onboarding coordinator when a start bypasses HOD (HOD/Onboard submission)
+    if submit_status == "ONBOARDING_REVIEW":
+        onboarding_users = await _get_onboarding_users_for_start(db, start)
+        for ob_user in onboarding_users:
+            await _insert_start_notification(
+                db,
+                user_id=ob_user.id,
+                start_id=start.id,
+                notif_type="START_PENDING",
+                title="New start pending your review",
+                message=(
+                    f"A start for {candidate_label} has been submitted "
+                    f"and requires your onboarding review."
+                ),
+                once=True,
+            )
 
     await db.commit()
     await db.refresh(start)
