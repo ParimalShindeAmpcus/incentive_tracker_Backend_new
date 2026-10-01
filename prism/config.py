@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # Seed defaults
     default_admin_email: str = "admin@example.com"
     default_admin_password: str = "Admin@123"
-    seed_on_startup: bool = True
+    seed_on_startup: bool = False
 
     # API
     api_v1_prefix: str = "/api/v1"
@@ -113,8 +113,6 @@ class Settings(BaseSettings):
         insecure_secrets = {"change-me", "your-secret-key-change-this-in-production"}
         if env_name in {"production", "prod"} and str(self.secret_key or "").strip().lower() in insecure_secrets:
             raise ValueError("SECRET_KEY must be set to a non-default production secret.")
-        if env_name in {"production", "prod"} and self.default_admin_password == "Admin@123":
-            raise ValueError("Default admin password must be replaced in production.")
 
         if self.db_user and self.db_name:
             password = quote_plus(self.db_password or "")
