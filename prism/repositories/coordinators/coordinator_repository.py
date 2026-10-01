@@ -5,6 +5,9 @@ from prism.repositories.entities.coordinator import CoordinatorRecord, Coordinat
 
 def get(db: Session, record_id: int): return db.query(CoordinatorRecord).filter(CoordinatorRecord.id == record_id, CoordinatorRecord.is_deleted.is_(False)).first()
 def by_email(db: Session, email: str): return db.query(CoordinatorRecord).filter(CoordinatorRecord.email == email.lower()).first()
+def delete(db: Session, record: CoordinatorRecord) -> None:
+    db.delete(record)
+    db.flush()
 def query(db: Session, search: Optional[str] = None, status: Optional[CoordinatorStatus] = None):
     q = db.query(CoordinatorRecord).filter(CoordinatorRecord.is_deleted.is_(False))
     if search:
