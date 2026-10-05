@@ -141,6 +141,10 @@ def _build_seed_rows() -> List[Dict[str, Any]]:
         ("fte_finder_fee_threshold", "4500", "Finder fee amount separating below/above FTE slab (INR)"),
         ("fte_min_days", "90", "Minimum days before FTE incentive is payable"),
         ("max_roles_per_person", "2", "Maximum eligible roles per person"),
+        ("special_incentive_enabled", "true", "Enable Recruiter Special Incentive Plan (Multiple Placements)"),
+        ("special_min_placements", "2", "Minimum qualifying placements in same calendar month required for special incentive"),
+        ("special_min_hours", "160", "Minimum cumulative hours per placement required to qualify for special incentive average"),
+        ("special_evaluation_hours", "161", "Evaluation hours tier for special incentive matrix lookup (161+ hrs)"),
     ]
     for key, val, desc in sn_config:
         rows.append(_row(
@@ -170,6 +174,7 @@ def _build_seed_rows() -> List[Dict[str, Any]]:
         ("15.01", "20.00", (5000, 6000, 7000, 8000, 15000)),
         ("20.01", "30.00", (6000, 7000, 8000, 10000, 20000)),
         ("30.01", "50.00", (7000, 8000, 9000, 12000, 25000)),
+        ("51.00", "80.00", (999, 999, 999, 999, 999)),
     ]
     hour_labels = ["0–40h", "41–80h", "81–120h", "121–160h", "161+h"]
     for m_lo, m_hi, amts in sn_bands:

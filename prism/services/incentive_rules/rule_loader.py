@@ -61,6 +61,12 @@ class SNRuleConfig:
     fte_min_days: int = 90
     max_roles_per_person: int = 2
 
+    # Recruiter Special Incentive Plan (Multiple Placements)
+    special_incentive_enabled: bool = True
+    special_min_placements: int = 2
+    special_min_hours: Decimal = Decimal("160")
+    special_evaluation_hours: Decimal = Decimal("161")
+
     # (margin_min, margin_max, (h0_40, h41_80, h81_120, h121_160, h161plus))
     bands: List[Tuple[Decimal, Decimal, Tuple[Decimal, ...]]] = field(default_factory=list)
     # W2/C2C leadership: role -> amount
@@ -312,7 +318,7 @@ def _apply_global_config_sn(cfg: SNRuleConfig, rules: list) -> None:
     for r in rules:
         if r.rule_category != "GLOBAL_CONFIG":
             continue
-        v = r.config_value or ""
+        v = (r.config_value or "").strip()
         if r.rule_key == "standard_hours":
             cfg.standard_hours = Decimal(v)
         elif r.rule_key == "fte_finder_fee_threshold":
@@ -321,6 +327,23 @@ def _apply_global_config_sn(cfg: SNRuleConfig, rules: list) -> None:
             cfg.fte_min_days = int(v)
         elif r.rule_key == "max_roles_per_person":
             cfg.max_roles_per_person = int(v)
+        elif r.rule_key == "special_incentive_enabled":
+            cfg.special_incentive_enabled = v.lower() in {"true", "1", "yes"}
+        elif r.rule_key == "special_min_placements":
+            try:
+                cfg.special_min_placements = int(v)
+            except (ValueError, TypeError):
+                pass
+        elif r.rule_key == "special_min_hours":
+            try:
+                cfg.special_min_hours = Decimal(v)
+            except Exception:
+                pass
+        elif r.rule_key == "special_evaluation_hours":
+            try:
+                cfg.special_evaluation_hours = Decimal(v)
+            except Exception:
+                pass
 
 
 def _apply_sn_bands(cfg: SNRuleConfig, rules: list) -> None:

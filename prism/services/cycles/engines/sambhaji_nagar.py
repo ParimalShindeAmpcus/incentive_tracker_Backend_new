@@ -725,13 +725,22 @@ def calculate_special_incentives(
     all_sn_candidates: List[Any],
     lifetime_hours_map: Dict[int, Decimal],
     paid_specials_map: Dict[Tuple[str, str], Decimal],
-    cycle_month: Optional[str]
+    cycle_month: Optional[str],
+    rule_config: "Optional[SNRuleConfig]" = None,
 ) -> List[LineDraft]:
     """
     Recruiter Special Incentive (Multiple Placements, Same Start Month).
     Calculates average bonus for recruiters who have >= 2 placements starting in the same month
     that have achieved >= 160 cumulative hours.
+    Driven dynamically by SNRuleConfig from Master Rules.
     """
+    if rule_config is not None and not getattr(rule_config, "special_incentive_enabled", True):
+        return []
+
+    min_hours = getattr(rule_config, "special_min_hours", None) or Decimal("160")
+    min_placements = getattr(rule_config, "special_min_placements", None) or 2
+    eval_hours = getattr(rule_config, "special_evaluation_hours", None) or Decimal("161")
+
     from collections import defaultdict
     import json
 
@@ -740,7 +749,7 @@ def calculate_special_incentives(
         if not c.recruiter or not c.start_date:
             continue
         lifetime_hours = lifetime_hours_map.get(c.id, ZERO)
-        if lifetime_hours < Decimal("160"):
+        if lifetime_hours < min_hours:
             continue
         
         person_lower = str(c.recruiter).strip().lower()
@@ -749,12 +758,12 @@ def calculate_special_incentives(
 
     extras: List[LineDraft] = []
     for (person_lower, start_month), candidates in groups.items():
-        if len(candidates) >= 2:
+        if len(candidates) >= min_placements:
             total_base = ZERO
             for c in candidates:
                 # Placements qualifying for the Recruiter Special Incentive Plan have completed >= 160 hours
-                # and are evaluated against the standard 161+ hours matrix slab (per docx Examples 1-4).
-                base_amt = matrix_amount(c.margin, Decimal("161"))
+                # and are evaluated against the configured matrix slab (per docx Examples 1-4).
+                base_amt = matrix_amount(c.margin, eval_hours, rule_config=rule_config)
                 total_base += Decimal(str(base_amt))
             
             avg_bonus = total_base / Decimal(len(candidates))
@@ -780,6 +789,9 @@ def calculate_special_incentives(
                         "previously_paid": float(previously_paid),
                         "payable_now": float(payable_now),
                         "cycle_month": cycle_month,
+                        "min_hours": float(min_hours),
+                        "min_placements": min_placements,
+                        "evaluation_hours": float(eval_hours),
                         "note": "Special incentive: average of 160+ hour placements starting in same month",
                         "external_candidate_id": getattr(first, "activity_id", None) or getattr(first, "start_id", None) or getattr(first, "external_candidate_id", None) or "",
                         "candidate_id": getattr(first, "activity_id", None) or getattr(first, "start_id", None) or getattr(first, "external_candidate_id", None) or "",

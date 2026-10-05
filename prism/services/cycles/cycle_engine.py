@@ -825,7 +825,11 @@ def run_cycle_calculation(
         paid_specials = incentive_repository.sn_paid_special_bonuses(db, cycle.id, division=cycle.division)
         
         special_lines = calculate_special_incentives(
-            all_sn_candidates, lifetime_hours_map, paid_specials, cycle.incentive_month
+            all_sn_candidates,
+            lifetime_hours_map,
+            paid_specials,
+            cycle.incentive_month,
+            rule_config=sn_config,
         )
         lines.extend(special_lines)
         

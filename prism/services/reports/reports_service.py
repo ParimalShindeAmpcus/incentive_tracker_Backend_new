@@ -296,6 +296,27 @@ def _compute_validation(
     margin = _margin_or_finder(row)
     hours_raw = row.get("hours")
     
+    # Special multi-placement average incentive for Sambhaji Nagar
+    itype = (row.get("incentive_type") or "").upper()
+    if itype == "SPECIAL":
+        metric_type = "SPECIAL"
+        monthly_hours = None
+        monthly_days = None
+        expl_raw = row.get("explanation_json")
+        expl = {}
+        if isinstance(expl_raw, str):
+            try:
+                expl = json.loads(expl_raw)
+            except Exception:
+                expl = {}
+        elif isinstance(expl_raw, dict):
+            expl = expl_raw
+
+        placements = expl.get("placements") or 2
+        start_month = expl.get("start_month") or row.get("incentive_month") or ""
+        summary = f"Special Incentive (Multiple Placements) | {placements} qualifying placements (160+ hrs) started in {start_month} | Average bonus INR {amount:,}"
+        return metric_type, monthly_hours, monthly_days, summary
+
     # 1. Nashik & Sambhaji Nagar: Hours-based validation (based on applicable contract type)
     # Exception: For FTE contract type, ignore the hours from uploaded file and show monthly working days instead.
     if "nashik" in div or "sambhajinagar" in div or div in {"nashik", "sambhajinagar"}:
@@ -352,7 +373,18 @@ def _to_row(
     amount = Decimal(str(row.get("amount") or 0)).quantize(Decimal("1"))
     metric_type, monthly_hours, monthly_days, summary = _compute_validation(row, cum_map)
 
-    if metric_type == "DAYS" and monthly_days is not None:
+    if metric_type == "SPECIAL":
+        expl_raw = row.get("explanation_json")
+        placements = 2
+        if isinstance(expl_raw, str):
+            try:
+                placements = json.loads(expl_raw).get("placements", 2)
+            except Exception:
+                pass
+        elif isinstance(expl_raw, dict):
+            placements = expl_raw.get("placements", 2)
+        hours_placements = Decimal(str(placements))
+    elif metric_type == "DAYS" and monthly_days is not None:
         hours_placements = Decimal(str(monthly_days))
     elif monthly_hours is not None:
         hours_placements = monthly_hours

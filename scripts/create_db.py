@@ -550,6 +550,22 @@ def setup_database(reset: bool = False, db_name: str | None = None) -> None:
     conn.close()
 
     print("\n[3/3] Creating PRISM tables and views in schema 'prism'...")
+    # Ensure PRISM configuration and engine target the same database
+    import os
+    os.environ["PRISM_DB_NAME"] = target_db
+    if host:
+        os.environ["PRISM_DB_HOST"] = str(host)
+    if port:
+        os.environ["PRISM_DB_PORT"] = str(port)
+    if user:
+        os.environ["PRISM_DB_USER"] = str(user)
+    if password:
+        os.environ["PRISM_DB_PASSWORD"] = str(password)
+    get_prism_settings.cache_clear()
+    import prism.core.db
+    prism.core.db._engine = None
+    prism.core.db._SessionLocal = None
+
     # Initialize PRISM tables via SQLAlchemy Base.metadata.create_all
     init_prism_db()
 
