@@ -2,6 +2,7 @@
 
 from prism.repositories.entities.audit import AuditAction, AuditLog
 from prism.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
+from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
 from prism.repositories.entities.candidate import Candidate, CandidateDataVersion
 from prism.repositories.entities.cycle import (
     CycleApprovalResult,
@@ -48,6 +49,7 @@ __all__ = [
     "HoursDataVersion",
     "HoursRow",
     "IncentiveLine",
+    "IncentiveRuleMaster",
     "IncentiveSlab",
     "Division",
     "Organization",

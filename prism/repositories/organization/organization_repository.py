@@ -42,6 +42,10 @@ def create_organization(db: Session, code: str, name: str) -> Organization:
     return org
 
 
+def get_division_by_id(db: Session, division_id: int) -> Optional[Division]:
+    return db.query(Division).filter(Division.id == division_id).first()
+
+
 def get_division_by_code(db: Session, organization_id: int, code: str) -> Optional[Division]:
     return (
         db.query(Division)
@@ -50,8 +54,28 @@ def get_division_by_code(db: Session, organization_id: int, code: str) -> Option
     )
 
 
-def create_division(db: Session, organization_id: int, code: str, name: str) -> Division:
-    div = Division(organization_id=organization_id, code=code, name=name, is_active=True)
+def get_division_by_code_any_org(db: Session, code: str) -> Optional[Division]:
+    return db.query(Division).filter(Division.code == code).first()
+
+
+def create_division(
+    db: Session,
+    organization_id: int,
+    code: str,
+    name: str,
+    description: Optional[str] = None,
+    calculation_engine: Optional[str] = "MARGIN_SLABS_PRO_RATA",
+    is_active: bool = True,
+) -> Division:
+    div = Division(
+        organization_id=organization_id,
+        code=code,
+        name=name,
+        description=description,
+        calculation_engine=calculation_engine,
+        is_active=is_active,
+    )
     db.add(div)
     db.flush()
     return div
+

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from prism.services.incentive_rules.rule_loader import NashikRuleConfig
 
 NASHIK_DIVISION_KEYS = {"nashik", "nd"}
 NASHIK_CONTRACT_TYPES = {"W2", "C2C"}
@@ -63,21 +66,53 @@ def rounded_margin(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def nashik_recruiter_base(margin: Decimal) -> Tuple[str, Decimal, str]:
-    """Return (kind, base, category) where kind is special|slab|none."""
+def nashik_recruiter_base(
+    margin: Decimal,
+    rule_config: "Optional[NashikRuleConfig]" = None,
+) -> Tuple[str, Decimal, str]:
+    """Return (kind, base, category) where kind is special|slab|none.
+
+    When rule_config is provided the slab table and threshold come from the DB master;
+    otherwise the module-level hardcoded constants are used (backward compat).
+    """
+    low_threshold = (
+        rule_config.low_margin_threshold
+        if rule_config is not None
+        else LOW_MARGIN_THRESHOLD
+    )
+    low_amount = (
+        rule_config.low_margin_one_time
+        if rule_config is not None
+        else LOW_MARGIN_ONE_TIME
+    )
+    slabs = (
+        rule_config.recruiter_slabs
+        if rule_config is not None and rule_config.recruiter_slabs
+        else RECRUITER_SLABS
+    )
+
     v = rounded_margin(margin)
-    if v < LOW_MARGIN_THRESHOLD:
-        return "special", LOW_MARGIN_ONE_TIME, "<= $0.99"
-    for lo, hi, amount in RECRUITER_SLABS:
+    if v < low_threshold:
+        return "special", low_amount, f"<= ${(low_threshold - Decimal('0.01')):.2f}"
+    for lo, hi, amount in slabs:
         if lo <= v <= hi:
             return "slab", amount, f"${lo} – ${hi}"
     return "none", Decimal("0"), "outside slabs"
 
 
-def nashik_pro_rata(base: Decimal, hours: Decimal) -> Tuple[Decimal, Decimal]:
-    if hours >= STANDARD_HOURS:
+def nashik_pro_rata(
+    base: Decimal,
+    hours: Decimal,
+    rule_config: "Optional[NashikRuleConfig]" = None,
+) -> Tuple[Decimal, Decimal]:
+    standard = (
+        rule_config.standard_hours
+        if rule_config is not None
+        else STANDARD_HOURS
+    )
+    if hours >= standard:
         return Decimal("1"), money(base)
-    factor = money(hours / STANDARD_HOURS)
+    factor = money(hours / standard)
     return factor, money(base * factor)
 
 

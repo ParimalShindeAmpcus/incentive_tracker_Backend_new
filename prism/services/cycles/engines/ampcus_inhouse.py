@@ -4,7 +4,10 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from prism.services.incentive_rules.rule_loader import InhouseRuleConfig
 
 from prism.repositories.entities.candidate import Candidate
 from prism.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
@@ -111,9 +114,13 @@ def _line(c: Candidate, role: str, person: Optional[str], amount: int, eligible:
     )
 
 
-def _limit_roles_inhouse(people: Dict[str, Optional[str]], amounts: Dict[str, int]) -> Dict[str, Optional[str]]:
+def _limit_roles_inhouse(
+    people: Dict[str, Optional[str]],
+    amounts: Dict[str, int],
+    max_roles: int = MAX_ROLES_PER_PERSON,
+) -> Dict[str, Optional[str]]:
     """Apply max-two-roles rule: if one person holds multiple roles, keep only
-    the top 2 highest-payout roles for that person."""
+    the top highest-payout roles for that person."""
     by_person: Dict[str, List[str]] = {}
     for role, person in people.items():
         if person and person.strip():
@@ -122,11 +129,11 @@ def _limit_roles_inhouse(people: Dict[str, Optional[str]], amounts: Dict[str, in
 
     excluded_roles: set[str] = set()
     for person_key, roles in by_person.items():
-        if len(roles) <= MAX_ROLES_PER_PERSON:
+        if len(roles) <= max_roles:
             continue
-        # Sort by payout descending, keep top 2
+        # Sort by payout descending, keep top max_roles
         sorted_roles = sorted(roles, key=lambda r: amounts.get(r, 0), reverse=True)
-        for excess_role in sorted_roles[MAX_ROLES_PER_PERSON:]:
+        for excess_role in sorted_roles[max_roles:]:
             excluded_roles.add(excess_role)
     return excluded_roles
 
@@ -138,17 +145,26 @@ def calculate_placement(
     coordinators: Dict[str, CoordinatorRecord],
     paid_keys: Optional[set[str]] = None,
     manually_included: bool = False,
+    rule_config: "Optional[InhouseRuleConfig]" = None,
 ) -> List[LineDraft]:
     people = {"Recruiter": getattr(c, "recruiter", None), "Manager": getattr(c, "manager", None), "Center Head": getattr(c, "center_head", None) or getattr(c, "avp", None)}
     status = str(getattr(c, "status", None) or "").upper()
     days = (cycle_end - c.start_date).days if getattr(c, "start_date", None) else 0
 
+    min_start = rule_config.min_start_date if (rule_config and rule_config.min_start_date) else MIN_START
+    min_days = rule_config.min_days if (rule_config and rule_config.min_days) else 90
+    max_roles = rule_config.max_roles_per_person if (rule_config and rule_config.max_roles_per_person) else MAX_ROLES_PER_PERSON
+    rec_above = rule_config.recruiter_above_manager if (rule_config and rule_config.recruiter_above_manager) else 5000
+    rec_below = rule_config.recruiter_below_manager if (rule_config and rule_config.recruiter_below_manager) else 3000
+    mgr_amt = rule_config.manager_amount if (rule_config and rule_config.manager_amount) else 500
+    ch_amt = rule_config.center_head_amount if (rule_config and rule_config.center_head_amount) else 1000
+
     # --- Candidate-level gates (all roles excluded together) ---
     if not getattr(c, "start_date", None):
         return [_line(c, role, person, 0, False, "MISSING_START_DATE", days) for role, person in people.items()]
-    if c.start_date < MIN_START:
+    if c.start_date < min_start:
         return [_line(c, role, person, 0, False, "INHOUSE_STARTED_BEFORE_POLICY_DATE", days) for role, person in people.items()]
-    if days < 90:
+    if days < min_days:
         return [_line(c, role, person, 0, False, "INHOUSE_90_DAY_REQUIREMENT_NOT_MET", days) for role, person in people.items()]
 
     if not manually_included:
@@ -177,18 +193,18 @@ def calculate_placement(
         recruiter_reason = "MISSING_JOB_LEVEL"
         recruiter_amount = 0
     elif "above" in job_level_clean:
-        recruiter_amount = 5000
+        recruiter_amount = rec_above
     elif "below" in job_level_clean:
-        recruiter_amount = 3000
+        recruiter_amount = rec_below
     else:
         recruiter_eligible = False
         recruiter_reason = "INVALID_JOB_LEVEL"
         recruiter_amount = 0
 
-    amounts = {"Recruiter": recruiter_amount, "Manager": 500, "Center Head": 1000}
+    amounts = {"Recruiter": recruiter_amount, "Manager": mgr_amt, "Center Head": ch_amt}
 
     # W1: Max-two-roles — if one person holds 3+ roles, exclude lowest-payout extras
-    excluded_roles = _limit_roles_inhouse(people, amounts)
+    excluded_roles = _limit_roles_inhouse(people, amounts, max_roles=max_roles)
 
     lines: List[LineDraft] = []
     for role, person in people.items():

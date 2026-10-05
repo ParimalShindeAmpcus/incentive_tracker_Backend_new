@@ -23,7 +23,10 @@ import json
 from collections import Counter
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from prism.services.incentive_rules.rule_loader import NashikRuleConfig
 
 from prism.repositories.entities.candidate import Candidate
 from prism.repositories.entities.coordinator import CoordinatorRecord
@@ -288,19 +291,21 @@ def calculate_nashik_fte_placement(
     placement_count_this_month: int = 1,
     prior_recruiter_paid_amount: Decimal = ZERO,
     fee_category_peer_counts: Optional[Dict[str, int]] = None,
+    rule_config: "Optional[NashikRuleConfig]" = None,
 ) -> List[LineDraft]:
     """Calculate Nashik FTE incentive lines for one Candidate Master placement."""
     as_of = cycle_end or date.today()
     paid = payment_status.upper() in {"RECEIVED", "PAYMENT_RECEIVED", "NOT_APPLICABLE"}
     days_done = days_completed_from_start(c.start_date, as_of)
     eligible_on = ninety_day_eligible_date(c.start_date)
-    days_gate_ok = days_done >= FTE_MIN_DAYS
+    fte_min = int(rule_config.fte_min_days) if (rule_config and rule_config.fte_min_days) else FTE_MIN_DAYS
+    days_gate_ok = days_done >= fte_min
     hours_proxy = Decimal(str(days_done))
 
     fee_resolved = resolve_finder_fee_above(c)
     fee_above = fee_resolved is True
     full_recruiter = Decimal(
-        fte_recruiter_amount(fee_above, max(1, int(placement_count_this_month)))
+        fte_recruiter_amount(fee_above, max(1, int(placement_count_this_month)), rule_config=rule_config)
     )
 
     hard_blocked = ""
@@ -424,7 +429,8 @@ def calculate_nashik_fte_placement(
     }.items():
         if not person or person.strip().lower() in {"not applicable", "n/a", "—", "-", ""}:
             continue
-        fixed_amount = Decimal(FTE_FIXED.get(role, 0))
+        fte_fixed_map = {k: Decimal(str(v)) for k, v in rule_config.fte_leadership.items()} if (rule_config and rule_config.fte_leadership) else {k: Decimal(str(v)) for k, v in FTE_FIXED.items()}
+        fixed_amount = fte_fixed_map.get(role, Decimal("0"))
         if fixed_amount <= ZERO:
             continue
 

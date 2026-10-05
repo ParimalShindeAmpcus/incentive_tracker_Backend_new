@@ -37,9 +37,10 @@ def _norm_text(value: Optional[str]) -> str:
 
 
 def _normalize_division_code(value: Optional[str]) -> Optional[str]:
-    v = _norm_text(value).strip().lower().replace(" ", "").replace("-", "")
-    if not v:
+    raw = _norm_text(value).strip()
+    if not raw:
         return None
+    v = raw.lower().replace(" ", "").replace("-", "")
     # Keep these values aligned with existing engine dispatch codes.
     if is_nashik_division(v):
         return "nashik"
@@ -49,7 +50,8 @@ def _normalize_division_code(value: Optional[str]) -> Optional[str]:
         return "ampcusTechClient"
     if is_ampcus_inhouse_division(v):
         return "ampcusTechInhouse"
-    return None
+    return raw
+
 
 
 @dataclass(frozen=True)
