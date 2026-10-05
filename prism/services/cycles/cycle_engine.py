@@ -59,6 +59,12 @@ from prism.services.cycles.engines.nashik_fte import (
     nashik_fte_placement_count_for_candidate,
     peer_fee_category_counts,
 )
+from prism.services.incentive_rules.rule_loader import (
+    load_nashik_config,
+    load_sn_config,
+    load_atc_config,
+    load_inhouse_config,
+)
 
 
 def _prior_nashik_fte_recruiter_paid(db: Session, candidate_id: int, exclude_cycle_id: int) -> Decimal:
@@ -331,23 +337,31 @@ def run_cycle_calculation(
 
     # If payment statuses are required, load them once.
     payment_by_candidate: Dict[int, object] = {}
-    if is_ampcus_client_division(cycle.division) or is_sambhaji_nagar_division(cycle.division) or is_nashik_division(cycle.division):
+    from prism.repositories.entities.organization import Division
+
+    div_entity = db.query(Division).filter(Division.code == cycle.division).first()
+    calc_engine = getattr(div_entity, "calculation_engine", None)
+
+    is_atc_client = is_ampcus_client_division(cycle.division) or (calc_engine == "CLIENT_MARKUP_PERCENT")
+    is_atc_inhouse = is_ampcus_inhouse_division(cycle.division) or (calc_engine == "INHOUSE_FLAT_RATES")
+    is_sn = is_sambhaji_nagar_division(cycle.division) or (calc_engine == "MARGIN_HOURS_MATRIX")
+    is_nashik = is_nashik_division(cycle.division) or (calc_engine == "MARGIN_SLABS_PRO_RATA") or (not is_atc_client and not is_atc_inhouse and not is_sn)
+
+    if is_atc_client or is_sn or is_nashik:
         payment_by_candidate = {
             row.candidate_id: row for row in cycle_repository.list_payment_statuses(db, cycle.id)
         }
 
-    coordinators = (
-        coordinator_index(db)
-        if (
-            is_ampcus_client_division(cycle.division)
-            or is_ampcus_inhouse_division(cycle.division)
-            or is_sambhaji_nagar_division(cycle.division)
-            or is_nashik_division(cycle.division)
-        )
-        else None
-    )
-    nashik_status = _nashik_employment_status(coordinators) if is_nashik_division(cycle.division) else {}
+    coordinators = coordinator_index(db)
+    nashik_status = _nashik_employment_status(coordinators) if is_nashik else {}
     paid_keys = _paid_keys_for_cycle(db, cycle)
+
+    effective_on = getattr(window, "end", None)
+    nashik_config = load_nashik_config(db, effective_on=effective_on, division=cycle.division) if is_nashik else None
+    sn_config = load_sn_config(db, effective_on=effective_on, division=cycle.division) if is_sn else None
+    atc_config = load_atc_config(db, effective_on=effective_on, division=cycle.division) if is_atc_client else None
+    inhouse_config = load_inhouse_config(db, effective_on=effective_on, division=cycle.division) if is_atc_inhouse else None
+
 
     # 1) If hours were uploaded, match & resolve for every hours row.
     for row in hours_rows:
@@ -473,7 +487,7 @@ def run_cycle_calculation(
     # 3) Run the division incentive engine for included candidates only.
     lines: List[LineDraft] = list(ineligible)
 
-    if is_ampcus_client_division(cycle.division):
+    if is_atc_client:
         assert coordinators is not None
         pending = 0
         no_slab = 0
@@ -523,6 +537,7 @@ def run_cycle_calculation(
                     coordinators=coordinators,
                     paid_keys=paid_keys,
                     placement_count_this_month=placement_count,
+                    rule_config=atc_config,
                 )
             else:
                 # W2 / C2C placement — existing markup slab logic
@@ -532,6 +547,7 @@ def run_cycle_calculation(
                     payment=payment_by_candidate.get(candidate.id),
                     coordinators=coordinators,
                     paid_keys=paid_keys,
+                    rule_config=atc_config,
                 )
 
             if any(line.reason == "PAYMENT_PENDING" for line in drafts):
@@ -560,7 +576,7 @@ def run_cycle_calculation(
         ]
         return lines, stats, match_rows, validations
 
-    if is_ampcus_inhouse_division(cycle.division):
+    if is_atc_inhouse:
         assert coordinators is not None
         if not included_pks:
             # Strictly NO fallback to all candidates across other divisions.
@@ -648,6 +664,7 @@ def run_cycle_calculation(
                 coordinators=coordinators,
                 paid_keys=paid_keys,
                 manually_included=is_manually_included,
+                rule_config=inhouse_config,
             )
             if any(line.reason in {"INHOUSE_90_DAY_REQUIREMENT_NOT_MET", "INHOUSE_STARTED_BEFORE_POLICY_DATE", "MISSING_START_DATE"} for line in drafts):
                 not_90_days += 1
@@ -670,7 +687,7 @@ def run_cycle_calculation(
         ]
         return lines, stats, match_rows, validations
 
-    if is_sambhaji_nagar_division(cycle.division):
+    if is_sn:
         assert coordinators is not None
         # Load cumulative hours from all finalized SN cycles (exclude current cycle)
         active_pks = list(hours_by_pk.keys())
@@ -725,6 +742,7 @@ def run_cycle_calculation(
                 recruiter_matrix_hours=recruiter_matrix_hours,
                 leadership_lifetime_hours=leadership_lifetime_hours,
                 already_approved_this_month=already_approved_this_month_map.get(pk),
+                rule_config=sn_config,
             )
             lines.extend(drafts)
 
@@ -787,6 +805,7 @@ def run_cycle_calculation(
                 cycle_end=window.end,
                 placement_count_this_month=placement_count,
                 prior_recruiter_paid_amount=_prior_sn_fte_recruiter_paid(db, pk, cycle.id),
+                rule_config=sn_config,
             )
             lines.extend(drafts)
 
@@ -865,7 +884,7 @@ def run_cycle_calculation(
             },
         ] + sn_validations + [missing_recruiter_master_validation(lines)]
 
-    if is_nashik_division(cycle.division):
+    if is_nashik:
         assert coordinators is not None
 
         # W2/C2C — existing Nashik calculator (unchanged). Skip FTE rows.
@@ -895,6 +914,7 @@ def run_cycle_calculation(
                 window,
                 paid_keys,
                 employment_status=nashik_status,
+                rule_config=nashik_config,
             )
             for draft in drafts:
                 payload = {
@@ -974,6 +994,7 @@ def run_cycle_calculation(
                 placement_count_this_month=placement_count,
                 prior_recruiter_paid_amount=prior_paid,
                 fee_category_peer_counts=peer_counts,
+                rule_config=nashik_config,
             )
             for draft in drafts:
                 if (not draft.eligible) and "already paid" in (draft.reason or "").lower():

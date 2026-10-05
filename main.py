@@ -46,6 +46,7 @@ from prism.controllers.coordinators.controller import router as prism_coordinato
 from prism.controllers.cycles.controller import router as prism_cycles_router
 from prism.controllers.dashboard.controller import router as prism_dashboard_router
 from prism.controllers.hours.controller import benchmarks_router as prism_hours_benchmarks_router, router as prism_hours_router
+from prism.controllers.incentive_rules.controller import router as prism_incentive_rules_router
 from prism.controllers.incentives.controller import router as prism_incentives_router
 from prism.controllers.organization.controller import router as prism_organization_router
 from prism.controllers.project_end.controller import router as prism_project_end_router
@@ -96,6 +97,16 @@ async def lifespan(app: FastAPI):
         init_prism_db()
         if prism_settings.seed_on_startup:
             seed_prism_database()
+        # Seed incentive rules master from hardcoded defaults (idempotent)
+        try:
+            from prism.core.db import get_engine as _get_prism_engine
+            from sqlalchemy.orm import Session as _Session
+            from prism.services.common.seed_incentive_rules import seed_incentive_rules as _seed_rules
+            with _Session(_get_prism_engine()) as _db:
+                _seed_rules(_db)
+                _db.commit()
+        except Exception as _seed_exc:
+            logger.warning("Incentive rules seed skipped: %s", _seed_exc)
         logger.info("PRISM database initialized successfully.")
     except Exception as exc:
         logger.warning("PRISM startup init_db/seed skipped or encountered error: %s", exc)
@@ -386,6 +397,7 @@ def create_app() -> FastAPI:
     app.include_router(prism_project_end_router, prefix="/api/v1/prism/project-end", tags=["PRISM Project End"])
     app.include_router(prism_cycles_router, prefix="/api/v1/prism/cycles", tags=["PRISM Cycles"])
     app.include_router(prism_incentives_router, prefix="/api/v1/prism", tags=["PRISM Incentives"])
+    app.include_router(prism_incentive_rules_router, prefix="/api/v1/prism", tags=["PRISM Incentive Rules Master"])
     app.include_router(prism_audit_router, prefix="/api/v1/prism/audit", tags=["PRISM Audit"])
     app.include_router(prism_vlookup_router, prefix="/api/v1/prism/vlookup", tags=["PRISM VLookup"])
     app.include_router(prism_reports_router, prefix="/api/v1/prism", tags=["PRISM Reports"])

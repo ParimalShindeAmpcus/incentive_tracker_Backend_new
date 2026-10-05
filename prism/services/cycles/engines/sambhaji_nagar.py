@@ -29,9 +29,12 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, TYPE_CHECKING
 from prism.repositories.entities.candidate import Candidate
 from prism.repositories.entities.coordinator import CoordinatorRecord
+
+if TYPE_CHECKING:
+    from prism.services.incentive_rules.rule_loader import SNRuleConfig
 
 from prism.services.cycles.recruiter_master import (
     EXEMPTED_MISSING_RECRUITER_MASTER,
@@ -152,8 +155,18 @@ def _money(value: Decimal) -> Decimal:
 def fte_recruiter_amount(
     finder_fee_above_threshold: bool,
     placement_count_this_month: int,
+    rule_config: "Optional[SNRuleConfig]" = None,
 ) -> int:
     """Return the INR recruiter incentive for one FTE placement."""
+    if rule_config is not None and rule_config.fte_recruiter_slabs:
+        slab_tuple = rule_config.fte_recruiter_slabs.get(finder_fee_above_threshold)
+        if slab_tuple and len(slab_tuple) >= 3:
+            if placement_count_this_month >= 3:
+                return int(slab_tuple[2])
+            if placement_count_this_month == 2:
+                return int(slab_tuple[1])
+            return int(slab_tuple[0])
+    # Fallback to hardcoded constants
     slabs = FTE_RECRUITER_SLABS[finder_fee_above_threshold]
     if placement_count_this_month >= 3:
         return slabs[2]
@@ -193,8 +206,12 @@ def _limit_roles_sambhaji(people: Dict[str, Optional[str]], amounts: Dict[str, i
     return excluded_roles
 
 
-def matrix_amount(margin: Optional[Decimal], hours: Decimal) -> int:
-    """Return INR incentive amount from TABLE 5.
+def matrix_amount(
+    margin: Optional[Decimal],
+    hours: Decimal,
+    rule_config: "Optional[SNRuleConfig]" = None,
+) -> int:
+    """Return INR incentive amount from TABLE 5 (or DB-configured BANDS).
 
     ``hours`` should be the candidate's CUMULATIVE hours across all finalized
     SN cycles plus the current cycle, so that the correct bucket is applied.
@@ -211,9 +228,10 @@ def matrix_amount(margin: Optional[Decimal], hours: Decimal) -> int:
         idx = 3
     else:
         idx = 4
-    for low, high, values in BANDS:
+    bands = rule_config.bands if (rule_config is not None and rule_config.bands) else BANDS
+    for low, high, values in bands:
         if low <= margin <= high:
-            return values[idx]
+            return int(values[idx])
     return 0
 
 
@@ -283,6 +301,7 @@ def calculate_placement(
     recruiter_matrix_hours: Optional[Decimal] = None,
     leadership_lifetime_hours: Optional[Decimal] = None,
     already_approved_this_month: Optional[Decimal] = None,
+    rule_config: "Optional[SNRuleConfig]" = None,
 ) -> List[LineDraft]:
     """
     Calculate all incentive lines for one Sambhaji Nagar candidate placement.
@@ -326,7 +345,7 @@ def calculate_placement(
     loc_valid = is_valid_sn_location(c.recruiter_location)
 
     # Recruiter incentive amount from matrix — using UNPAID backlog hours for bucket selection
-    amount = matrix_amount(c.margin, recruiter_hours)
+    amount = matrix_amount(c.margin, recruiter_hours, rule_config=rule_config)
 
     # Blocking checks (hard blocks abort both recruiter and leadership)
     blocked = ""
@@ -359,7 +378,8 @@ def calculate_placement(
         "Director":           getattr(c, "director", None),
     }
 
-    amounts = {role: FIXED.get(role, 0) for role in people}
+    fixed_map = {k: int(v) for k, v in rule_config.fixed.items()} if (rule_config and rule_config.fixed) else FIXED
+    amounts = {role: fixed_map.get(role, 0) for role in people}
     amounts["Recruiter"] = base_recruiter_amount
 
     excluded_roles = _limit_roles_sambhaji(people, amounts)
@@ -410,7 +430,7 @@ def calculate_placement(
         if not person or person.strip().lower() in {"not applicable", "n/a", "—", "-", ""}:
             continue
 
-        if role not in FIXED:
+        if role not in fixed_map:
             # Role exists on candidate but has no fixed amount — record for audit only
             coord_rec_l = lookup_coordinator(coordinators, person)
             if coordinators and not coord_rec_l:
@@ -418,7 +438,7 @@ def calculate_placement(
                                    EXEMPTED_MISSING_RECRUITER_MASTER, "ONE_TIME", lifetime_hours))
             continue
 
-        fixed_amount = FIXED[role]
+        fixed_amount = fixed_map[role]
         coord_rec_l = lookup_coordinator(coordinators, person)
 
         person_clean = person.strip().lower()
@@ -479,6 +499,7 @@ def calculate_fte_placement(
     cycle_end: Optional[date] = None,
     placement_count_this_month: int = 1,
     prior_recruiter_paid_amount: Decimal = ZERO,
+    rule_config: "Optional[SNRuleConfig]" = None,
 ) -> List[LineDraft]:
     """
     Calculate incentive lines for one Sambhaji Nagar Full-Time (FTE) candidate.
@@ -508,7 +529,8 @@ def calculate_fte_placement(
     else:
         days_done = 0
     days_completed = Decimal(str(days_done))
-    days_gate_ok = days_done >= int(FTE_MIN_DAYS)
+    fte_min = int(rule_config.fte_min_days) if (rule_config and rule_config.fte_min_days) else int(FTE_MIN_DAYS)
+    days_gate_ok = days_done >= fte_min
 
     # Source / location validation
     org_val = str(c.organization or "").strip().lower()
@@ -528,7 +550,7 @@ def calculate_fte_placement(
 
     # Full recruiter amount (before installment logic)
     full_recruiter = Decimal(
-        fte_recruiter_amount(fee_above, max(1, int(placement_count_this_month)))
+        fte_recruiter_amount(fee_above, max(1, int(placement_count_this_month)), rule_config=rule_config)
     )
 
     # Hard blocks — abort both recruiter and leadership
@@ -642,10 +664,11 @@ def calculate_fte_placement(
     }.items():
         if not person or person.strip().lower() in {"not applicable", "n/a", "—", "-", ""}:
             continue
-        if role not in FTE_FIXED:
+        fte_fixed_map = {k: Decimal(str(v)) for k, v in rule_config.fte_fixed.items()} if (rule_config and rule_config.fte_fixed) else {k: Decimal(str(v)) for k, v in FTE_FIXED.items()}
+        if role not in fte_fixed_map:
             continue
 
-        fixed_amount = Decimal(FTE_FIXED[role])
+        fixed_amount = fte_fixed_map[role]
         coord_rec_l = lookup_coordinator(coordinators, person)
         person_clean = person.strip().lower()
         # Dedup key — prevents paying the same ONE_TIME twice across cycles

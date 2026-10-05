@@ -45,7 +45,11 @@ def summary(db):
     counts = repo.counts(db); return {"total_coordinators": sum(counts.values()), "active_coordinators": counts["ACTIVE"], "left_coordinators": counts["LEFT"], "notice_period_coordinators": counts["NOTICE"], "incentive_eligible_coordinators": counts["ACTIVE"]}
 def create(db: Session, payload: CoordinatorInput, user: Optional[User] = None):
     email = str(payload.email).lower()
-    if repo.by_email(db, email): raise HTTPException(status_code=409, detail="A coordinator with this email already exists")
+    existing = repo.by_email(db, email)
+    if existing:
+        if not existing.is_deleted:
+            raise HTTPException(status_code=409, detail="A coordinator with this email already exists")
+        repo.delete(db, existing)
     record = CoordinatorRecord(full_name=payload.full_name.strip(), normalized_name=norm(payload.full_name), email=email, organization=payload.organization.strip(), role_title=payload.role_title.strip(), start_date=payload.start_date, bank_name=payload.bank_name, account_number=payload.account_number, ifsc_code=payload.ifsc_code.upper() if payload.ifsc_code else None, hod_name=payload.hod_name.strip() if payload.hod_name else None)
     apply_status(record, payload.employment_status, payload.exit_date)
     db.add(record)
@@ -93,8 +97,17 @@ def update_status(db, record_id, payload: CoordinatorStatusUpdate, user: Optiona
 def delete_left(db, record_id, user: Optional[User] = None):
     record = get_coordinator(db, record_id)
     if record.employment_status != CoordinatorStatus.LEFT: raise HTTPException(status_code=422, detail="Only coordinators marked Left can be deleted")
-    record.is_deleted = True; db.commit()
-    audit_service.record_event(db, action="COORDINATOR_DELETE", title=f"Deleted coordinator {record.full_name}", details=f"Soft deleted coordinator {record.full_name}", user=user, entity_type="coordinator", entity_id=str(record.id)); db.commit()
+    audit_service.record_event(
+        db,
+        action="COORDINATOR_DELETE",
+        title=f"Deleted coordinator {record.full_name}",
+        details=f"Permanently deleted coordinator {record.full_name}",
+        user=user,
+        entity_type="coordinator",
+        entity_id=str(record.id),
+    )
+    repo.delete(db, record)
+    db.commit()
 
 # Minimum required column headers that must be present in an uploaded coordinator file.
 # At least one name column AND the Email column must be present.

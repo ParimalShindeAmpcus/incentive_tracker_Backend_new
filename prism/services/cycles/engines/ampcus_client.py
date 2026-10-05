@@ -15,10 +15,12 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Set, Tuple
+
+if TYPE_CHECKING:
+    from prism.services.incentive_rules.rule_loader import ATCRuleConfig
 
 from sqlalchemy.orm import Session
-
 from prism.repositories.entities.candidate import Candidate
 from prism.repositories.entities.coordinator import CoordinatorRecord, CoordinatorStatus
 from prism.services.cycles.recruiter_master import (
@@ -191,14 +193,18 @@ def normalize_person(value: Optional[str]) -> str:
     return " ".join((value or "").split()).strip().lower()
 
 
-def resolve_slab(markup: Optional[Decimal]) -> Optional[Tuple[Decimal, Decimal, Dict[str, int]]]:
+def resolve_slab(
+    markup: Optional[Decimal],
+    rule_config: "Optional[ATCRuleConfig]" = None,
+) -> Optional[Tuple[Decimal, Decimal, Dict[str, int]]]:
     if markup is None or markup < ZERO or markup > Decimal("100"):
         return None
     
     # Quantize to 2 decimal places to align with slab definitions
     markup = markup.quantize(Decimal("0.01"))
     
-    for low, high, amounts in SLABS:
+    slabs = rule_config.slabs if (rule_config and rule_config.slabs) else SLABS
+    for low, high, amounts in slabs:
         if low <= markup <= high:
             return low, high, amounts
     return None
@@ -320,6 +326,7 @@ def calculate_placement(
     payment: Optional[object] = None,
     coordinators: Optional[Dict[str, CoordinatorRecord]] = None,
     paid_keys: Optional[Set[str]] = None,
+    rule_config: "Optional[ATCRuleConfig]" = None,
 ) -> List[LineDraft]:
     """Return deterministic role lines for one placement snapshot."""
     role_pairs = _roles_to_evaluate(candidate)
@@ -364,7 +371,7 @@ def calculate_placement(
         return all_zero("PROJECT_ENDED", "Ampcus Client eligibility")
     if payment_status not in {"RECEIVED", "PAYMENT_RECEIVED"}:
         return all_zero("PAYMENT_PENDING", "Ampcus Client payment gate")
-    slab = resolve_slab(markup)
+    slab = resolve_slab(markup, rule_config=rule_config)
     if slab is None:
         return all_zero("MARKUP_NOT_AVAILABLE" if markup is None else "MARKUP_OUT_OF_RANGE", "Ampcus Client mark-up validation")
     low, high, amounts = slab
@@ -547,16 +554,19 @@ def coordinator_index(db: Session) -> Dict[str, CoordinatorRecord]:
 #   Leadership: fixed one-time per FTE placement (no multiple-placement bonus).
 
 # Finder's fee threshold (same threshold as Nashik / Sambhaji Nagar FTE)
+# Kept as fallback constant — overridden when rule_config is provided
 ATC_FTE_FINDER_FEE_THRESHOLD = Decimal("4500")
 
 # ATC_FTE_RECRUITER_SLABS[finder_fee_above_threshold][placement_count_bucket]
 # Bucket: 0 = 1st placement, 1 = 2nd, 2 = 3+
+# Kept as fallback — overridden when rule_config.fte_recruiter_slabs is populated
 ATC_FTE_RECRUITER_SLABS: Dict[bool, Tuple[int, int, int]] = {
     False: (15000, 18000, 20000),   # Finder's fee below $4,500
     True:  (20000, 25000, 30000),   # Finder's fee above $4,500
 }
 
 # Fixed one-time amounts for leadership per FTE placement (no volume bonus)
+# Kept as fallback — overridden when rule_config.fte_fixed is populated
 ATC_FTE_FIXED: Dict[str, int] = {
     "Team Lead":           1000,
     "Manager":             1500,
@@ -569,14 +579,30 @@ ATC_FTE_FIXED: Dict[str, int] = {
 }
 
 
-def _fte_recruiter_amount(finder_fee_above: bool, placement_count: int) -> int:
-    """Return INR recruiter incentive for one ATC FTE placement."""
-    slabs = ATC_FTE_RECRUITER_SLABS[finder_fee_above]
+def _fte_recruiter_amount(
+    finder_fee_above: bool,
+    placement_count: int,
+    rule_config: "Optional[ATCRuleConfig]" = None,
+) -> int:
+    """Return INR recruiter incentive for one ATC FTE placement.
+    Uses DB-loaded rule_config.fte_recruiter_slabs when available,
+    falls back to module-level ATC_FTE_RECRUITER_SLABS constants.
+    """
+    if rule_config and rule_config.fte_recruiter_slabs:
+        slabs = rule_config.fte_recruiter_slabs.get(finder_fee_above)
+        if slabs and len(slabs) >= 3:
+            if placement_count >= 3:
+                return int(slabs[2])
+            if placement_count == 2:
+                return int(slabs[1])
+            return int(slabs[0])
+    # Fallback to hardcoded
+    slabs_hc = ATC_FTE_RECRUITER_SLABS.get(finder_fee_above, (15000, 18000, 20000))
     if placement_count >= 3:
-        return slabs[2]
+        return slabs_hc[2]
     if placement_count == 2:
-        return slabs[1]
-    return slabs[0]
+        return slabs_hc[1]
+    return slabs_hc[0]
 
 
 def sn_finder_fee_above_from_master(candidate: Candidate) -> bool:
@@ -618,6 +644,7 @@ def calculate_fte_placement(
     coordinators: Optional[Dict[str, CoordinatorRecord]] = None,
     paid_keys: Optional[Set[str]] = None,
     placement_count_this_month: int = 1,
+    rule_config: "Optional[ATCRuleConfig]" = None,
 ) -> List[LineDraft]:
     """Calculate Ampcus Tech Client FTE incentive lines for one placement.
 
@@ -683,7 +710,11 @@ def calculate_fte_placement(
     if not paid:
         return _block_all("PAYMENT_PENDING")
 
-    rec_amount = Decimal(_fte_recruiter_amount(finder_fee_above, placement_count_this_month))
+    rec_amount = Decimal(_fte_recruiter_amount(finder_fee_above, placement_count_this_month, rule_config))
+    # Effective leadership FTE fixed map: prefer DB rule_config, fall back to module constant
+    fte_fixed_effective: Dict[str, int] = (
+        rule_config.fte_fixed if (rule_config and rule_config.fte_fixed) else ATC_FTE_FIXED
+    )
     details_rec = {
         **details_base,
         "rule": f"ATC FTE finder-fee={'above' if finder_fee_above else 'below'} $4500, count={placement_count_this_month}",
@@ -711,7 +742,7 @@ def calculate_fte_placement(
             allowed_roles.update(ordered[:2])
 
     for role, person in role_pairs:
-        amount = rec_amount if role == "Recruiter" else Decimal(ATC_FTE_FIXED.get(role, 0))
+        amount = rec_amount if role == "Recruiter" else Decimal(fte_fixed_effective.get(role, 0))
         rule_label = (
             f"ATC FTE recruiter slab {'above' if finder_fee_above else 'below'} $4500"
             if role == "Recruiter"
