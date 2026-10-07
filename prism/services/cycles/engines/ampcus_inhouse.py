@@ -138,6 +138,37 @@ def _limit_roles_inhouse(
     return excluded_roles
 
 
+HIERARCHY_ATTR_CANDIDATES = {
+    "recruiter": ("recruiter",),
+    "manager": ("manager",),
+    "center head": ("center_head", "avp"),
+    "team lead": ("team_lead",),
+    "crm": ("crm",),
+    "senior manager": ("senior_manager",),
+    "associate director": ("associate_director",),
+    "director": ("director",),
+    "avp": ("avp",),
+    "head of department": ("head_of_department",),
+    "onboarding coordinator": ("onboarding_coordinator",),
+}
+
+
+def resolve_person_for_role(c: Candidate, role: str) -> Optional[str]:
+    """Resolve person name from Candidate hierarchy columns for a given role name."""
+    clean_role = role.strip().lower()
+    attrs = HIERARCHY_ATTR_CANDIDATES.get(clean_role)
+    if attrs:
+        for attr in attrs:
+            val = getattr(c, attr, None)
+            if val and str(val).strip():
+                return str(val).strip()
+    attr_direct = clean_role.replace(" ", "_")
+    val = getattr(c, attr_direct, None)
+    if val and str(val).strip():
+        return str(val).strip()
+    return None
+
+
 def calculate_placement(
     c: Candidate,
     *,
@@ -147,25 +178,107 @@ def calculate_placement(
     manually_included: bool = False,
     rule_config: "Optional[InhouseRuleConfig]" = None,
 ) -> List[LineDraft]:
-    people = {"Recruiter": getattr(c, "recruiter", None), "Manager": getattr(c, "manager", None), "Center Head": getattr(c, "center_head", None) or getattr(c, "avp", None)}
+    raw_cycle_end = cycle_end
+    c_cycle_end: date = raw_cycle_end.date() if hasattr(raw_cycle_end, "date") and not isinstance(raw_cycle_end, date) else raw_cycle_end  # type: ignore
     status = str(getattr(c, "status", None) or "").upper()
-    days = (cycle_end - c.start_date).days if getattr(c, "start_date", None) else 0
+
+    raw_start = getattr(c, "start_date", None)
+    c_start: Optional[date] = None
+    if isinstance(raw_start, str):
+        try:
+            c_start = date.fromisoformat(raw_start.split("T")[0])
+        except Exception:
+            c_start = None
+    elif hasattr(raw_start, "date") and not isinstance(raw_start, date):
+        c_start = raw_start.date()
+    elif isinstance(raw_start, date):
+        c_start = raw_start
+
+    days = (c_cycle_end - c_start).days if c_start else 0
 
     min_start = rule_config.min_start_date if (rule_config and rule_config.min_start_date) else MIN_START
     min_days = rule_config.min_days if (rule_config and rule_config.min_days) else 90
     max_roles = rule_config.max_roles_per_person if (rule_config and rule_config.max_roles_per_person) else MAX_ROLES_PER_PERSON
     rec_above = rule_config.recruiter_above_manager if (rule_config and rule_config.recruiter_above_manager) else 5000
     rec_below = rule_config.recruiter_below_manager if (rule_config and rule_config.recruiter_below_manager) else 3000
-    mgr_amt = rule_config.manager_amount if (rule_config and rule_config.manager_amount) else 500
+    
+    mgr_above = (
+        rule_config.manager_above_manager
+        if (rule_config and rule_config.manager_above_manager is not None)
+        else (rule_config.manager_amount if rule_config and rule_config.manager_amount else 500)
+    )
+    mgr_below = (
+        rule_config.manager_below_manager
+        if (rule_config and rule_config.manager_below_manager is not None)
+        else (rule_config.manager_amount if rule_config and rule_config.manager_amount else 500)
+    )
     ch_amt = rule_config.center_head_amount if (rule_config and rule_config.center_head_amount) else 1000
 
+    raw_job_level = getattr(c, "job_level", None)
+    job_level_clean = str(raw_job_level or "").strip().lower()
+
+    recruiter_eligible = True
+    recruiter_reason = "ELIGIBLE"
+    recruiter_amount = 0
+    mgr_amt = 500
+
+    if not job_level_clean:
+        recruiter_eligible = False
+        recruiter_reason = "MISSING_JOB_LEVEL"
+        recruiter_amount = 0
+        mgr_amt = mgr_below
+    elif "above" in job_level_clean:
+        recruiter_amount = rec_above
+        mgr_amt = mgr_above
+    elif "below" in job_level_clean:
+        recruiter_amount = rec_below
+        mgr_amt = mgr_below
+    else:
+        recruiter_eligible = False
+        recruiter_reason = "INVALID_JOB_LEVEL"
+        recruiter_amount = 0
+        mgr_amt = mgr_below
+
+    amounts: Dict[str, int] = {
+        "Recruiter": recruiter_amount,
+        "Manager": mgr_amt,
+        "Center Head": ch_amt,
+    }
+    people: Dict[str, Optional[str]] = {
+        "Recruiter": getattr(c, "recruiter", None),
+        "Manager": getattr(c, "manager", None),
+        "Center Head": getattr(c, "center_head", None) or getattr(c, "avp", None),
+    }
+
+    # Dynamically resolve any additional roles defined in rule_config
+    # Priority: tier-specific role amounts (above/below), fallback to general role_amounts
+    tier_role_amounts = (
+        (rule_config.role_amounts_above if "above" in job_level_clean else rule_config.role_amounts_below)
+        if rule_config
+        else {}
+    )
+    all_role_amounts = (rule_config.role_amounts or {}) if rule_config else {}
+    combined_custom_roles = {**all_role_amounts, **tier_role_amounts}
+
+    for custom_role, custom_amt in combined_custom_roles.items():
+        canonical_role = custom_role.strip()
+        if canonical_role.lower() not in {"recruiter", "manager", "center head"}:
+            amounts[canonical_role] = int(custom_amt)
+            people[canonical_role] = resolve_person_for_role(c, canonical_role)
+
+    tenure_reason = (
+        "INHOUSE_90_DAY_REQUIREMENT_NOT_MET"
+        if min_days == 90
+        else f"INHOUSE_{min_days}_DAY_REQUIREMENT_NOT_MET"
+    )
+
     # --- Candidate-level gates (all roles excluded together) ---
-    if not getattr(c, "start_date", None):
+    if not c_start:
         return [_line(c, role, person, 0, False, "MISSING_START_DATE", days) for role, person in people.items()]
-    if c.start_date < min_start:
+    if c_start < min_start:
         return [_line(c, role, person, 0, False, "INHOUSE_STARTED_BEFORE_POLICY_DATE", days) for role, person in people.items()]
     if days < min_days:
-        return [_line(c, role, person, 0, False, "INHOUSE_90_DAY_REQUIREMENT_NOT_MET", days) for role, person in people.items()]
+        return [_line(c, role, person, 0, False, tenure_reason, days) for role, person in people.items()]
 
     if not manually_included:
         # Inactive or excluded candidate
@@ -180,28 +293,6 @@ def calculate_placement(
         end_d = getattr(c, "end_date", None)
         if (end_d and end_d <= cycle_end) or "PROJECT_ENDED" in status:
             return [_line(c, role, person, 0, False, "PROJECT_ENDED", days) for role, person in people.items()]
-
-    raw_job_level = getattr(c, "job_level", None)
-    job_level_clean = str(raw_job_level or "").strip().lower()
-
-    recruiter_eligible = True
-    recruiter_reason = "ELIGIBLE"
-    recruiter_amount = 0
-
-    if not job_level_clean:
-        recruiter_eligible = False
-        recruiter_reason = "MISSING_JOB_LEVEL"
-        recruiter_amount = 0
-    elif "above" in job_level_clean:
-        recruiter_amount = rec_above
-    elif "below" in job_level_clean:
-        recruiter_amount = rec_below
-    else:
-        recruiter_eligible = False
-        recruiter_reason = "INVALID_JOB_LEVEL"
-        recruiter_amount = 0
-
-    amounts = {"Recruiter": recruiter_amount, "Manager": mgr_amt, "Center Head": ch_amt}
 
     # W1: Max-two-roles — if one person holds 3+ roles, exclude lowest-payout extras
     excluded_roles = _limit_roles_inhouse(people, amounts, max_roles=max_roles)

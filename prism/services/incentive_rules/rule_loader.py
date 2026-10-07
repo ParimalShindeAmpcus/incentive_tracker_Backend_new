@@ -106,7 +106,12 @@ class InhouseRuleConfig:
     recruiter_below_manager: int = 3000
     recruiter_above_manager: int = 5000
     manager_amount: int = 500
+    manager_below_manager: Optional[int] = None
+    manager_above_manager: Optional[int] = None
     center_head_amount: int = 1000
+    role_amounts: Dict[str, int] = field(default_factory=dict)
+    role_amounts_below: Dict[str, int] = field(default_factory=dict)
+    role_amounts_above: Dict[str, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -214,38 +219,81 @@ def load_atc_config(
     return cfg
 
 
+def _parse_flexible_date(val: Optional[str], default: date) -> date:
+    if not val:
+        return default
+    val_clean = str(val).strip()
+    try:
+        return date.fromisoformat(val_clean.split("T")[0])
+    except Exception:
+        pass
+    from datetime import datetime
+    for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(val_clean, fmt).date()
+        except Exception:
+            continue
+    return default
+
+
 def load_inhouse_config(
     db: Session, effective_on: Optional[date] = None, division: str = "ampcusTechInhouse"
 ) -> InhouseRuleConfig:
     """Build InhouseRuleConfig from DB; falls back to hardcoded defaults."""
     rules = load_active_rules_for_division(db, division, effective_on=effective_on)
+    if not rules and effective_on is not None:
+        rules = load_active_rules_for_division(db, division, effective_on=None)
     if not rules:
         logger.debug("No active %s rules in DB; using hardcoded defaults.", division)
         return _inhouse_hardcoded_defaults()
 
     cfg = InhouseRuleConfig()
+    cfg.role_amounts = {
+        "Recruiter": cfg.recruiter_below_manager,
+        "Manager": cfg.manager_amount,
+        "Center Head": cfg.center_head_amount,
+    }
     for r in rules:
         if r.rule_category == "GLOBAL_CONFIG":
             if r.rule_key == "min_days":
-
                 cfg.min_days = int(r.config_value or "90")
             elif r.rule_key == "min_start_date":
-                try:
-                    cfg.min_start_date = date.fromisoformat(r.config_value or "2025-07-01")
-                except ValueError:
-                    pass
+                cfg.min_start_date = _parse_flexible_date(r.config_value, cfg.min_start_date)
             elif r.rule_key == "max_roles_per_person":
                 cfg.max_roles_per_person = int(r.config_value or "2")
         elif r.rule_category == "INHOUSE_AMOUNTS":
             amt = int(r.amount or 0)
-            if r.rule_key == "inhouse_recruiter_below_manager":
+            role_name = (r.role or "").strip()
+            key = (r.rule_key or "").strip().lower()
+
+            if key == "inhouse_recruiter_below_manager" or (role_name.lower() == "recruiter" and "below" in key):
                 cfg.recruiter_below_manager = amt
-            elif r.rule_key == "inhouse_recruiter_above_manager":
+                cfg.role_amounts["Recruiter"] = amt
+                cfg.role_amounts_below["Recruiter"] = amt
+            elif key == "inhouse_recruiter_above_manager" or (role_name.lower() == "recruiter" and "above" in key):
                 cfg.recruiter_above_manager = amt
-            elif r.rule_key == "inhouse_manager":
+                cfg.role_amounts_above["Recruiter"] = amt
+            elif key == "inhouse_manager_below_manager" or (role_name.lower() == "manager" and "below" in key):
+                cfg.manager_below_manager = amt
+                cfg.role_amounts_below["Manager"] = amt
+                cfg.role_amounts["Manager"] = amt
+            elif key == "inhouse_manager_above_manager" or (role_name.lower() == "manager" and "above" in key):
+                cfg.manager_above_manager = amt
+                cfg.role_amounts_above["Manager"] = amt
+            elif key == "inhouse_manager" or (role_name.lower() == "manager" and "above" not in key and "below" not in key):
                 cfg.manager_amount = amt
-            elif r.rule_key == "inhouse_center_head":
+                cfg.role_amounts["Manager"] = amt
+            elif key == "inhouse_center_head" or (role_name.lower() == "center head" and "above" not in key and "below" not in key):
                 cfg.center_head_amount = amt
+                cfg.role_amounts["Center Head"] = amt
+
+            if role_name:
+                if "below" in key:
+                    cfg.role_amounts_below[role_name] = amt
+                elif "above" in key:
+                    cfg.role_amounts_above[role_name] = amt
+                else:
+                    cfg.role_amounts[role_name] = amt
 
     return cfg
 
@@ -284,18 +332,25 @@ def _apply_nashik_recruiter_slabs(cfg: NashikRuleConfig, rules: list) -> None:
     slabs = []
     for r in rules:
         if r.rule_category == "RECRUITER_SLAB" and r.role == "Recruiter":
-            slabs.append((
-                Decimal(str(r.margin_min)),
-                Decimal(str(r.margin_max)),
-                Decimal(str(r.amount)),
-            ))
+            if r.margin_min is not None and r.margin_max is not None and r.amount is not None:
+                try:
+                    slabs.append((
+                        Decimal(str(r.margin_min)),
+                        Decimal(str(r.margin_max)),
+                        Decimal(str(r.amount)),
+                    ))
+                except Exception:
+                    continue
     cfg.recruiter_slabs = sorted(slabs, key=lambda s: s[0])
 
 
 def _apply_nashik_leadership(cfg: NashikRuleConfig, rules: list) -> None:
     for r in rules:
-        if r.rule_category == "LEADERSHIP_ONE_TIME" and r.role:
-            cfg.leadership_one_time[r.role] = Decimal(str(r.amount))
+        if r.rule_category == "LEADERSHIP_ONE_TIME" and r.role and r.amount is not None:
+            try:
+                cfg.leadership_one_time[r.role] = Decimal(str(r.amount))
+            except Exception:
+                pass
 
 
 def _apply_fte_recruiter_slabs(cfg: NashikRuleConfig, division: str, rules: list) -> None:
@@ -481,4 +536,10 @@ def _atc_hardcoded_defaults() -> ATCRuleConfig:
 
 
 def _inhouse_hardcoded_defaults() -> InhouseRuleConfig:
-    return InhouseRuleConfig()
+    cfg = InhouseRuleConfig()
+    cfg.role_amounts = {
+        "Recruiter": 3000,
+        "Manager": 500,
+        "Center Head": 1000,
+    }
+    return cfg

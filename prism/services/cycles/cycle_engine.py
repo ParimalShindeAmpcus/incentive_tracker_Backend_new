@@ -342,10 +342,10 @@ def run_cycle_calculation(
     div_entity = db.query(Division).filter(Division.code == cycle.division).first()
     calc_engine = getattr(div_entity, "calculation_engine", None)
 
-    is_atc_client = is_ampcus_client_division(cycle.division) or (calc_engine == "CLIENT_MARKUP_PERCENT")
     is_atc_inhouse = is_ampcus_inhouse_division(cycle.division) or (calc_engine == "INHOUSE_FLAT_RATES")
-    is_sn = is_sambhaji_nagar_division(cycle.division) or (calc_engine == "MARGIN_HOURS_MATRIX")
-    is_nashik = is_nashik_division(cycle.division) or (calc_engine == "MARGIN_SLABS_PRO_RATA") or (not is_atc_client and not is_atc_inhouse and not is_sn)
+    is_atc_client = not is_atc_inhouse and (is_ampcus_client_division(cycle.division) or (calc_engine == "CLIENT_MARKUP_PERCENT"))
+    is_sn = not is_atc_inhouse and not is_atc_client and (is_sambhaji_nagar_division(cycle.division) or (calc_engine == "MARGIN_HOURS_MATRIX"))
+    is_nashik = not is_atc_inhouse and not is_atc_client and not is_sn
 
     if is_atc_client or is_sn or is_nashik:
         payment_by_candidate = {
@@ -595,6 +595,7 @@ def run_cycle_calculation(
         inactive = 0
         already_paid_count = 0
         manually_excluded = 0
+        before_policy_date = 0
         excluded_keys = _excluded_candidate_keys(cycle)
         for pk in included_pks:
             candidate = by_pk[pk]
@@ -666,7 +667,14 @@ def run_cycle_calculation(
                 manually_included=is_manually_included,
                 rule_config=inhouse_config,
             )
-            if any(line.reason in {"INHOUSE_90_DAY_REQUIREMENT_NOT_MET", "INHOUSE_STARTED_BEFORE_POLICY_DATE", "MISSING_START_DATE"} for line in drafts):
+            inhouse_min_days = inhouse_config.min_days if inhouse_config else 90
+            if any(line.reason == "INHOUSE_STARTED_BEFORE_POLICY_DATE" for line in drafts):
+                before_policy_date += 1
+            if any(
+                line.reason in {"INHOUSE_90_DAY_REQUIREMENT_NOT_MET", f"INHOUSE_{inhouse_min_days}_DAY_REQUIREMENT_NOT_MET", "MISSING_START_DATE"}
+                or ("_DAY_REQUIREMENT_NOT_MET" in (line.reason or ""))
+                for line in drafts
+            ):
                 not_90_days += 1
             if any(line.reason in {"CANDIDATE_INACTIVE", "PROJECT_ENDED"} for line in drafts):
                 inactive += 1
@@ -676,8 +684,24 @@ def run_cycle_calculation(
         stats["inactive"] = inactive
         stats["already_paid"] = already_paid_count
         stats["manually_excluded"] = manually_excluded
+        stats["before_policy_date"] = before_policy_date
+        inhouse_min_days = inhouse_config.min_days if inhouse_config else 90
+        inhouse_min_start = inhouse_config.min_start_date.isoformat() if (inhouse_config and inhouse_config.min_start_date) else "2025-07-01"
         validations = [
-            {"check_key": "not_90_days", "severity": "INFO" if not_90_days else "GREEN", "message": "Placements that have not reached 90 days tenure", "count": not_90_days, "details_json": None},
+            {
+                "check_key": "before_policy_date",
+                "severity": "INFO" if before_policy_date else "GREEN",
+                "message": f"Placements starting prior to policy cutoff date ({inhouse_min_start})",
+                "count": before_policy_date,
+                "details_json": json.dumps({"min_start_date": inhouse_min_start}),
+            },
+            {
+                "check_key": "not_90_days",
+                "severity": "INFO" if not_90_days else "GREEN",
+                "message": f"Placements that have not reached {inhouse_min_days} days tenure",
+                "count": not_90_days,
+                "details_json": json.dumps({"min_days": inhouse_min_days}),
+            },
             {"check_key": "candidate_inactive", "severity": "YELLOW" if inactive else "GREEN", "message": "Inactive / resigned in-house candidates", "count": inactive, "details_json": None},
             {"check_key": "already_paid", "severity": "YELLOW" if already_paid_count else "GREEN", "message": "One-time incentives already paid in a previous cycle", "count": already_paid_count, "details_json": None},
             {"check_key": "manual_exclude_nashik", "severity": "YELLOW" if manually_excluded else "GREEN", "message": "Manually excluded (Nashik overlap / user exclude)", "count": manually_excluded, "details_json": None},
