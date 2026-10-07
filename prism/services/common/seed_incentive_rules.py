@@ -41,6 +41,59 @@ def seed_special_incentive_rules(db: Session) -> int:
     db.flush()
     logger.info("Seeded %d special incentive rules into master table.", len(rows))
     return len(rows)
+def _client_fte_rows(division: str) -> List[Dict[str, Any]]:
+    rows = []
+    for above, amounts in [(False, (15000, 18000, 20000)), (True, (20000, 25000, 30000))]:
+        for count, amount in enumerate(amounts, start=1):
+            rows.append(_row(
+                division=division, rule_category="FTE_RECRUITER_SLAB", role="Recruiter",
+                finder_fee_above=above, placement_count_min=count,
+                placement_count_max=count if count < 3 else None, amount=Decimal(amount),
+                description=f"FTE recruiter per placement: finder fee {'above' if above else 'below'} $4,500; {count}{'+' if count == 3 else ''} placements in calendar month",
+            ))
+    for role, amount in [("Team Lead", 1000), ("Manager", 1500), ("CRM", 1500), ("Associate Director", 4000), ("Center Head", 4000)]:
+        rows.append(_row(division=division, rule_category="FTE_LEADERSHIP", role=role,
+                         amount=Decimal(amount), description=f"FTE {role}: fixed per placement; no monthly volume bonus"))
+    return rows
+
+
+def _seed_missing_client_fte_rules(db: Session) -> None:
+    """Add missing policy slots without overwriting configured or inactive rules."""
+    from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
+    existing = db.query(IncentiveRuleMaster).filter(
+        IncentiveRuleMaster.division == "ampcusTechClient",
+        IncentiveRuleMaster.rule_category.in_(["FTE_RECRUITER_SLAB", "FTE_LEADERSHIP"]),
+    ).all()
+    def identity(row):
+        return (row.rule_category, row.role, row.finder_fee_above, row.placement_count_min)
+    slots = {identity(row) for row in existing}
+    for data in _client_fte_rows("ampcusTechClient"):
+        rule = IncentiveRuleMaster(**data)
+        if identity(rule) not in slots:
+            db.add(rule)
+            slots.add(identity(rule))
+    db.flush()
+
+
+def _seed_missing_client_markup_rules(db: Session) -> None:
+    """Backfill absent ranges without overwriting configured payouts."""
+    import json
+    from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
+    from prism.services.incentive_rules.client_markup_policy import MARKUP_SLABS, ELIGIBILITY
+    existing = db.query(IncentiveRuleMaster).filter(
+        IncentiveRuleMaster.division == "ampcusTechClient",
+        IncentiveRuleMaster.rule_category == "MARKUP_SLAB",
+    ).all()
+    slots = {(r.markup_min, r.markup_max) for r in existing}
+    for low, high, payouts in MARKUP_SLABS:
+        if (low, high) in slots or (low == 5 and (Decimal("5.01"), high) in slots):
+            continue
+        db.add(IncentiveRuleMaster(**_row(
+            division="ampcusTechClient", rule_category="MARKUP_SLAB",
+            markup_min=low, markup_max=high, config_value=json.dumps(payouts),
+            description=ELIGIBILITY,
+        )))
+    db.flush()
 
 
 def seed_incentive_rules(db: Session) -> None:
@@ -56,9 +109,17 @@ def seed_incentive_rules(db: Session) -> None:
 
         for data in rows:
             db.add(IncentiveRuleMaster(**data))
+    if has_any_rules(db):
+        _seed_missing_client_fte_rules(db)
+        _seed_missing_client_markup_rules(db)
+        logger.debug("incentive_rule_master already seeded — skipping.")
+        return
 
-        db.flush()
-        logger.info("Seeded %d incentive rule master records.", len(rows))
+    rows = _build_seed_rows() + _client_fte_rows("ampcusTechClient")
+    from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
+
+    db.flush()
+    logger.info("Seeded %d incentive rule master records.", len(rows))
 
     seed_special_incentive_rules(db)
 
@@ -331,21 +392,8 @@ def _build_seed_rows() -> List[Dict[str, Any]]:
     # ── ATC Markup Slabs ─────────────────────────────────────────────────────
     # SLABS from ampcus_client.py — per-role amounts stored as JSON in config_value
     import json
-    atc_roles = [
-        "Recruiter", "Team Lead", "Manager", "Senior Manager",
-        "CRM", "Associate Director", "Center Head", "AVP", "Director",
-    ]
-    atc_slabs = [
-        ("0", "5.00", {r: 0 for r in atc_roles}),
-        ("5.01", "10", {"Recruiter": 2000, "Team Lead": 250, "Manager": 500, "Senior Manager": 500, "CRM": 750, "Associate Director": 500, "Center Head": 500, "AVP": 500, "Director": 500}),
-        ("10.01", "15", {"Recruiter": 3000, "Team Lead": 250, "Manager": 500, "Senior Manager": 500, "CRM": 750, "Associate Director": 1000, "Center Head": 1000, "AVP": 1000, "Director": 1000}),
-        ("15.01", "20", {"Recruiter": 5000, "Team Lead": 500, "Manager": 1000, "Senior Manager": 1000, "CRM": 1000, "Associate Director": 1500, "Center Head": 1500, "AVP": 1500, "Director": 1500}),
-        ("20.01", "25", {"Recruiter": 6000, "Team Lead": 500, "Manager": 1000, "Senior Manager": 1000, "CRM": 1500, "Associate Director": 2000, "Center Head": 2000, "AVP": 2000, "Director": 2000}),
-        ("25.01", "30", {"Recruiter": 7000, "Team Lead": 500, "Manager": 1000, "Senior Manager": 1000, "CRM": 1500, "Associate Director": 2500, "Center Head": 2500, "AVP": 2500, "Director": 2500}),
-        ("30.01", "35", {"Recruiter": 8000, "Team Lead": 500, "Manager": 1000, "Senior Manager": 1000, "CRM": 1500, "Associate Director": 3000, "Center Head": 3000, "AVP": 3000, "Director": 3000}),
-        ("35.01", "40", {"Recruiter": 9000, "Team Lead": 500, "Manager": 1000, "Senior Manager": 1000, "CRM": 1500, "Associate Director": 3500, "Center Head": 3500, "AVP": 3500, "Director": 3500}),
-        ("40.01", "100", {"Recruiter": 10000, "Team Lead": 500, "Manager": 1000, "Senior Manager": 1000, "CRM": 1500, "Associate Director": 4000, "Center Head": 4000, "AVP": 4000, "Director": 4000}),
-    ]
+    from prism.services.incentive_rules.client_markup_policy import MARKUP_SLABS, ELIGIBILITY
+    atc_slabs = MARKUP_SLABS
     for mk_lo, mk_hi, role_amounts in atc_slabs:
         rows.append(_row(
             division="ampcusTechClient",
@@ -499,6 +547,7 @@ def seed_rules_for_new_division(
             rows.append(_row(division=division_code, rule_category="FTE_LEADERSHIP", role=role, amount=Decimal(amt), description=f"FTE leadership for {role}"))
 
     elif engine_type == "CLIENT_MARKUP_PERCENT":
+        rows.extend(_client_fte_rows(division_code))
         rows.append(_row(division=division_code, rule_category="GLOBAL_CONFIG", rule_key="requires_first_full_month_payment", config_value="true", description="First full month client payment required"))
         rows.append(_row(division=division_code, rule_category="GLOBAL_CONFIG", rule_key="max_roles_per_person", config_value="2", description="Maximum eligible roles per person"))
         atc_roles = ["Recruiter", "Team Lead", "Manager", "Senior Manager", "CRM", "Associate Director", "Center Head", "AVP", "Director"]

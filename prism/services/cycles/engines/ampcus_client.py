@@ -43,137 +43,9 @@ ROLES = (
     "Director",
     "CH/VP",
 )
-SLABS: Tuple[Tuple[Decimal, Decimal, Dict[str, int]], ...] = (
-    (Decimal("0"), Decimal("5.00"), {role: 0 for role in ROLES}),
-    (
-        Decimal("5.01"),
-        Decimal("10"),
-        {
-            "Recruiter": 2000,
-            "Team Lead": 250,
-            "Manager": 500,
-            "Senior Manager": 500,
-            "CRM": 750,
-            "Associate Director": 500,
-            "Center Head": 500,
-            "AVP": 500,
-            "Director": 500,
-            "CH/VP": 500,
-        },
-    ),
-    (
-        Decimal("10.01"),
-        Decimal("15"),
-        {
-            "Recruiter": 3000,
-            "Team Lead": 250,
-            "Manager": 500,
-            "Senior Manager": 500,
-            "CRM": 750,
-            "Associate Director": 1000,
-            "Center Head": 1000,
-            "AVP": 1000,
-            "Director": 1000,
-            "CH/VP": 1000,
-        },
-    ),
-    (
-        Decimal("15.01"),
-        Decimal("20"),
-        {
-            "Recruiter": 5000,
-            "Team Lead": 500,
-            "Manager": 1000,
-            "Senior Manager": 1000,
-            "CRM": 1000,
-            "Associate Director": 1500,
-            "Center Head": 1500,
-            "AVP": 1500,
-            "Director": 1500,
-            "CH/VP": 1500,
-        },
-    ),
-    (
-        Decimal("20.01"),
-        Decimal("25"),
-        {
-            "Recruiter": 6000,
-            "Team Lead": 500,
-            "Manager": 1000,
-            "Senior Manager": 1000,
-            "CRM": 1500,
-            "Associate Director": 2000,
-            "Center Head": 2000,
-            "AVP": 2000,
-            "Director": 2000,
-            "CH/VP": 2000,
-        },
-    ),
-    (
-        Decimal("25.01"),
-        Decimal("30"),
-        {
-            "Recruiter": 7000,
-            "Team Lead": 500,
-            "Manager": 1000,
-            "Senior Manager": 1000,
-            "CRM": 1500,
-            "Associate Director": 2500,
-            "Center Head": 2500,
-            "AVP": 2500,
-            "Director": 2500,
-            "CH/VP": 2500,
-        },
-    ),
-    (
-        Decimal("30.01"),
-        Decimal("35"),
-        {
-            "Recruiter": 8000,
-            "Team Lead": 500,
-            "Manager": 1000,
-            "Senior Manager": 1000,
-            "CRM": 1500,
-            "Associate Director": 3000,
-            "Center Head": 3000,
-            "AVP": 3000,
-            "Director": 3000,
-            "CH/VP": 3000,
-        },
-    ),
-    (
-        Decimal("35.01"),
-        Decimal("40"),
-        {
-            "Recruiter": 9000,
-            "Team Lead": 500,
-            "Manager": 1000,
-            "Senior Manager": 1000,
-            "CRM": 1500,
-            "Associate Director": 3500,
-            "Center Head": 3500,
-            "AVP": 3500,
-            "Director": 3500,
-            "CH/VP": 3500,
-        },
-    ),
-    (
-        Decimal("40.01"),
-        Decimal("100"),
-        {
-            "Recruiter": 10000,
-            "Team Lead": 500,
-            "Manager": 1000,
-            "Senior Manager": 1000,
-            "CRM": 1500,
-            "Associate Director": 4000,
-            "Center Head": 4000,
-            "AVP": 4000,
-            "Director": 4000,
-            "CH/VP": 4000,
-        },
-    ),
-)
+from prism.services.incentive_rules.client_markup_policy import MARKUP_SLABS, calculation_payouts
+
+SLABS = tuple((low, high, calculation_payouts(payouts)) for low, high, payouts in MARKUP_SLABS)
 
 
 def is_ampcus_client_division(division: Optional[str]) -> bool:
@@ -570,12 +442,9 @@ ATC_FTE_RECRUITER_SLABS: Dict[bool, Tuple[int, int, int]] = {
 ATC_FTE_FIXED: Dict[str, int] = {
     "Team Lead":           1000,
     "Manager":             1500,
-    "Senior Manager":      1500,
     "CRM":                 1500,
     "Associate Director":  4000,
     "Center Head":         4000,
-    "AVP":                 4000,
-    "Director":            1500,
 }
 
 
