@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -16,6 +16,8 @@ VALID_DIVISIONS = {
     "sambhajiNagar",
     "ampcusTechClient",
     "ampcusTechInhouse",
+    "special_incentive",
+    "specialIncentive",
 }
 
 VALID_CATEGORIES = {
@@ -29,6 +31,7 @@ VALID_CATEGORIES = {
     "MARKUP_SLAB",
     "INHOUSE_AMOUNTS",
     "GLOBAL_CONFIG",
+    "SPECIAL_INCENTIVE",
 }
 
 VALID_ROLES = {
@@ -152,3 +155,13 @@ class IncentiveRuleMasterOut(BaseModel):
     updated_by: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class IncentiveRuleBatchUpdateItem(BaseModel):
+    id: int
+    data: IncentiveRuleMasterUpdate
+
+
+class IncentiveRuleBatchDeleteIn(BaseModel):
+    ids: List[int]
+    hard: bool = True

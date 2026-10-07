@@ -27,6 +27,10 @@ DIVISION_ALIASES: Dict[str, str] = {
     "ampcus_inhouse": "ampcusTechInhouse",
     "ampcusinhouse": "ampcusTechInhouse",
     "inhouse": "ampcusTechInhouse",
+    "special_incentive": "special_incentive",
+    "specialincentive": "special_incentive",
+    "special": "special_incentive",
+    "specialincentivemaster": "special_incentive",
 }
 
 

@@ -229,38 +229,64 @@ def create_app() -> FastAPI:
             # Delegate to PRISM auth
             p_engine = get_prism_engine()
             from sqlalchemy.orm import Session
-            with Session(p_engine) as db:
-                fingerprint = prism_auth_service.extract_client_fingerprint(request)
-                access, refresh, user_out = prism_auth_service.login(
-                    db,
-                    PrismLoginRequest(email=payload.email, password=payload.password),
-                    client_fingerprint=fingerprint,
-                )
-                secure = prism_settings.environment != "development"
-                response.set_cookie(
-                    key="access_token",
-                    value=access,
-                    httponly=True,
-                    secure=secure,
-                    samesite="lax",
-                    max_age=prism_settings.access_token_expire_minutes * 60,
-                    path="/",
-                )
-                response.set_cookie(
-                    key="refresh_token",
-                    value=refresh,
-                    httponly=True,
-                    secure=secure,
-                    samesite="lax",
-                    max_age=prism_settings.refresh_token_expire_minutes * 60,
-                    path="/",
-                )
-                return {
-                    "app": "prism",
-                    "user": user_out,
-                    "access_token": access if prism_settings.environment == "development" else None,
-                    "message": "PRISM sign-in successful",
-                }
+            try:
+                with Session(p_engine) as db:
+                    fingerprint = prism_auth_service.extract_client_fingerprint(request)
+                    access, refresh, user_out = prism_auth_service.login(
+                        db,
+                        PrismLoginRequest(email=payload.email, password=payload.password),
+                        client_fingerprint=fingerprint,
+                    )
+                    secure = prism_settings.environment != "development"
+                    response.set_cookie(
+                        key="access_token",
+                        value=access,
+                        httponly=True,
+                        secure=secure,
+                        samesite="lax",
+                        max_age=prism_settings.access_token_expire_minutes * 60,
+                        path="/",
+                    )
+                    response.set_cookie(
+                        key="refresh_token",
+                        value=refresh,
+                        httponly=True,
+                        secure=secure,
+                        samesite="lax",
+                        max_age=prism_settings.refresh_token_expire_minutes * 60,
+                        path="/",
+                    )
+                    return {
+                        "app": "prism",
+                        "user": user_out,
+                        "access_token": access if prism_settings.environment == "development" else None,
+                        "message": "PRISM sign-in successful",
+                    }
+            except Exception:
+                # PRISM auth failed. Check if these credentials belong to Starts MIS
+                email_clean = payload.email.strip().lower()
+                password_clean = payload.password.strip()
+                try:
+                    from mis.db.session import AsyncSessionLocal
+                    from sqlalchemy import func
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(MisUser)
+                            .options(selectinload(MisUser.role))
+                            .where(func.lower(func.trim(MisUser.email)) == email_clean, MisUser.deleted_at.is_(None))
+                        )
+                        mis_u = result.scalar_one_or_none()
+                        if mis_u and mis_verify_password(password_clean, mis_u.password_hash):
+                            raise HTTPException(
+                                status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="This account is registered for Starts MIS. Please switch to the Starts MIS workspace to sign in.",
+                            )
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass
+
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
         # Otherwise authenticate against Starts MIS
         email_clean = payload.email.strip().lower()
@@ -308,42 +334,24 @@ def create_app() -> FastAPI:
                 "message": "Starts MIS sign-in successful",
             }
 
-        # If not found in MIS, check if credentials belong to PRISM (fallback)
+        # If not found in MIS, check if credentials belong to PRISM (Incentive Tracker)
         try:
             p_engine = get_prism_engine()
             from sqlalchemy.orm import Session
             with Session(p_engine) as db:
                 fingerprint = prism_auth_service.extract_client_fingerprint(request)
-                access, refresh, user_out = prism_auth_service.login(
+                prism_auth_service.login(
                     db,
                     PrismLoginRequest(email=payload.email, password=payload.password),
                     client_fingerprint=fingerprint,
                 )
-                secure = prism_settings.environment != "development"
-                response.set_cookie(
-                    key="access_token",
-                    value=access,
-                    httponly=True,
-                    secure=secure,
-                    samesite="lax",
-                    max_age=prism_settings.access_token_expire_minutes * 60,
-                    path="/",
+                # If PRISM login succeeded, credentials are for PRISM, NOT Starts MIS!
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="This account is registered for Incentive Tracker. Please switch to the Incentive workspace to sign in.",
                 )
-                response.set_cookie(
-                    key="refresh_token",
-                    value=refresh,
-                    httponly=True,
-                    secure=secure,
-                    samesite="lax",
-                    max_age=prism_settings.refresh_token_expire_minutes * 60,
-                    path="/",
-                )
-                return {
-                    "app": "prism",
-                    "user": user_out,
-                    "access_token": access if prism_settings.environment == "development" else None,
-                    "message": "PRISM sign-in successful",
-                }
+        except HTTPException:
+            raise
         except Exception:
             pass
 

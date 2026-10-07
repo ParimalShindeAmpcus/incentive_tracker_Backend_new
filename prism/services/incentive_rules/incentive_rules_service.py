@@ -11,6 +11,7 @@ from prism.models.incentive_rules.schemas import (
     IncentiveRuleMasterIn,
     IncentiveRuleMasterOut,
     IncentiveRuleMasterUpdate,
+    IncentiveRuleBatchUpdateItem,
 )
 from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
 from prism.repositories.incentive_rules import incentive_rules_repository as repo
@@ -84,3 +85,49 @@ def soft_delete(
 
 def hard_delete(db: Session, rule_id: int) -> bool:
     return repo.hard_delete(db, rule_id)
+
+
+def batch_create_rules(
+    db: Session, payloads: List[IncentiveRuleMasterIn], created_by: Optional[int] = None
+) -> List[IncentiveRuleMasterOut]:
+    results = []
+    for p in payloads:
+        data = p.model_dump(exclude_unset=False)
+        row = repo.create_rule(db, data, created_by=created_by)
+        results.append(row)
+    db.commit()
+    for r in results:
+        db.refresh(r)
+    return [IncentiveRuleMasterOut.model_validate(r) for r in results]
+
+
+def batch_update_rules(
+    db: Session, items: List[IncentiveRuleBatchUpdateItem], updated_by: Optional[int] = None
+) -> List[IncentiveRuleMasterOut]:
+    results = []
+    for item in items:
+        data = item.data.model_dump(exclude_unset=True)
+        if data:
+            row = repo.update_rule(db, item.id, data, updated_by=updated_by)
+            if row:
+                results.append(row)
+    db.commit()
+    for r in results:
+        db.refresh(r)
+    return [IncentiveRuleMasterOut.model_validate(r) for r in results]
+
+
+def batch_delete_rules(
+    db: Session, ids: List[int], hard: bool = True, updated_by: Optional[int] = None
+) -> int:
+    deleted_count = 0
+    for rule_id in ids:
+        if hard:
+            if repo.hard_delete(db, rule_id):
+                deleted_count += 1
+        else:
+            if repo.soft_delete(db, rule_id, updated_by=updated_by):
+                deleted_count += 1
+    db.commit()
+    return deleted_count
+

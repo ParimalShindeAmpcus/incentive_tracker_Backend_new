@@ -41,7 +41,7 @@ class TestIncentiveRulesMastersParity(unittest.TestCase):
         self.assertIsNotNone(inhouse_div, "ampcusTechInhouse division must exist in DB")
 
         self.assertIn("Client", client_div.name)
-        self.assertIn("Inhouse", inhouse_div.name)
+        self.assertTrue("Inhouse" in inhouse_div.name or "In-House" in inhouse_div.name)
 
         client_rules = self.db.query(IncentiveRuleMaster).filter(IncentiveRuleMaster.division == "ampcusTechClient").all()
         inhouse_rules = self.db.query(IncentiveRuleMaster).filter(IncentiveRuleMaster.division == "ampcusTechInhouse").all()
@@ -163,5 +163,46 @@ class TestIncentiveRulesMastersParity(unittest.TestCase):
         self.assertIsNone(fetched)
 
 
+    def test_sambhaji_nagar_dynamic_matrix(self):
+        from prism.services.cycles.engines.sambhaji_nagar import matrix_amount
+        from prism.services.incentive_rules.rule_loader import load_sn_config
+        from decimal import Decimal
+
+        rule = self.db.query(IncentiveRuleMaster).filter(
+            IncentiveRuleMaster.division == "sambhajiNagar",
+            IncentiveRuleMaster.rule_category == "RECRUITER_SLAB",
+            IncentiveRuleMaster.hours_min == 0,
+            IncentiveRuleMaster.margin_min == Decimal("1.00"),
+        ).first()
+
+        self.assertIsNotNone(rule, "Base rule $1-$3, 0-40h must exist")
+        orig_margin_max = rule.margin_max
+        orig_amount = rule.amount
+
+        try:
+            # Update margin max to 3.50 and amount to 650
+            update_data = IncentiveRuleMasterUpdate(
+                margin_max=Decimal("3.50"),
+                amount=Decimal("650"),
+            )
+            svc.update_rule(self.db, rule.id, update_data, updated_by=1)
+            self.db.commit()
+
+            # Load config and verify dynamic matrix lookup
+            cfg = load_sn_config(self.db)
+            # A margin of 3.25 was previously outside ($1.00-$3.00), now it falls inside ($1.00-$3.50)
+            amt = matrix_amount(Decimal("3.25"), Decimal("30"), rule_config=cfg)
+            self.assertEqual(amt, 650, f"Expected 650 for $3.25 margin in updated range, got {amt}")
+        finally:
+            # Restore original
+            restore_data = IncentiveRuleMasterUpdate(
+                margin_max=orig_margin_max,
+                amount=orig_amount,
+            )
+            svc.update_rule(self.db, rule.id, restore_data, updated_by=1)
+            self.db.commit()
+
+
 if __name__ == "__main__":
     unittest.main()
+

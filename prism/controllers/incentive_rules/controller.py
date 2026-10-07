@@ -11,6 +11,8 @@ from prism.models.incentive_rules.schemas import (
     IncentiveRuleMasterIn,
     IncentiveRuleMasterOut,
     IncentiveRuleMasterUpdate,
+    IncentiveRuleBatchUpdateItem,
+    IncentiveRuleBatchDeleteIn,
 )
 from prism.repositories.entities.user import User
 from prism.services.common.deps import DbSession, get_current_user, require_roles
@@ -38,6 +40,37 @@ def list_incentive_rules(
         is_active=is_active,
         effective_on=effective_on,
     )
+
+
+@router.post("/incentive-rules/batch", response_model=List[IncentiveRuleMasterOut], status_code=status.HTTP_201_CREATED)
+def batch_create_incentive_rules(
+    payloads: List[IncentiveRuleMasterIn],
+    db: DbSession,
+    user: AdminUser,
+) -> List[IncentiveRuleMasterOut]:
+    """Batch create multiple incentive rules. Admin only."""
+    return svc.batch_create_rules(db, payloads, created_by=user.id)
+
+
+@router.put("/incentive-rules/batch", response_model=List[IncentiveRuleMasterOut])
+def batch_update_incentive_rules(
+    items: List[IncentiveRuleBatchUpdateItem],
+    db: DbSession,
+    user: AdminUser,
+) -> List[IncentiveRuleMasterOut]:
+    """Batch update multiple incentive rules. Admin only."""
+    return svc.batch_update_rules(db, items, updated_by=user.id)
+
+
+@router.post("/incentive-rules/batch-delete", response_model=dict)
+def batch_delete_incentive_rules(
+    payload: IncentiveRuleBatchDeleteIn,
+    db: DbSession,
+    user: AdminUser,
+) -> dict:
+    """Batch delete multiple incentive rules. Admin only."""
+    count = svc.batch_delete_rules(db, payload.ids, hard=payload.hard, updated_by=user.id)
+    return {"deleted_count": count, "ids": payload.ids}
 
 
 @router.get("/incentive-rules/{rule_id}", response_model=IncentiveRuleMasterOut)

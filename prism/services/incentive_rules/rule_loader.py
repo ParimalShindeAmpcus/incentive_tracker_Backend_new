@@ -69,6 +69,8 @@ class SNRuleConfig:
 
     # (margin_min, margin_max, (h0_40, h41_80, h81_120, h121_160, h161plus))
     bands: List[Tuple[Decimal, Decimal, Tuple[Decimal, ...]]] = field(default_factory=list)
+    # Dynamic matrix rules: (margin_min, margin_max, hours_min, hours_max, amount)
+    matrix_rules: List[Tuple[Decimal, Decimal, Decimal, Decimal, Decimal]] = field(default_factory=list)
     # W2/C2C leadership: role -> amount
     fixed: Dict[str, Decimal] = field(default_factory=dict)
     # FTE leadership: role -> amount
@@ -347,14 +349,23 @@ def _apply_global_config_sn(cfg: SNRuleConfig, rules: list) -> None:
 
 
 def _apply_sn_bands(cfg: SNRuleConfig, rules: list) -> None:
-    """Reconstruct the 8×5 margin×hours matrix."""
+    """Reconstruct the margin×hours matrix from DB rules."""
     from collections import defaultdict
     margin_map: Dict[Tuple[Decimal, Decimal], Dict[Decimal, Decimal]] = defaultdict(dict)
+    matrix_rules: List[Tuple[Decimal, Decimal, Decimal, Decimal, Decimal]] = []
+
     for r in rules:
-        if r.rule_category == "RECRUITER_SLAB" and r.role == "Recruiter":
-            key = (Decimal(str(r.margin_min)), Decimal(str(r.margin_max)))
-            h_min = Decimal(str(r.hours_min or "0"))
-            margin_map[key][h_min] = Decimal(str(r.amount))
+        if r.rule_category == "RECRUITER_SLAB" and (r.role == "Recruiter" or not r.role):
+            if r.margin_min is not None and r.margin_max is not None:
+                m_lo = Decimal(str(r.margin_min))
+                m_hi = Decimal(str(r.margin_max))
+                h_lo = Decimal(str(r.hours_min if r.hours_min is not None else "0"))
+                h_hi = Decimal(str(r.hours_max if r.hours_max is not None else "999999"))
+                amt = Decimal(str(r.amount if r.amount is not None else "0"))
+                matrix_rules.append((m_lo, m_hi, h_lo, h_hi, amt))
+                margin_map[(m_lo, m_hi)][h_lo] = amt
+
+    cfg.matrix_rules = matrix_rules
 
     bands = []
     for (m_lo, m_hi), hours_amounts in sorted(margin_map.items()):

@@ -7,6 +7,7 @@ calculation results on day-1 are byte-for-byte identical to pre-master behaviour
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date
 from decimal import Decimal
@@ -22,25 +23,44 @@ logger = logging.getLogger(__name__)
 EPOCH = date(2024, 1, 1)
 
 
+def seed_special_incentive_rules(db: Session) -> int:
+    """Ensure Special Incentive rules are seeded in the master table."""
+    from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
+
+    existing = (
+        db.query(IncentiveRuleMaster)
+        .filter(IncentiveRuleMaster.division.in_(["special_incentive", "specialIncentive"]))
+        .first()
+    )
+    if existing:
+        return 0
+
+    rows = _build_special_incentive_seed_rows()
+    for data in rows:
+        db.add(IncentiveRuleMaster(**data))
+    db.flush()
+    logger.info("Seeded %d special incentive rules into master table.", len(rows))
+    return len(rows)
+
+
 def seed_incentive_rules(db: Session) -> None:
     """Insert all hardcoded incentive rules as initial master data.
 
     Guards:
-      - Only runs when the table is completely empty (first startup).
-      - All inserts are done in a single transaction via the caller's session.
+      - Seeds general rules when the table is empty.
+      - Always ensures Special Incentive rules are seeded even if other divisions exist.
     """
-    if has_any_rules(db):
-        logger.debug("incentive_rule_master already seeded — skipping.")
-        return
+    if not has_any_rules(db):
+        rows = _build_seed_rows()
+        from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
 
-    rows = _build_seed_rows()
-    from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
+        for data in rows:
+            db.add(IncentiveRuleMaster(**data))
 
-    for data in rows:
-        db.add(IncentiveRuleMaster(**data))
+        db.flush()
+        logger.info("Seeded %d incentive rule master records.", len(rows))
 
-    db.flush()
-    logger.info("Seeded %d incentive rule master records.", len(rows))
+    seed_special_incentive_rules(db)
 
 
 # ---------------------------------------------------------------------------
@@ -559,4 +579,95 @@ def seed_rules_for_new_division(
         db.add(IncentiveRuleMaster(**data))
     db.flush()
     return len(rows)
+
+
+def _build_special_incentive_seed_rows() -> List[Dict[str, Any]]:
+    """Build default special incentive rules for Ampcus Inc and Bravens Inc."""
+    rows: List[Dict[str, Any]] = []
+
+    # 1. Ampcus Inc — Highest Placements
+    rows.append(
+        _row(
+            division="special_incentive",
+            rule_category="SPECIAL_INCENTIVE",
+            role="Recruiter",
+            rule_key="highest_placements",
+            amount=Decimal("5000"),
+            placement_count_min=1,
+            config_value=json.dumps({
+                "org_key": "ampcus_inc",
+                "org_name": "Ampcus Inc",
+                "award_title": "Highest placements in a month by a recruiter",
+                "tie_breaker": "pay_all",
+                "priority": 1,
+                "allow_stacking": True,
+            }),
+            description="Ampcus Inc — Highest placements in a month by a recruiter",
+        )
+    )
+
+    # 2. Ampcus Inc — Highest Margin
+    rows.append(
+        _row(
+            division="special_incentive",
+            rule_category="SPECIAL_INCENTIVE",
+            role="Recruiter",
+            rule_key="highest_margin",
+            amount=Decimal("5000"),
+            margin_min=Decimal("0.00"),
+            config_value=json.dumps({
+                "org_key": "ampcus_inc",
+                "org_name": "Ampcus Inc",
+                "award_title": "Highest margin for a candidate, by recruiter",
+                "tie_breaker": "pay_all",
+                "priority": 2,
+                "allow_stacking": True,
+            }),
+            description="Ampcus Inc — Highest margin for a candidate, by recruiter",
+        )
+    )
+
+    # 3. Bravens Inc — Highest Placements
+    rows.append(
+        _row(
+            division="special_incentive",
+            rule_category="SPECIAL_INCENTIVE",
+            role="Recruiter",
+            rule_key="highest_placements",
+            amount=Decimal("5000"),
+            placement_count_min=1,
+            config_value=json.dumps({
+                "org_key": "bravens_inc",
+                "org_name": "Bravens Inc",
+                "award_title": "Highest placements in a month by a recruiter",
+                "tie_breaker": "pay_all",
+                "priority": 1,
+                "allow_stacking": True,
+            }),
+            description="Bravens Inc — Highest placements in a month by a recruiter",
+        )
+    )
+
+    # 4. Bravens Inc — Highest Margin
+    rows.append(
+        _row(
+            division="special_incentive",
+            rule_category="SPECIAL_INCENTIVE",
+            role="Recruiter",
+            rule_key="highest_margin",
+            amount=Decimal("5000"),
+            margin_min=Decimal("0.00"),
+            config_value=json.dumps({
+                "org_key": "bravens_inc",
+                "org_name": "Bravens Inc",
+                "award_title": "Highest margin for a candidate, by recruiter",
+                "tie_breaker": "pay_all",
+                "priority": 2,
+                "allow_stacking": True,
+            }),
+            description="Bravens Inc — Highest margin for a candidate, by recruiter",
+        )
+    )
+
+    return rows
 

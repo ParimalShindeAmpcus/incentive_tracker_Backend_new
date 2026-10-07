@@ -211,13 +211,19 @@ def matrix_amount(
     hours: Decimal,
     rule_config: "Optional[SNRuleConfig]" = None,
 ) -> int:
-    """Return INR incentive amount from TABLE 5 (or DB-configured BANDS).
+    """Return INR incentive amount from TABLE 5 (or DB-configured BANDS / dynamic matrix rules).
 
     ``hours`` should be the candidate's CUMULATIVE hours across all finalized
     SN cycles plus the current cycle, so that the correct bucket is applied.
     """
     if margin is None or hours < ZERO:
         return 0
+
+    if rule_config is not None and getattr(rule_config, "matrix_rules", None):
+        for m_min, m_max, h_min, h_max, amt in rule_config.matrix_rules:
+            if m_min <= margin <= m_max and h_min <= hours <= h_max:
+                return int(amt)
+
     if hours <= 40:
         idx = 0
     elif hours <= 80:
