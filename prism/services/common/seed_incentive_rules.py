@@ -96,6 +96,28 @@ def _seed_missing_client_markup_rules(db: Session) -> None:
     db.flush()
 
 
+def _seed_missing_client_benchmarks(db: Session) -> None:
+    """Provide editable code-defined defaults without overwriting saved settings."""
+    from prism.repositories.entities.incentive_rules_master import IncentiveRuleMaster
+    records = db.query(IncentiveRuleMaster).filter(
+        IncentiveRuleMaster.division == "ampcusTechClient",
+        IncentiveRuleMaster.rule_category == "GLOBAL_CONFIG",
+    ).all()
+    keys = {(row.rule_key or "").strip().lower() for row in records}
+    defaults = (
+        ("fte_finder_fee_threshold", "4500", "The incentive depends on below and above finder fees"),
+        ("fte_min_days", "90", "For FTE the 90 days criteria is mandatory"),
+    )
+    for key, value, description in defaults:
+        if key in keys or (key == "fte_finder_fee_threshold" and "finder_fee_threshold" in keys):
+            continue
+        db.add(IncentiveRuleMaster(**_row(
+            division="ampcusTechClient", rule_category="GLOBAL_CONFIG",
+            rule_key=key, config_value=value, description=description,
+        )))
+    db.flush()
+
+
 def seed_incentive_rules(db: Session) -> None:
     """Insert all hardcoded incentive rules as initial master data.
 
@@ -112,6 +134,7 @@ def seed_incentive_rules(db: Session) -> None:
     if has_any_rules(db):
         _seed_missing_client_fte_rules(db)
         _seed_missing_client_markup_rules(db)
+        _seed_missing_client_benchmarks(db)
         logger.debug("incentive_rule_master already seeded — skipping.")
         return
 
