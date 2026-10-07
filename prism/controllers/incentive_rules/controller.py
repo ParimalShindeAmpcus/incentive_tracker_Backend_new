@@ -143,7 +143,7 @@ def delete_incentive_rule(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incentive rule not found")
 
     if hard:
-        svc.hard_delete(db, rule_id)
+        svc.hard_delete(db, rule_id, updated_by=user.id)
         db.commit()
         return existing
 

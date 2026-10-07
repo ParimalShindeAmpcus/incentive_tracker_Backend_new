@@ -190,8 +190,8 @@ def soft_delete(
     return IncentiveRuleMasterOut.model_validate(row)
 
 
-def hard_delete(db: Session, rule_id: int) -> bool:
-    return repo.hard_delete(db, rule_id)
+def hard_delete(db: Session, rule_id: int, updated_by: Optional[int] = None) -> bool:
+    return repo.hard_delete(db, rule_id, updated_by=updated_by)
 
 
 def batch_create_rules(
@@ -230,7 +230,7 @@ def batch_delete_rules(
     deleted_count = 0
     for rule_id in ids:
         if hard:
-            if repo.hard_delete(db, rule_id):
+            if repo.hard_delete(db, rule_id, updated_by=updated_by):
                 deleted_count += 1
         else:
             if repo.soft_delete(db, rule_id, updated_by=updated_by):
