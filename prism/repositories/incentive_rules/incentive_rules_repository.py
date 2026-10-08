@@ -1,6 +1,8 @@
 """Incentive Rules Master repository — raw SQL/ORM layer."""
 
 from datetime import date
+from decimal import Decimal
+import json
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, or_
@@ -13,6 +15,31 @@ def _snapshot(row: IncentiveRuleMaster) -> Dict[str, Any]:
     return IncentiveRuleMasterOut.model_validate(row).model_dump(mode="json")
 
 
+def _payout_description(before: Dict[str, Any], after: Dict[str, Any]) -> List[str]:
+    """Describe recorded payout changes without treating removed values as zero."""
+    def money(value: Any) -> str:
+        if value is None or value == "":
+            return "Not set"
+        amount = Decimal(str(value))
+        return "INR " + (f"{amount:,.0f}" if amount == amount.to_integral_value() else f"{amount:,.2f}")
+
+    descriptions = []
+    if before.get("amount") != after.get("amount"):
+        role = after.get("role") or before.get("role") or "Incentive"
+        descriptions.append(f"{role} payout changed from {money(before.get('amount'))} to {money(after.get('amount'))}")
+    if after.get("rule_category") == "MARKUP_SLAB" and before.get("config_value") != after.get("config_value"):
+        try:
+            old = json.loads(before.get("config_value") or "{}")
+            new = json.loads(after.get("config_value") or "{}")
+            if isinstance(old, dict) and isinstance(new, dict):
+                for role in dict.fromkeys([*old, *new]):
+                    if old.get(role) != new.get(role):
+                        descriptions.append(f"{role} payout changed from {money(old.get(role))} to {money(new.get(role))}")
+        except (ValueError, TypeError, ArithmeticError):
+            pass
+    return descriptions
+
+
 def _audit_rule(db: Session, row: IncentiveRuleMaster, operation: str,
                 actor_id: Optional[int], before: Optional[Dict[str, Any]] = None) -> None:
     from prism.repositories.entities.user import User
@@ -22,9 +49,14 @@ def _audit_rule(db: Session, row: IncentiveRuleMaster, operation: str,
     changes = {key: {"before": (before or {}).get(key), "after": (after or {}).get(key)}
                for key in set(before or {}) | set(after or {})
                if (before or {}).get(key) != (after or {}).get(key)}
+    details = f"{operation} rule: {row.role or row.rule_key or row.rule_category} ({row.division})."
+    if before and after:
+        payout_changes = _payout_description(before, after)
+        if payout_changes:
+            details = f"{'; '.join(payout_changes)}. Division: {row.division}."
     record_event(
         db, action=AuditAction.SYSTEM, title=f"{operation} Incentive Master Rule",
-        details=f"{operation} rule #{row.id}: {row.role or row.rule_key or row.rule_category} ({row.division}).",
+        details=details,
         user=db.get(User, actor_id) if actor_id is not None else None,
         entity_type="incentive_rule_master", entity_id=str(row.id),
         metadata={"operation": operation, "before": before, "after": after, "changes": changes},

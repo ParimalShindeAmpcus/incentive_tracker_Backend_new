@@ -135,9 +135,9 @@ def delete_incentive_rule(
     rule_id: int,
     db: DbSession,
     user: AdminUser,
-    hard: bool = False,
+    hard: bool = True,
 ) -> IncentiveRuleMasterOut:
-    """Soft-delete (deactivate) or hard-delete an incentive rule. Admin only."""
+    """Permanently delete a rule; hard=False explicitly deactivates it. Admin only."""
     existing = svc.get_rule(db, rule_id)
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incentive rule not found")
