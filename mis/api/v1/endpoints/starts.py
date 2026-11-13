@@ -9,8 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from starlette.concurrency import run_in_threadpool
 
-from mis.core.deps import get_current_user
+from mis.core.deps import get_current_user, require_roles
 from mis.core.constants import (
     ADMIN_REVIEWABLE_STATUSES,
     HOD_APPROVER_ROLES,
@@ -32,6 +33,10 @@ from mis.services.helpers import (
     resolve_organization,
 )
 from mis.services.audit_service import start_audit_snapshot, write_audit_log
+from mis.services.incentive_candidate_sync import (
+    candidate_row_from_approved_start,
+    import_candidate_rows,
+)
 from mis.services.start_scoping import (
     build_start_visibility_conditions,
     can_user_edit_start,
@@ -53,6 +58,11 @@ class StartAdminUpdateBody(BaseModel):
     candidate_name: str | None = Field(default=None, alias="candidate")
     candidate_email: str | None = Field(default=None, alias="email")
     candidate_contact_no: str | None = Field(default=None, alias="candidateContact")
+    department: str | None = None
+    client_spoc: str | None = Field(default=None, alias="clientSpoc")
+    it_category: str | None = Field(default=None, alias="itCategory")
+    ceipal_submission_id: str | None = Field(default=None, alias="ceipalSubmissionId")
+    ampcus_recruiter_name: str | None = Field(default=None, alias="ampcusRecruiter")
     client_name: str | None = Field(default=None, alias="client")
     end_client_name: str | None = Field(default=None, alias="endClient")
     job_title: str | None = Field(default=None, alias="jobTitle")
@@ -423,6 +433,10 @@ class StartCreateBody(BaseModel):
     candidate_name: str | None = Field(default=None, alias="candidateName")
     candidate_email: str | None = Field(default=None, alias="candidateEmail")
     candidate_contact_no: str | None = Field(default=None, alias="candidateContactNo")
+    department: str | None = None
+    client_spoc: str | None = Field(default=None, alias="clientSpoc")
+    it_category: str | None = Field(default=None, alias="itCategory")
+    ceipal_submission_id: str | None = Field(default=None, alias="ceipalSubmissionId")
     start_date: str | None = Field(default=None, alias="startDate")
     end_date: str | None = Field(default=None, alias="endDate")
     client_name: str | None = Field(default=None, alias="clientName")
@@ -518,6 +532,11 @@ def _start_to_record(start: CandidateStart, recruiter_name: str = "", org_name: 
         "organization": org_name,
         "workLocation": start.work_location or "",
         "candidateContact": start.candidate_contact_no or "",
+        "department": start.department or "",
+        "clientSpoc": start.client_spoc or "",
+        "itCategory": start.it_category or "",
+        "ceipalSubmissionId": start.ceipal_submission_id or "",
+        "ampcusRecruiter": start.ampcus_recruiter_name or "",
         "endDate": format_date(start.end_date),
         "reqId": start.req_id or "",
         "contractType": start.contract_type or "",
@@ -610,6 +629,66 @@ async def get_starts(
         items.append(_start_to_record(s, recruiter.full_name if recruiter else "", org.name if org else ""))
 
     return {"items": items, "total": total, "page": page, "pageSize": page_size}
+
+
+@router.post("/sync-approved-to-incentive")
+async def sync_approved_starts_to_incentive(
+    current_user: Annotated[User, Depends(require_roles("MIS"))],
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(CandidateStart, User.full_name, Organization.name)
+        .join(User, CandidateStart.recruiter_id == User.id)
+        .join(Organization, CandidateStart.organization_id == Organization.id)
+        .where(
+            CandidateStart.is_deleted.is_(False),
+            CandidateStart.status.in_(("APPROVED", "COMPLETED")),
+        )
+        .order_by(CandidateStart.id)
+    )
+    approved_starts = result.all()
+    if not approved_starts:
+        return {
+            "total_approved": 0,
+            "created_count": 0,
+            "updated_count": 0,
+            "unchanged_count": 0,
+            "rejected_count": 0,
+            "message": "No final-approved starts were found to sync.",
+        }
+
+    candidate_rows = [
+        candidate_row_from_approved_start(
+            start,
+            recruiter_name=recruiter_name or "",
+            organization_name=organization_name or "",
+        )
+        for start, recruiter_name, organization_name in approved_starts
+    ]
+    import_result = await run_in_threadpool(import_candidate_rows, candidate_rows)
+    summary = {
+        "total_approved": len(approved_starts),
+        "created_count": import_result.created_count,
+        "updated_count": import_result.updated_count,
+        "unchanged_count": import_result.duplicate_count,
+        "rejected_count": import_result.rejected_count,
+    }
+
+    await write_audit_log(
+        db,
+        actor_id=current_user.id,
+        entity_type="INCENTIVE_CANDIDATE_SYNC",
+        entity_id=import_result.version.id,
+        action="IMPORT",
+        after_json=summary,
+        organization_id=current_user.organization_id,
+    )
+    await db.commit()
+    return {
+        **summary,
+        "version_id": import_result.version.id,
+        "message": "Final-approved starts synced to Incentive Candidate Master.",
+    }
 
 
 @router.get("/{start_id}")
@@ -755,6 +834,11 @@ async def create_start(
         candidate_name=body.candidate_name or imported.candidate_full_name,
         candidate_email=body.candidate_email or imported.candidate_email,
         candidate_contact_no=body.candidate_contact_no or imported.candidate_mobile_phone,
+        department=body.department,
+        client_spoc=body.client_spoc,
+        it_category=body.it_category,
+        ceipal_submission_id=body.ceipal_submission_id,
+        ampcus_recruiter_name=body.recruiter_name if is_ampcus_tech else None,
         start_date=_parse_date(body.start_date) or imported.start_date,
         end_date=_parse_date(body.end_date) or imported.end_date,
         client_name=body.client_name or imported.job_company,
@@ -960,6 +1044,17 @@ async def update_start(
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             start.organization_id = organization.id
 
+    if body.department is not None:
+        start.department = body.department
+    if body.client_spoc is not None:
+        start.client_spoc = body.client_spoc
+    if body.it_category is not None:
+        start.it_category = body.it_category
+    if body.ceipal_submission_id is not None:
+        start.ceipal_submission_id = body.ceipal_submission_id
+    if body.ampcus_recruiter_name is not None:
+        start.ampcus_recruiter_name = body.ampcus_recruiter_name
+
     start.contract_type = body.contract_type
     start.sub_contractor_company = body.sub_contractor_company
     start.sub_contractor_email = body.sub_contractor_email
@@ -1032,5 +1127,4 @@ async def update_start(
     recruiter = await db.get(User, start.recruiter_id)
     org = await db.get(Organization, start.organization_id)
     return _start_to_record(start, recruiter.full_name if recruiter else "", org.name if org else "")
-
 
